@@ -1,0 +1,17 @@
+version: "1.0"
+description: "Strict default-deny. Explicitly allow nothing. Every tool call must be manually registered."
+default_action: deny
+
+settings:
+  session_max_tools: 100
+  session_timeout_seconds: 3600
+  approval_timeout_seconds: 300
+  chain_window_size: 10
+  log_level: info
+
+servers: []
+
+tool_chains: []
+
+redaction:
+  output_redaction: true

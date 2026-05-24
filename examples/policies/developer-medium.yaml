@@ -1,0 +1,146 @@
+version: "1.0"
+description: "Medium-security policy: allow read tools, deny dangerous operations, require approval for writes."
+default_action: deny
+
+settings:
+  session_max_tools: 200
+  chain_window_size: 5
+  log_level: info
+
+servers:
+  - name: "filesystem"
+    transport: stdio
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        rules:
+          - type: deny_path
+            patterns:
+              - "/etc/passwd"
+              - "/etc/shadow"
+              - "**/.env"
+              - "**/.env.*"
+              - "**/credentials*"
+              - "**/*.pem"
+              - "**/*.key"
+              - "**/.ssh/**"
+
+      - name: "file_write"
+        allowed: true
+        risk: high
+        approval_required: true
+        rules:
+          - type: deny_path
+            patterns:
+              - "/etc/**"
+              - "/usr/**"
+              - "/bin/**"
+              - "/boot/**"
+
+  - name: "shell"
+    transport: stdio
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+        risk: critical
+        approval_required: true
+        rules:
+          - type: deny_command_pattern
+            patterns:
+              - "rm\\s+-rf\\s+/"
+              - "curl.*\\|.*(bash|sh)"
+              - ">\\s*/dev/sda"
+              - "dd\\s+if="
+              - "bash\\s+-i\\s+>&"
+          - type: allow_command_pattern
+            patterns:
+              - "^ls\\s"
+              - "^cat\\s"
+              - "^echo\\s"
+              - "^git\\s(status|log|diff|branch)"
+              - "^npm\\s(test|lint|build)"
+              - "^whoami$"
+              - "^date$"
+              - "^pwd$"
+
+  - name: "github"
+    transport: http
+    allowed: true
+    tools:
+      - name: "github_read_code"
+        allowed: true
+        risk: low
+
+      - name: "github_create_issue"
+        allowed: true
+        risk: medium
+
+      - name: "github_create_pr"
+        allowed: true
+        risk: medium
+        approval_required: true
+
+      - name: "github_delete_repo"
+        allowed: false
+        risk: critical
+
+  - name: "database"
+    transport: stdio
+    allowed: true
+    tools:
+      - name: "database_query"
+        allowed: true
+        risk: high
+        rules:
+          - type: deny_query_pattern
+            patterns:
+              - "DROP\\s+(TABLE|DATABASE)"
+              - "DELETE\\s+FROM"
+              - "TRUNCATE\\s+TABLE"
+              - "GRANT\\s+"
+          - type: allow_query_pattern
+            patterns:
+              - "^SELECT\\s"
+              - "^EXPLAIN\\s"
+              - "^DESCRIBE\\s"
+              - "^SHOW\\s"
+
+  - name: "slack"
+    transport: http
+    allowed: true
+    tools:
+      - name: "slack_send_message"
+        allowed: true
+        risk: high
+        approval_required: true
+
+      - name: "slack_read_messages"
+        allowed: true
+        risk: medium
+
+tool_chains:
+  - name: "prevent_exfiltration_via_http"
+    sources:
+      - server: "*"
+        tool_pattern: ".*(read|query).*"
+    sinks:
+      - server: "*"
+        tool_pattern: "http_post"
+    action: deny
+    within_calls: 5
+
+  - name: "prevent_exfiltration_via_slack"
+    sources:
+      - server: "*"
+        tool_pattern: "(file_read|database_query)"
+    sinks:
+      - server: "slack"
+        tool_pattern: "slack_send_message"
+    action: deny
+    within_calls: 3
+
+redaction:
+  output_redaction: true

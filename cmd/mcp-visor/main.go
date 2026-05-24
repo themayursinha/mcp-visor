@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/proxy"
 )
 
@@ -18,6 +19,7 @@ func main() {
 	serveCmd.Var(serverArgs, "server-arg", "Argument for the MCP server command (repeatable)")
 	sessionID := serveCmd.String("session-id", "", "Session identifier")
 	clientID := serveCmd.String("client-id", "", "Client identifier")
+	policyPath := serveCmd.String("policy", "", "Path to policy YAML file")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -35,6 +37,20 @@ func main() {
 			os.Exit(1)
 		}
 
+		var pol *policy.Policy
+		if *policyPath != "" {
+			var err error
+			pol, err = policy.LoadFile(*policyPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "mcp-visor: failed to load policy: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "Loaded policy: %s (default: %s)\n", *policyPath, pol.DefaultAction)
+		} else {
+			pol = policy.DefaultPolicy()
+			fmt.Fprintf(os.Stderr, "Using default-deny policy\n")
+		}
+
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
@@ -43,6 +59,7 @@ func main() {
 			ServerArgs:    *serverArgs,
 			ClientID:      *clientID,
 			SessionID:     *sessionID,
+			Policy:        pol,
 		})
 
 		if err := p.Run(ctx); err != nil {

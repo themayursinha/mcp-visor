@@ -11,12 +11,14 @@ import (
 	"sync"
 
 	"github.com/themayursinha/mcp-visor/internal/mcp"
+	"github.com/themayursinha/mcp-visor/internal/policy"
 )
 
 type Proxy struct {
 	cfg     Config
 	session *Session
 	logger  *slog.Logger
+	engine  *policy.Engine
 }
 
 type Config struct {
@@ -24,6 +26,7 @@ type Config struct {
 	ServerArgs    []string
 	ClientID      string
 	SessionID     string
+	Policy        *policy.Policy
 }
 
 func New(cfg Config) *Proxy {
@@ -33,12 +36,17 @@ func New(cfg Config) *Proxy {
 	if cfg.ClientID == "" {
 		cfg.ClientID = "mcp-client"
 	}
+	p := cfg.Policy
+	if p == nil {
+		p = policy.DefaultPolicy()
+	}
 	return &Proxy{
 		cfg:     cfg,
 		session: NewSession(cfg.SessionID, cfg.ClientID),
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
+		engine: policy.NewEngine(p),
 	}
 }
 
@@ -72,7 +80,11 @@ func (p *Proxy) Run(ctx context.Context) error {
 	if err := p.runHandshake(clientParser, serverParser); err != nil {
 		return fmt.Errorf("handshake: %w", err)
 	}
-	p.logger.Info("proxy ready", "session", p.session.ID, "server", p.cfg.ServerCommand)
+	p.logger.Info("proxy ready",
+		"session", p.session.ID,
+		"server", p.cfg.ServerCommand,
+		"default_action", p.engine.Policy().DefaultAction,
+	)
 
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
@@ -178,11 +190,65 @@ func (p *Proxy) relayClientToServer(ctx context.Context, client, server *mcp.Par
 			return fmt.Errorf("read from client: %w", err)
 		}
 
+		result := p.interceptAndFilter(raw, client)
+		if result == "denied" {
+			continue
+		}
+		if result == "responded" {
+			p.logClientMessage(raw)
+			continue
+		}
+
 		p.logClientMessage(raw)
 
 		if err := server.EncodeRaw(raw); err != nil {
 			return fmt.Errorf("forward to server: %w", err)
 		}
+	}
+}
+
+func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) string {
+	req, err := mcp.NewParser(nil, nil).DecodeRequest(raw)
+	if err != nil || req.IsNotification() {
+		return "forward"
+	}
+
+	if req.Method != mcp.MethodToolsCall {
+		return "forward"
+	}
+
+	var callReq mcp.ToolsCallRequest
+	if err := json.Unmarshal(req.Params, &callReq); err != nil {
+		return "forward"
+	}
+
+	serverName := p.cfg.ServerCommand
+
+	decision := p.engine.Evaluate(serverName, callReq)
+
+	switch decision.Action {
+	case policy.ActionDeny:
+		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
+		client.EncodeResponse(errResp)
+		p.logger.Warn("policy denied",
+			"tool", callReq.Name,
+			"reason", decision.Reason,
+			"session", p.session.ID,
+		)
+		return "denied"
+
+	case policy.ActionRequireApproval:
+		p.logger.Warn("approval required",
+			"tool", callReq.Name,
+			"session", p.session.ID,
+		)
+		return "forward"
+
+	case policy.ActionAllow:
+		return "forward"
+
+	default:
+		return "forward"
 	}
 }
 
@@ -220,9 +286,11 @@ func (p *Proxy) logClientMessage(raw json.RawMessage) {
 			return
 		}
 		p.session.RecordToolCall(p.cfg.ServerCommand, call, "")
+		risk := p.engine.GetRiskLevel(p.cfg.ServerCommand, call.Name)
 		p.logger.Info("tool call",
 			"session", p.session.ID,
 			"tool", call.Name,
+			"risk", risk,
 			"call_number", p.session.ToolCallCount(),
 		)
 	case mcp.MethodToolsList:
@@ -275,6 +343,10 @@ func (p *Proxy) logServerMessage(raw json.RawMessage) {
 
 func (p *Proxy) Session() *Session {
 	return p.session
+}
+
+func (p *Proxy) Engine() *policy.Engine {
+	return p.engine
 }
 
 var sessionCounter int

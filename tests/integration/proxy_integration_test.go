@@ -45,6 +45,36 @@ func buildVisor(t *testing.T) string {
 	return tmp.Name()
 }
 
+func writePermissivePolicy(t *testing.T, serverPath string) string {
+	t.Helper()
+	tmp, err := os.CreateTemp("", "mcp-visor-policy-*.yaml")
+	if err != nil {
+		t.Fatalf("create temp policy: %v", err)
+	}
+	policy := fmt.Sprintf(`version: "1.0"
+description: "Permissive test policy"
+default_action: deny
+servers:
+  - name: "%s"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+      - name: "http_post"
+        allowed: true
+      - name: "shell_exec"
+        allowed: true
+      - name: "slack_send_message"
+        allowed: true
+`, serverPath)
+	if _, err := tmp.WriteString(policy); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	tmp.Close()
+	t.Cleanup(func() { os.Remove(tmp.Name()) })
+	return tmp.Name()
+}
+
 func sendMessage(w *bufio.Writer, msg map[string]any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -73,8 +103,9 @@ func readMessage(r *bufio.Reader) (map[string]any, error) {
 func TestProxyIntegrationHandshake(t *testing.T) {
 	mockServer := buildMockServer(t)
 	visor := buildVisor(t)
+	policyFile := writePermissivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -152,8 +183,9 @@ func TestProxyIntegrationHandshake(t *testing.T) {
 func TestProxyIntegrationToolsCall(t *testing.T) {
 	mockServer := buildMockServer(t)
 	visor := buildVisor(t)
+	policyFile := writePermissivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -221,8 +253,9 @@ func TestProxyIntegrationToolsCall(t *testing.T) {
 func TestProxyIntegrationPing(t *testing.T) {
 	mockServer := buildMockServer(t)
 	visor := buildVisor(t)
+	policyFile := writePermissivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -278,8 +311,9 @@ func TestProxyIntegrationPing(t *testing.T) {
 func TestProxyIntegrationToolsList(t *testing.T) {
 	mockServer := buildMockServer(t)
 	visor := buildVisor(t)
+	policyFile := writePermissivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)

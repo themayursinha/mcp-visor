@@ -1,0 +1,362 @@
+package policy
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/themayursinha/mcp-visor/internal/mcp"
+)
+
+type Engine struct {
+	policy   *Policy
+	registry *Registry
+	logger   *slog.Logger
+}
+
+func NewEngine(p *Policy) *Engine {
+	if p == nil {
+		p = DefaultPolicy()
+	}
+	return &Engine{
+		policy:   p,
+		registry: NewRegistry(p),
+		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})),
+	}
+}
+
+func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision {
+	tool, known := e.registry.Tool(serverName, req.Name)
+	srv, srvKnown := e.registry.Server(serverName)
+
+	if !srvKnown {
+		e.logger.Warn("unknown server", "server", serverName, "tool", req.Name)
+		if e.policy.DefaultAction == ActionDeny {
+			return Decision{Action: ActionDeny, Reason: fmt.Sprintf("server '%s' is not registered", serverName)}
+		}
+	}
+
+	if !known {
+		e.logger.Warn("unknown tool", "server", serverName, "tool", req.Name)
+		if e.policy.DefaultAction == ActionDeny {
+			return Decision{Action: ActionDeny, Reason: fmt.Sprintf("tool '%s' from server '%s' is not registered", req.Name, serverName)}
+		}
+	}
+
+	if srvKnown && !srv.Allowed {
+		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("server '%s' is denied by policy", serverName)}
+	}
+
+	if known && !tool.Allowed {
+		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("tool '%s' is explicitly denied", req.Name)}
+	}
+
+	if !known && !srvKnown && e.policy.DefaultAction == ActionDeny {
+		return Decision{Action: ActionDeny, Reason: "unknown tool/server; default-deny policy"}
+	}
+
+	if known && len(tool.Rules) > 0 {
+		args := extractArgs(req.Arguments)
+		for _, rule := range tool.Rules {
+			decision := e.evaluateRule(rule, args, req.Name)
+			if decision.Action != ActionAllow {
+				return decision
+			}
+		}
+	}
+
+	return Decision{Action: ActionAllow, Reason: "allowed by policy"}
+}
+
+func (e *Engine) EvaluateChain(serverName string, req mcp.ToolsCallRequest, previousCalls []string) Decision {
+	for _, chain := range e.policy.ToolChains {
+		if chain.WithinCalls > 0 && len(previousCalls) > chain.WithinCalls {
+			previousCalls = previousCalls[len(previousCalls)-chain.WithinCalls:]
+		}
+
+		for _, source := range chain.Sources {
+			if e.matchesSource(source, previousCalls) {
+				for _, sink := range chain.Sinks {
+					if e.matchesSink(sink, serverName, req.Name) {
+						return Decision{
+							Action: chain.Action,
+							Reason: fmt.Sprintf("chain rule '%s': tool sequence matches dangerous pattern", chain.Name),
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return Decision{Action: ActionAllow, Reason: "no chain rule matched"}
+}
+
+func (e *Engine) EvaluateApproval(serverName string, req mcp.ToolsCallRequest) bool {
+	tool, known := e.registry.Tool(serverName, req.Name)
+	if !known {
+		return false
+	}
+	return tool.ApprovalRequired
+}
+
+func (e *Engine) GetRiskLevel(serverName, toolName string) RiskLevel {
+	tool, known := e.registry.Tool(serverName, toolName)
+	if known && tool.Risk != "" {
+		return tool.Risk
+	}
+	return e.inferRisk(toolName)
+}
+
+func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string) Decision {
+	switch rule.Type {
+	case "deny_path":
+		if path, ok := getStringArg(args, "path", "file", "file_path"); ok {
+			if matchesAnyPattern(rule.Patterns, path) {
+				return Decision{Action: ActionDeny, Reason: "path matches deny pattern"}
+			}
+		}
+
+	case "allow_path":
+		if path, ok := getStringArg(args, "path", "file", "file_path"); ok {
+			if !matchesAnyPattern(rule.Patterns, path) {
+				return Decision{Action: ActionDeny, Reason: "path does not match any allow pattern"}
+			}
+		}
+
+	case "deny_command_pattern":
+		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
+			for _, pattern := range rule.Patterns {
+				if matched, _ := regexp.MatchString("(?i)"+pattern, cmd); matched {
+					return Decision{Action: ActionDeny, Reason: fmt.Sprintf("command matches deny pattern: %s", pattern)}
+				}
+			}
+		}
+
+	case "allow_command_pattern":
+		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
+			allowed := false
+			for _, pattern := range rule.Patterns {
+				if matched, _ := regexp.MatchString("(?i)"+pattern, cmd); matched {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return Decision{Action: ActionDeny, Reason: "command does not match any allow pattern"}
+			}
+		}
+
+	case "deny_command_keyword":
+		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
+			lower := strings.ToLower(cmd)
+			for _, kw := range rule.Keywords {
+				if strings.Contains(lower, strings.ToLower(kw)) {
+					return Decision{Action: ActionDeny, Reason: fmt.Sprintf("command contains denied keyword: %s", kw)}
+				}
+			}
+		}
+
+	case "deny_query_pattern":
+		if query, ok := getStringArg(args, "query", "sql", "statement"); ok {
+			for _, pattern := range rule.Patterns {
+				if matched, _ := regexp.MatchString("(?i)"+pattern, query); matched {
+					return Decision{Action: ActionDeny, Reason: fmt.Sprintf("query matches deny pattern: %s", pattern)}
+				}
+			}
+		}
+
+	case "allow_query_pattern":
+		if query, ok := getStringArg(args, "query", "sql", "statement"); ok {
+			allowed := false
+			for _, pattern := range rule.Patterns {
+				if matched, _ := regexp.MatchString("(?i)"+pattern, query); matched {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return Decision{Action: ActionDeny, Reason: "query does not match any allow pattern"}
+			}
+		}
+
+	case "deny_recipient_domain", "allow_recipient_domain":
+		if domain, ok := getStringArg(args, "recipient", "to", "email", "domain"); ok {
+			matched, _ := MatchesAnyDomainPattern(rule.Domains, domain)
+			if rule.Type == "deny_recipient_domain" && matched {
+				return Decision{Action: ActionDeny, Reason: "recipient domain is denied"}
+			}
+			if rule.Type == "allow_recipient_domain" && !matched {
+				return Decision{Action: ActionDeny, Reason: "recipient domain is not in allowlist"}
+			}
+		}
+
+	case "allowed_repos":
+		if repo, ok := getStringArg(args, "repo", "repository", "owner/repo"); ok {
+			if !MatchesAnyRepo(rule.Repos, repo) {
+				return Decision{Action: ActionDeny, Reason: fmt.Sprintf("repository '%s' is not in allowlist", repo)}
+			}
+		}
+
+	case "max_file_size":
+		if size := getSizeArg(args); size > 0 && rule.Bytes > 0 && size > rule.Bytes {
+			return Decision{Action: ActionDeny, Reason: fmt.Sprintf("file size %d exceeds max %d bytes", size, rule.Bytes)}
+		}
+
+	case "max_result_rows", "max_export_rows":
+		if rows := getRowsArg(args); rows > 0 && rule.Rows > 0 && rows > rule.Rows {
+			return Decision{Action: ActionDeny, Reason: fmt.Sprintf("rows %d exceeds max %d", rows, rule.Rows)}
+		}
+
+	case "require_approval_always":
+		return Decision{Action: ActionRequireApproval, Reason: "approval is required for this tool"}
+	}
+
+	return Decision{Action: ActionAllow, Reason: "rule passed"}
+}
+
+func (e *Engine) matchesSource(match ChainMatch, previousCalls []string) bool {
+	for _, call := range previousCalls {
+		parts := strings.SplitN(call, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		serverMatch := match.Server == "*" || match.Server == parts[0]
+		toolMatch, _ := regexp.MatchString("(?i)^"+match.ToolPattern+"$", parts[1])
+		if serverMatch && toolMatch {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) matchesSink(match ChainMatch, serverName, toolName string) bool {
+	serverMatch := match.Server == "*" || match.Server == serverName
+	toolMatch, _ := regexp.MatchString("(?i)^"+match.ToolPattern+"$", toolName)
+	return serverMatch && toolMatch
+}
+
+func (e *Engine) inferRisk(toolName string) RiskLevel {
+	name := strings.ToLower(toolName)
+
+	criticalKeywords := []string{"delete", "drop", "iam", "shell", "exec", "sudo", "root"}
+	for _, kw := range criticalKeywords {
+		if strings.Contains(name, kw) {
+			return RiskCritical
+		}
+	}
+
+	highKeywords := []string{"write", "send", "post", "create", "modify", "update", "upload", "database", "query", "secret", "credential", "key", "token"}
+	for _, kw := range highKeywords {
+		if strings.Contains(name, kw) {
+			return RiskHigh
+		}
+	}
+
+	mediumKeywords := []string{"read", "fetch", "get", "search", "download", "ssh", "connect"}
+	for _, kw := range mediumKeywords {
+		if strings.Contains(name, kw) {
+			return RiskMedium
+		}
+	}
+
+	return RiskLow
+}
+
+func (e *Engine) Registry() *Registry {
+	return e.registry
+}
+
+func (e *Engine) Policy() *Policy {
+	return e.policy
+}
+
+func extractArgs(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil
+	}
+	return args
+}
+
+func getStringArg(args map[string]any, keys ...string) (string, bool) {
+	for _, key := range keys {
+		if val, ok := args[key]; ok {
+			if s, ok := val.(string); ok {
+				return s, true
+			}
+		}
+	}
+	return "", false
+}
+
+func getSizeArg(args map[string]any) int {
+	for _, key := range []string{"size", "content_length", "file_size"} {
+		if val, ok := args[key]; ok {
+			switch v := val.(type) {
+			case float64:
+				return int(v)
+			case int:
+				return v
+			case int64:
+				return int(v)
+			}
+		}
+	}
+	return 0
+}
+
+func getRowsArg(args map[string]any) int {
+	for _, key := range []string{"limit", "rows", "count", "max_results"} {
+		if val, ok := args[key]; ok {
+			switch v := val.(type) {
+			case float64:
+				return int(v)
+			case int:
+				return v
+			case int64:
+				return int(v)
+			}
+		}
+	}
+	return 0
+}
+
+func matchesAnyPattern(patterns []string, value string) bool {
+	for _, pattern := range patterns {
+		if matchesGlob(pattern, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesGlob(pattern, value string) bool {
+	if strings.Contains(pattern, "**") {
+		regexStr := globToRegexString(pattern)
+		matched, _ := regexp.MatchString(regexStr, value)
+		return matched
+	}
+
+	match, err := filepath.Match(pattern, value)
+	if err == nil && match {
+		return true
+	}
+	match, err = filepath.Match(strings.ToLower(pattern), strings.ToLower(value))
+	return err == nil && match
+}
+
+func globToRegexString(pattern string) string {
+	s := regexp.QuoteMeta(pattern)
+	s = strings.ReplaceAll(s, `\*\*`, `.*`)
+	s = strings.ReplaceAll(s, `\*`, `[^/]*`)
+	return "(?i)^" + s + "$"
+}
