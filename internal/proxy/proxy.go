@@ -13,14 +13,16 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
+	"github.com/themayursinha/mcp-visor/internal/redaction"
 )
 
 type Proxy struct {
-	cfg     Config
-	session *Session
-	logger  *slog.Logger
-	engine  *policy.Engine
-	audit   *audit.Logger
+	cfg      Config
+	session  *Session
+	logger   *slog.Logger
+	engine   *policy.Engine
+	audit    *audit.Logger
+	redactor *redaction.Engine
 }
 
 type Config struct {
@@ -48,15 +50,17 @@ func New(cfg Config) *Proxy {
 	al.SetRedactionPatterns(p.Redaction.Patterns)
 
 	eng := policy.NewEngine(p)
+	red := redaction.NewEngine(p.Redaction)
 
 	return &Proxy{
-		cfg:     cfg,
-		session: NewSession(cfg.SessionID, cfg.ClientID),
+		cfg:      cfg,
+		session:  NewSession(cfg.SessionID, cfg.ClientID),
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
-		engine: eng,
-		audit:  al,
+		engine:   eng,
+		audit:    al,
+		redactor: red,
 	}
 }
 
@@ -218,40 +222,85 @@ func (p *Proxy) relayClientToServer(ctx context.Context, client, server *mcp.Par
 			return fmt.Errorf("read from client: %w", err)
 		}
 
-		result := p.interceptAndFilter(raw, client)
-		if result == "denied" {
-			continue
-		}
-		if result == "responded" {
-			p.logClientMessage(raw)
+		modified, action := p.interceptAndModify(raw, client)
+		if action == "denied" {
 			continue
 		}
 
-		p.logClientMessage(raw)
+		p.logClientMessage(modified)
 
-		if err := server.EncodeRaw(raw); err != nil {
+		if err := server.EncodeRaw(modified); err != nil {
 			return fmt.Errorf("forward to server: %w", err)
 		}
 	}
 }
 
-func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) string {
+func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (json.RawMessage, string) {
 	req, err := mcp.NewParser(nil, nil).DecodeRequest(raw)
 	if err != nil || req.IsNotification() {
-		return "forward"
+		return raw, "forward"
 	}
 
 	if req.Method != mcp.MethodToolsCall {
-		return "forward"
+		return raw, "forward"
 	}
 
 	var callReq mcp.ToolsCallRequest
 	if err := json.Unmarshal(req.Params, &callReq); err != nil {
-		return "forward"
+		return raw, "forward"
 	}
 
 	serverName := p.cfg.ServerCommand
 	argsMap := extractArgs(callReq.Arguments)
+
+	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
+	if redactionResult.Redacted {
+		p.logger.Info("arguments redacted",
+			"tool", callReq.Name,
+			"fields", redactionResult.RedactedFields,
+			"session", p.session.ID,
+		)
+		p.audit.Log(audit.Event{
+			EventType: audit.EventToolAllowed,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: redactedArgs,
+			Decision:  "redact_then_allow",
+			Reason:    fmt.Sprintf("redacted fields: %v", redactionResult.RedactedFields),
+			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
+		})
+		rewritten, err := p.rewriteArgs(raw, redactedArgs)
+		if err == nil {
+			raw = rewritten
+		}
+	}
+
+	sensitivePath := p.extractPath(callReq)
+	if sensitivePath != "" && p.redactor.IsSensitiveFile(sensitivePath) {
+		errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
+		client.EncodeResponse(errResp)
+
+		p.audit.Log(audit.Event{
+			EventType: audit.EventToolDenied,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: redactedArgs,
+			Decision:  string(policy.ActionDeny),
+			Reason:    fmt.Sprintf("sensitive file: %s", sensitivePath),
+			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
+		})
+
+		p.logger.Warn("sensitive file denied",
+			"tool", callReq.Name,
+			"path", sensitivePath,
+			"session", p.session.ID,
+		)
+		return raw, "denied"
+	}
 
 	decision := p.engine.Evaluate(serverName, callReq)
 	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
@@ -267,7 +316,7 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 			AgentID:   p.cfg.ClientID,
 			Server:    serverName,
 			Tool:      callReq.Name,
-			Arguments: argsMap,
+			Arguments: redactedArgs,
 			Decision:  string(decision.Action),
 			Reason:    decision.Reason,
 			RiskLevel: string(risk),
@@ -278,7 +327,7 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 			"reason", decision.Reason,
 			"session", p.session.ID,
 		)
-		return "denied"
+		return raw, "denied"
 
 	case policy.ActionRequireApproval:
 		p.audit.Log(audit.Event{
@@ -287,7 +336,7 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 			AgentID:   p.cfg.ClientID,
 			Server:    serverName,
 			Tool:      callReq.Name,
-			Arguments: argsMap,
+			Arguments: redactedArgs,
 			Decision:  string(decision.Action),
 			Reason:    decision.Reason,
 			RiskLevel: string(risk),
@@ -297,7 +346,7 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 			"tool", callReq.Name,
 			"session", p.session.ID,
 		)
-		return "forward"
+		return raw, "forward"
 
 	case policy.ActionAllow:
 		windowSize := p.engine.Policy().Settings.ChainWindowSize
@@ -317,7 +366,7 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 				AgentID:      p.cfg.ClientID,
 				Server:       serverName,
 				Tool:         callReq.Name,
-				Arguments:    argsMap,
+				Arguments:    redactedArgs,
 				Decision:     string(chainDecision.Action),
 				Reason:       chainDecision.Reason,
 				RiskLevel:    string(risk),
@@ -330,7 +379,7 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 				"previous_calls", previousCalls,
 				"session", p.session.ID,
 			)
-			return "denied"
+			return raw, "denied"
 		}
 
 		if chainDecision.Action == policy.ActionRequireApproval {
@@ -340,7 +389,7 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 				AgentID:      p.cfg.ClientID,
 				Server:       serverName,
 				Tool:         callReq.Name,
-				Arguments:    argsMap,
+				Arguments:    redactedArgs,
 				Decision:     string(chainDecision.Action),
 				Reason:       chainDecision.Reason,
 				RiskLevel:    string(risk),
@@ -355,10 +404,10 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 			)
 		}
 
-		return "forward"
+		return raw, "forward"
 
 	default:
-		return "forward"
+		return raw, "forward"
 	}
 }
 
@@ -375,12 +424,63 @@ func (p *Proxy) relayServerToClient(ctx context.Context, server, client *mcp.Par
 			return fmt.Errorf("read from server: %w", err)
 		}
 
+		raw = p.redactServerResponse(raw)
+
 		p.logServerMessage(raw)
 
 		if err := client.EncodeRaw(raw); err != nil {
 			return fmt.Errorf("forward to client: %w", err)
 		}
 	}
+}
+
+func (p *Proxy) redactServerResponse(raw json.RawMessage) json.RawMessage {
+	var resp struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      any             `json:"id"`
+		Result  json.RawMessage `json:"result,omitempty"`
+		Error   json.RawMessage `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return raw
+	}
+	if resp.Result == nil {
+		return raw
+	}
+
+	var result mcp.ToolsCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return raw
+	}
+
+	modified := false
+	for i, content := range result.Content {
+		if content.Text != "" {
+			redacted := p.redactor.RedactOutput(content.Text)
+			if redacted != content.Text {
+				result.Content[i].Text = redacted
+				modified = true
+			}
+		}
+	}
+
+	if !modified {
+		return raw
+	}
+
+	p.logger.Info("output redacted", "session", p.session.ID)
+
+	newResult, err := json.Marshal(result)
+	if err != nil {
+		return raw
+	}
+	resp.Result = newResult
+
+	newRaw, err := json.Marshal(resp)
+	if err != nil {
+		return raw
+	}
+	return append(newRaw, '\n')
 }
 
 func (p *Proxy) logClientMessage(raw json.RawMessage) {
@@ -441,8 +541,7 @@ func (p *Proxy) logServerMessage(raw json.RawMessage) {
 
 	p.session.mu.Lock()
 	if len(p.session.ToolCalls) > 0 {
-		last := &p.session.ToolCalls[len(p.session.ToolCalls)-1]
-		last.Result = preview
+		p.session.ToolCalls[len(p.session.ToolCalls)-1].Result = preview
 	}
 	p.session.mu.Unlock()
 
@@ -451,6 +550,55 @@ func (p *Proxy) logServerMessage(raw json.RawMessage) {
 		"is_error", isError,
 		"preview", preview,
 	)
+}
+
+func (p *Proxy) rewriteArgs(raw json.RawMessage, redactedArgs map[string]any) (json.RawMessage, error) {
+	var req mcp.Request
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+
+	var callReq struct {
+		Name      string         `json:"name"`
+		Arguments json.RawMessage `json:"arguments,omitempty"`
+	}
+	if err := json.Unmarshal(req.Params, &callReq); err != nil {
+		return nil, err
+	}
+
+	newArgs, err := json.Marshal(redactedArgs)
+	if err != nil {
+		return nil, err
+	}
+	callReq.Arguments = newArgs
+
+	newParams, err := json.Marshal(callReq)
+	if err != nil {
+		return nil, err
+	}
+	req.Params = newParams
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func (p *Proxy) extractPath(callReq mcp.ToolsCallRequest) string {
+	if callReq.Arguments == nil {
+		return ""
+	}
+	var args map[string]any
+	if err := json.Unmarshal(callReq.Arguments, &args); err != nil {
+		return ""
+	}
+	for _, key := range []string{"path", "file", "file_path", "uri"} {
+		if v, ok := args[key].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (p *Proxy) Session() *Session {
