@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/approval"
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -17,12 +19,13 @@ import (
 )
 
 type Proxy struct {
-	cfg      Config
-	session  *Session
-	logger   *slog.Logger
-	engine   *policy.Engine
-	audit    *audit.Logger
-	redactor *redaction.Engine
+	cfg       Config
+	session   *Session
+	logger    *slog.Logger
+	engine    *policy.Engine
+	audit     *audit.Logger
+	redactor  *redaction.Engine
+	approval  *approval.Engine
 }
 
 type Config struct {
@@ -32,6 +35,7 @@ type Config struct {
 	SessionID     string
 	Policy        *policy.Policy
 	AuditLogPath  string
+	ApprovalDir   string
 }
 
 func New(cfg Config) *Proxy {
@@ -51,6 +55,7 @@ func New(cfg Config) *Proxy {
 
 	eng := policy.NewEngine(p)
 	red := redaction.NewEngine(p.Redaction)
+	appr := approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
 
 	return &Proxy{
 		cfg:      cfg,
@@ -61,6 +66,7 @@ func New(cfg Config) *Proxy {
 		engine:   eng,
 		audit:    al,
 		redactor: red,
+		approval: appr,
 	}
 }
 
@@ -330,19 +336,58 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
+		approvalReq := approval.Request{
+			ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
+			Tool:      callReq.Name,
+			Server:    serverName,
+			Arguments: redactedArgs,
+			Reason:    decision.Reason,
+			RiskLevel: string(risk),
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+		}
+
+		p.logger.Warn("approval requested",
+			"tool", callReq.Name,
+			"id", approvalReq.ID,
+			"session", p.session.ID,
+		)
+
+		approved, err := p.approval.RequestApproval(approvalReq)
+		if err != nil || !approved {
+			p.audit.Log(audit.Event{
+				EventType: audit.EventToolDenied,
+				SessionID: p.session.ID,
+				AgentID:   p.cfg.ClientID,
+				Server:    serverName,
+				Tool:      callReq.Name,
+				Arguments: redactedArgs,
+				Decision:  string(policy.ActionDeny),
+				Reason:    fmt.Sprintf("approval denied: %v", err),
+				RiskLevel: string(risk),
+			})
+			p.logger.Warn("approval denied",
+				"tool", callReq.Name,
+				"session", p.session.ID,
+			)
+			errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("execution denied: approval not granted (%v)", err))
+			client.EncodeResponse(errResp)
+			return raw, "denied"
+		}
+
 		p.audit.Log(audit.Event{
-			EventType: audit.EventToolApprovalRequired,
+			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
 			Server:    serverName,
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
-			Decision:  string(decision.Action),
-			Reason:    decision.Reason,
+			Decision:  string(policy.ActionAllow),
+			Reason:    "approved by human operator",
 			RiskLevel: string(risk),
 		})
 
-		p.logger.Warn("approval required",
+		p.logger.Info("approval granted",
 			"tool", callReq.Name,
 			"session", p.session.ID,
 		)

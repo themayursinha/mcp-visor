@@ -21,6 +21,7 @@ func main() {
 	clientID := serveCmd.String("client-id", "", "Client identifier")
 	policyPath := serveCmd.String("policy", "", "Path to policy YAML file")
 	auditPath := serveCmd.String("audit-log", "", "Path to JSONL audit log file (default: stderr)")
+	approvalDir := serveCmd.String("approval-dir", "", "Directory for file-based approval workflow")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -62,6 +63,7 @@ func main() {
 			SessionID:     *sessionID,
 			Policy:        pol,
 			AuditLogPath:  *auditPath,
+			ApprovalDir:   *approvalDir,
 		})
 
 		if err := p.Run(ctx); err != nil {
