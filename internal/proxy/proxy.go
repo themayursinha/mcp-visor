@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sync"
 
+	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 )
@@ -19,6 +20,7 @@ type Proxy struct {
 	session *Session
 	logger  *slog.Logger
 	engine  *policy.Engine
+	audit   *audit.Logger
 }
 
 type Config struct {
@@ -27,6 +29,7 @@ type Config struct {
 	ClientID      string
 	SessionID     string
 	Policy        *policy.Policy
+	AuditLogPath  string
 }
 
 func New(cfg Config) *Proxy {
@@ -40,13 +43,20 @@ func New(cfg Config) *Proxy {
 	if p == nil {
 		p = policy.DefaultPolicy()
 	}
+
+	al := audit.MustLogger(cfg.AuditLogPath)
+	al.SetRedactionPatterns(p.Redaction.Patterns)
+
+	eng := policy.NewEngine(p)
+
 	return &Proxy{
 		cfg:     cfg,
 		session: NewSession(cfg.SessionID, cfg.ClientID),
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
-		engine: policy.NewEngine(p),
+		engine: eng,
+		audit:  al,
 	}
 }
 
@@ -69,8 +79,26 @@ func (p *Proxy) Run(ctx context.Context) error {
 	if err := serverCmd.Start(); err != nil {
 		return fmt.Errorf("start server: %w", err)
 	}
-	defer serverCmd.Wait()
+	defer func() {
+		serverCmd.Wait()
+		p.audit.Log(audit.Event{
+			EventType: audit.EventSessionEnded,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    p.cfg.ServerCommand,
+			Message:   "session ended",
+		})
+		p.audit.Close()
+	}()
 	p.logger.Info("mcp server started", "command", p.cfg.ServerCommand)
+
+	p.audit.Log(audit.Event{
+		EventType: audit.EventSessionStarted,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    p.cfg.ServerCommand,
+		Message:   "session started",
+	})
 
 	go p.streamStderr(serverStderr)
 
@@ -223,13 +251,28 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 	}
 
 	serverName := p.cfg.ServerCommand
+	argsMap := extractArgs(callReq.Arguments)
 
 	decision := p.engine.Evaluate(serverName, callReq)
+	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
 
 	switch decision.Action {
 	case policy.ActionDeny:
 		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
 		client.EncodeResponse(errResp)
+
+		p.audit.Log(audit.Event{
+			EventType: audit.EventToolDenied,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: argsMap,
+			Decision:  string(decision.Action),
+			Reason:    decision.Reason,
+			RiskLevel: string(risk),
+		})
+
 		p.logger.Warn("policy denied",
 			"tool", callReq.Name,
 			"reason", decision.Reason,
@@ -238,6 +281,18 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 		return "denied"
 
 	case policy.ActionRequireApproval:
+		p.audit.Log(audit.Event{
+			EventType: audit.EventToolApprovalRequired,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: argsMap,
+			Decision:  string(decision.Action),
+			Reason:    decision.Reason,
+			RiskLevel: string(risk),
+		})
+
 		p.logger.Warn("approval required",
 			"tool", callReq.Name,
 			"session", p.session.ID,
@@ -318,6 +373,7 @@ func (p *Proxy) logServerMessage(raw json.RawMessage) {
 	}
 
 	preview := ""
+	isError := result.IsError
 	for _, content := range result.Content {
 		if content.Text != "" {
 			preview = content.Text
@@ -330,13 +386,14 @@ func (p *Proxy) logServerMessage(raw json.RawMessage) {
 
 	p.session.mu.Lock()
 	if len(p.session.ToolCalls) > 0 {
-		p.session.ToolCalls[len(p.session.ToolCalls)-1].Result = preview
+		last := &p.session.ToolCalls[len(p.session.ToolCalls)-1]
+		last.Result = preview
 	}
 	p.session.mu.Unlock()
 
 	p.logger.Info("tool result",
 		"session", p.session.ID,
-		"is_error", result.IsError,
+		"is_error", isError,
 		"preview", preview,
 	)
 }
@@ -347,6 +404,17 @@ func (p *Proxy) Session() *Session {
 
 func (p *Proxy) Engine() *policy.Engine {
 	return p.engine
+}
+
+func extractArgs(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil
+	}
+	return args
 }
 
 var sessionCounter int
