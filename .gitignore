@@ -1,0 +1,4 @@
+PLAN.md
+*.log
+audit-logs/
+coverage.out
