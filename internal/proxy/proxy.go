@@ -300,6 +300,61 @@ func (p *Proxy) interceptAndFilter(raw json.RawMessage, client *mcp.Parser) stri
 		return "forward"
 
 	case policy.ActionAllow:
+		windowSize := p.engine.Policy().Settings.ChainWindowSize
+		if windowSize == 0 {
+			windowSize = 10
+		}
+		previousCalls := p.session.RecentCallChain(windowSize)
+		chainDecision := p.engine.EvaluateChain(serverName, callReq, previousCalls)
+
+		if chainDecision.Action == policy.ActionDeny {
+			errResp := mcp.NewErrorResponse(req.ID, -32000, chainDecision.Reason)
+			client.EncodeResponse(errResp)
+
+			p.audit.Log(audit.Event{
+				EventType:    audit.EventToolChainDetected,
+				SessionID:    p.session.ID,
+				AgentID:      p.cfg.ClientID,
+				Server:       serverName,
+				Tool:         callReq.Name,
+				Arguments:    argsMap,
+				Decision:     string(chainDecision.Action),
+				Reason:       chainDecision.Reason,
+				RiskLevel:    string(risk),
+				ChainContext: previousCalls,
+			})
+
+			p.logger.Warn("chain denied",
+				"tool", callReq.Name,
+				"reason", chainDecision.Reason,
+				"previous_calls", previousCalls,
+				"session", p.session.ID,
+			)
+			return "denied"
+		}
+
+		if chainDecision.Action == policy.ActionRequireApproval {
+			p.audit.Log(audit.Event{
+				EventType:    audit.EventToolChainDetected,
+				SessionID:    p.session.ID,
+				AgentID:      p.cfg.ClientID,
+				Server:       serverName,
+				Tool:         callReq.Name,
+				Arguments:    argsMap,
+				Decision:     string(chainDecision.Action),
+				Reason:       chainDecision.Reason,
+				RiskLevel:    string(risk),
+				ChainContext: previousCalls,
+			})
+
+			p.logger.Warn("chain requires approval",
+				"tool", callReq.Name,
+				"reason", chainDecision.Reason,
+				"previous_calls", previousCalls,
+				"session", p.session.ID,
+			)
+		}
+
 		return "forward"
 
 	default:

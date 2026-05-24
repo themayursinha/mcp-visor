@@ -65,6 +65,24 @@ func (s *Session) ToolCallCount() int {
 	return len(s.ToolCalls)
 }
 
+func (s *Session) RecentCallChain(window int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.ToolCalls) == 0 {
+		return nil
+	}
+	if window <= 0 || window > len(s.ToolCalls) {
+		window = len(s.ToolCalls)
+	}
+	start := len(s.ToolCalls) - window
+	chain := make([]string, 0, window)
+	for _, call := range s.ToolCalls[start:] {
+		chain = append(chain, call.ServerName+":"+call.ToolName)
+	}
+	return chain
+}
+
 func rawToMap(raw []byte) map[string]any {
 	if len(raw) == 0 {
 		return nil
