@@ -30,6 +30,7 @@ type Proxy struct {
 
 type Config struct {
 	ServerCommand string
+	ServerName    string
 	ServerArgs    []string
 	ClientID      string
 	SessionID     string
@@ -46,6 +47,9 @@ func New(cfg Config) *Proxy {
 	}
 	if cfg.ClientID == "" {
 		cfg.ClientID = "mcp-client"
+	}
+	if cfg.ServerName == "" {
+		cfg.ServerName = cfg.ServerCommand
 	}
 	p := cfg.Policy
 	if p == nil {
@@ -106,7 +110,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 			EventType: audit.EventSessionEnded,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
-			Server:    p.cfg.ServerCommand,
+			Server:    p.cfg.ServerName,
 			Message:   "session ended",
 		})
 		p.audit.Close()
@@ -118,7 +122,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 		EventType: audit.EventSessionStarted,
 		SessionID: p.session.ID,
 		AgentID:   p.cfg.ClientID,
-		Server:    p.cfg.ServerCommand,
+		Server:    p.cfg.ServerName,
 		Message:   "session started",
 	})
 
@@ -132,7 +136,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 	}
 	p.logger.Info("proxy ready",
 		"session", p.session.ID,
-		"server", p.cfg.ServerCommand,
+		"server", p.cfg.ServerName,
 		"default_action", p.engine.Policy().DefaultAction,
 	)
 
@@ -268,7 +272,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		return raw, "forward"
 	}
 
-	serverName := p.cfg.ServerCommand
+	serverName := p.cfg.ServerName
 	argsMap := extractArgs(callReq.Arguments)
 
 	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
@@ -562,8 +566,8 @@ func (p *Proxy) logClientMessage(raw json.RawMessage) {
 		if err := json.Unmarshal(req.Params, &call); err != nil {
 			return
 		}
-		p.session.RecordToolCall(p.cfg.ServerCommand, call, "")
-		risk := p.engine.GetRiskLevel(p.cfg.ServerCommand, call.Name)
+		p.session.RecordToolCall(p.cfg.ServerName, call, "")
+		risk := p.engine.GetRiskLevel(p.cfg.ServerName, call.Name)
 		p.logger.Info("tool call",
 			"session", p.session.ID,
 			"tool", call.Name,

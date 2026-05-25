@@ -130,3 +130,29 @@ func TestGenerateSessionID(t *testing.T) {
 		t.Error("expected different session IDs")
 	}
 }
+
+func TestProxyServerNameExplicit(t *testing.T) {
+	p := proxy.New(proxy.Config{
+		ServerCommand: "/usr/local/bin/my-mcp-server",
+		ServerName:    "filesystem",
+	})
+
+	s := p.Session()
+	if s == nil {
+		t.Fatal("expected non-nil session")
+	}
+	if p.Engine() == nil {
+		t.Fatal("expected non-nil engine")
+	}
+}
+
+func TestProxyServerNameDefaultsToCommand(t *testing.T) {
+	p := proxy.New(proxy.Config{
+		ServerCommand: "/usr/bin/echo",
+	})
+
+	s := p.Session()
+	if s == nil {
+		t.Fatal("expected non-nil session")
+	}
+}
