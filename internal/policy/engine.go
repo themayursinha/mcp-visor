@@ -19,7 +19,8 @@ type Engine struct {
 	registry *Registry
 	logger   *slog.Logger
 
-	watcher *Watcher
+	watcher  *Watcher
+	clientID string
 }
 
 func NewEngine(p *Policy) *Engine {
@@ -45,6 +46,10 @@ func NewEngineWithWatcher(w *Watcher) *Engine {
 		})),
 		watcher: w,
 	}
+}
+
+func (e *Engine) SetClientID(id string) {
+	e.clientID = id
 }
 
 func (e *Engine) Reload(p *Policy) {
@@ -105,6 +110,13 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 			if decision.Action != ActionAllow {
 				return decision
 			}
+		}
+	}
+
+	if len(pol.Identities) > 0 && e.clientID != "" {
+		decision := e.evaluateIdentity(serverName, req.Name, pol)
+		if decision.Action != ActionAllow {
+			return decision
 		}
 	}
 
@@ -279,6 +291,47 @@ func (e *Engine) matchesSink(match ChainMatch, serverName, toolName string) bool
 	serverMatch := match.Server == "*" || match.Server == serverName
 	toolMatch, _ := regexp.MatchString("(?i)^"+match.ToolPattern+"$", toolName)
 	return serverMatch && toolMatch
+}
+
+func (e *Engine) evaluateIdentity(serverName, toolName string, pol *Policy) Decision {
+	identity := e.findIdentity(pol)
+	if identity == nil {
+		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("client '%s' has no matching identity in policy", e.clientID)}
+	}
+
+	serverAllowed := false
+	for _, idSrv := range identity.AllowedServers {
+		if idSrv == serverName {
+			serverAllowed = true
+			break
+		}
+	}
+	if !serverAllowed {
+		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("server '%s' not allowed for identity '%s'", serverName, identity.Name)}
+	}
+
+	toolAllowed := false
+	fqTool := serverName + "/" + toolName
+	for _, idTool := range identity.AllowedTools {
+		if idTool == fqTool {
+			toolAllowed = true
+			break
+		}
+	}
+	if !toolAllowed {
+		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("tool '%s' not allowed for identity '%s'", fqTool, identity.Name)}
+	}
+
+	return Decision{Action: ActionAllow, Reason: "allowed by identity policy"}
+}
+
+func (e *Engine) findIdentity(pol *Policy) *Identity {
+	for i := range pol.Identities {
+		if pol.Identities[i].Name == e.clientID {
+			return &pol.Identities[i]
+		}
+	}
+	return nil
 }
 
 func (e *Engine) inferRisk(toolName string) RiskLevel {

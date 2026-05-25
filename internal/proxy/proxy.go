@@ -58,6 +58,7 @@ func New(cfg Config) *Proxy {
 	if eng == nil {
 		eng = policy.NewEngine(p)
 	}
+	eng.SetClientID(cfg.ClientID)
 	red := redaction.NewEngine(p.Redaction)
 	appr := approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
 
