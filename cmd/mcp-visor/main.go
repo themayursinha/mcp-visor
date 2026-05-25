@@ -49,7 +49,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "serve":
-		serveCmd.Parse(os.Args[2:])
+		_ = serveCmd.Parse(os.Args[2:])
 
 		if *demoMode {
 			*serverCmd, *policyPath = setupDemo()

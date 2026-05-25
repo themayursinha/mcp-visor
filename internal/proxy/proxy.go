@@ -327,7 +327,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		chainResult := p.checkChain(serverName, callReq, redactedArgs, risk)
 		if chainResult == "denied" {
 			errResp := mcp.NewErrorResponse(req.ID, -32000, "chain rule: tool sequence matches dangerous pattern")
-			client.EncodeResponse(errResp)
+			_ = client.EncodeResponse(errResp)
 			return raw, "denied"
 		}
 	}
@@ -392,7 +392,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 				"session", p.session.ID,
 			)
 			errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("execution denied: approval not granted (%v)", err))
-			client.EncodeResponse(errResp)
+			_ = client.EncodeResponse(errResp)
 			return raw, "denied"
 		}
 
