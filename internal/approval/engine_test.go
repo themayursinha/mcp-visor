@@ -31,7 +31,7 @@ func TestApprovalGranted(t *testing.T) {
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		okPath := filepath.Join(dir, "req-test-001.ok")
-		os.WriteFile(okPath, []byte{}, 0o600)
+		_ = os.WriteFile(okPath, []byte{}, 0o600)
 	}()
 
 	start := time.Now()
@@ -68,7 +68,7 @@ func TestApprovalDenied(t *testing.T) {
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		noPath := filepath.Join(dir, "req-test-002.no")
-		os.WriteFile(noPath, []byte{}, 0o600)
+		_ = os.WriteFile(noPath, []byte{}, 0o600)
 	}()
 
 	approved, err := eng.RequestApproval(req)
@@ -220,7 +220,7 @@ func TestApprovalRequestFileContainsContext(t *testing.T) {
 		close(done)
 	}()
 
-	go eng.RequestApproval(req)
+	go func() { _, _ = eng.RequestApproval(req) }()
 	time.Sleep(100 * time.Millisecond)
 
 	reqPath := filepath.Join(dir, "req-ctx-001.json")

@@ -101,7 +101,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 		return fmt.Errorf("start server: %w", err)
 	}
 	defer func() {
-		serverCmd.Wait()
+		_ = serverCmd.Wait()
 		p.audit.Log(audit.Event{
 			EventType: audit.EventSessionEnded,
 			SessionID: p.session.ID,
@@ -298,7 +298,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 	sensitivePath := p.extractPath(callReq)
 	if sensitivePath != "" && p.redactor.IsSensitiveFile(sensitivePath) {
 		errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
-		client.EncodeResponse(errResp)
+		_ = client.EncodeResponse(errResp)
 
 		p.audit.Log(audit.Event{
 			EventType: audit.EventToolDenied,
@@ -335,7 +335,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 	switch decision.Action {
 	case policy.ActionDeny:
 		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
-		client.EncodeResponse(errResp)
+		_ = client.EncodeResponse(errResp)
 
 		p.audit.Log(audit.Event{
 			EventType: audit.EventToolDenied,

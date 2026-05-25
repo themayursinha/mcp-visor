@@ -86,7 +86,7 @@ func startVisorWithChainPolicy(t *testing.T, mockServer string) (*exec.Cmd, *buf
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start visor: %v", err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill() })
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	w := bufio.NewWriter(stdin)
 	r := bufio.NewReader(stdout)
@@ -108,11 +108,11 @@ func startVisorWithChainPolicy(t *testing.T, mockServer string) (*exec.Cmd, *buf
 			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
-	sendMessage(w, initMsg)
-	readMessage(r)
+	_ = sendMessage(w, initMsg)
+	_, _ = readMessage(r)
 
 	initDone := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
-	sendMessage(w, initDone)
+	_ = sendMessage(w, initDone)
 
 	return cmd, w, r
 }
@@ -261,7 +261,7 @@ func TestChainDetectionAuditEvent(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start visor: %v", err)
 	}
-	defer cmd.Process.Kill()
+	defer func() { _ = cmd.Process.Kill() }()
 
 	go func() {
 		scanner := bufio.NewScanner(stderrPipe)
@@ -327,7 +327,7 @@ func TestChainDetectionAuditEvent(t *testing.T) {
 
 	stdin.Close()
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 	time.Sleep(100 * time.Millisecond)
 
