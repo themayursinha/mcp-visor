@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 )
@@ -115,6 +116,13 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 
 	if len(pol.Identities) > 0 && e.clientID != "" {
 		decision := e.evaluateIdentity(serverName, req.Name, pol)
+		if decision.Action != ActionAllow {
+			return decision
+		}
+	}
+
+	if len(pol.TimeRestrictions) > 0 {
+		decision := e.evaluateTimeRestriction(serverName, req.Name, pol)
 		if decision.Action != ActionAllow {
 			return decision
 		}
@@ -332,6 +340,98 @@ func (e *Engine) findIdentity(pol *Policy) *Identity {
 		}
 	}
 	return nil
+}
+
+func (e *Engine) evaluateTimeRestriction(serverName, toolName string, pol *Policy) Decision {
+	now := time.Now()
+
+	for _, tr := range pol.TimeRestrictions {
+		if !matchesServerOrTool(tr.Servers, serverName) {
+			continue
+		}
+		if !matchesAnyTool(tr.Tools, toolName) {
+			continue
+		}
+
+		if len(tr.DeniedDays) > 0 {
+			currentDay := strings.ToLower(now.Weekday().String())
+			for _, d := range tr.DeniedDays {
+				if strings.ToLower(d) == currentDay {
+					return Decision{
+						Action: tr.OutsideAction,
+						Reason: fmt.Sprintf("time restriction '%s': current day %s is denied", tr.Name, currentDay),
+					}
+				}
+			}
+		}
+
+		if len(tr.AllowedHours) > 0 {
+			inWindow := false
+			for _, tw := range tr.AllowedHours {
+				loc := time.Local
+				if tw.Timezone != "" {
+					if l, err := time.LoadLocation(tw.Timezone); err == nil {
+						loc = l
+					}
+				}
+				tNow := now.In(loc)
+				currentDay := strings.ToLower(tNow.Weekday().String())
+
+				dayOK := len(tw.Days) == 0
+				for _, d := range tw.Days {
+					if strings.ToLower(d) == currentDay {
+						dayOK = true
+						break
+					}
+				}
+				if !dayOK {
+					continue
+				}
+
+				start, err := time.ParseInLocation("15:04", tw.Start, loc)
+				if err != nil {
+					continue
+				}
+				end, err := time.ParseInLocation("15:04", tw.End, loc)
+				if err != nil {
+					continue
+				}
+				startTime := time.Date(tNow.Year(), tNow.Month(), tNow.Day(), start.Hour(), start.Minute(), 0, 0, loc)
+				endTime := time.Date(tNow.Year(), tNow.Month(), tNow.Day(), end.Hour(), end.Minute(), 0, 0, loc)
+
+				if tNow.After(startTime) && tNow.Before(endTime) {
+					inWindow = true
+					break
+				}
+			}
+			if !inWindow {
+				return Decision{
+					Action: tr.OutsideAction,
+					Reason: fmt.Sprintf("time restriction '%s': outside allowed hours", tr.Name),
+				}
+			}
+		}
+	}
+
+	return Decision{Action: ActionAllow, Reason: "within allowed time"}
+}
+
+func matchesServerOrTool(servers []string, serverName string) bool {
+	for _, s := range servers {
+		if s == serverName {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesAnyTool(tools []string, toolName string) bool {
+	for _, t := range tools {
+		if matched, _ := regexp.MatchString("(?i)^"+strings.ReplaceAll(regexp.QuoteMeta(t), `\*`, ".*")+"$", toolName); matched {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) inferRisk(toolName string) RiskLevel {

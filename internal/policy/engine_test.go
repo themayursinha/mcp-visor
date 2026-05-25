@@ -2,7 +2,10 @@ package policy_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -720,5 +723,207 @@ servers:
 	decision := eng.Evaluate("filesystem", req)
 	if decision.Action != policy.ActionAllow {
 		t.Errorf("no identities configured should allow all, got %s", decision.Action)
+	}
+}
+
+func TestTimeRestrictionDeniedDays(t *testing.T) {
+	currentDay := time.Now().Weekday().String()
+
+	yaml := fmt.Sprintf(`
+version: "1.0"
+default_action: deny
+servers:
+  - name: "shell"
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+time_restrictions:
+  - name: "no_shell_today"
+    servers: ["shell"]
+    tools: ["shell_exec"]
+    denied_days: ["%s"]
+    outside_action: deny
+`, strings.ToLower(currentDay))
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+
+	req := mcp.ToolsCallRequest{
+		Name:      "shell_exec",
+		Arguments: json.RawMessage(`{"command": "ls"}`),
+	}
+	decision := eng.Evaluate("shell", req)
+	if decision.Action != policy.ActionDeny {
+		t.Errorf("shell_exec on denied day should be denied, got %s", decision.Action)
+	}
+}
+
+func TestTimeRestrictionAllowedDay(t *testing.T) {
+	currentDay := time.Now().Weekday().String()
+
+	deniedDays := []string{}
+	for _, d := range []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"} {
+		if d != strings.ToLower(currentDay) {
+			deniedDays = append(deniedDays, d)
+		}
+	}
+	deniedStr := ""
+	for _, d := range deniedDays {
+		deniedStr += fmt.Sprintf(`      - "%s"`+"\n", d)
+	}
+
+	yaml := fmt.Sprintf(`
+version: "1.0"
+default_action: deny
+servers:
+  - name: "shell"
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+time_restrictions:
+  - name: "allowed_only_today"
+    servers: ["shell"]
+    tools: ["shell_exec"]
+    denied_days:
+%s
+    outside_action: deny
+`, deniedStr)
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+
+	req := mcp.ToolsCallRequest{
+		Name:      "shell_exec",
+		Arguments: json.RawMessage(`{"command": "ls"}`),
+	}
+	decision := eng.Evaluate("shell", req)
+	if decision.Action != policy.ActionAllow {
+		t.Errorf("shell_exec on allowed day should be allowed, got %s: %s", decision.Action, decision.Reason)
+	}
+}
+
+func TestTimeRestrictionAllowedHoursOutside(t *testing.T) {
+	yaml := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "shell"
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+time_restrictions:
+  - name: "business_hours_only"
+    servers: ["shell"]
+    tools: ["shell_exec"]
+    allowed_hours:
+      - start: "03:00"
+        end: "03:01"
+        timezone: "UTC"
+    outside_action: deny
+`
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+
+	req := mcp.ToolsCallRequest{
+		Name:      "shell_exec",
+		Arguments: json.RawMessage(`{"command": "ls"}`),
+	}
+	decision := eng.Evaluate("shell", req)
+	if decision.Action != policy.ActionDeny {
+		t.Errorf("shell_exec outside 1-minute window should be denied, got %s", decision.Action)
+	}
+}
+
+func TestTimeRestrictionApprovalAction(t *testing.T) {
+	currentDay := time.Now().Weekday().String()
+
+	yaml := fmt.Sprintf(`
+version: "1.0"
+default_action: deny
+servers:
+  - name: "shell"
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+time_restrictions:
+  - name: "shell_weekend_approval"
+    servers: ["shell"]
+    tools: ["shell_exec"]
+    denied_days: ["%s"]
+    outside_action: require_approval
+`, strings.ToLower(currentDay))
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+
+	req := mcp.ToolsCallRequest{
+		Name:      "shell_exec",
+		Arguments: json.RawMessage(`{"command": "ls"}`),
+	}
+	decision := eng.Evaluate("shell", req)
+	if decision.Action != policy.ActionRequireApproval {
+		t.Errorf("shell_exec on denied day should require approval, got %s", decision.Action)
+	}
+}
+
+func TestTimeRestrictionToolWildcard(t *testing.T) {
+	currentDay := time.Now().Weekday().String()
+
+	yaml := fmt.Sprintf(`
+version: "1.0"
+default_action: deny
+servers:
+  - name: "cloud"
+    allowed: true
+    tools:
+      - name: "aws_iam_create_user"
+        allowed: true
+      - name: "aws_iam_attach_policy"
+        allowed: true
+time_restrictions:
+  - name: "no_iam_on_weekend"
+    servers: ["cloud"]
+    tools: ["aws_iam_*"]
+    denied_days: ["%s"]
+    outside_action: deny
+`, strings.ToLower(currentDay))
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+
+	for _, tool := range []string{"aws_iam_create_user", "aws_iam_attach_policy"} {
+		req := mcp.ToolsCallRequest{
+			Name:      tool,
+			Arguments: json.RawMessage(`{}`),
+		}
+		decision := eng.Evaluate("cloud", req)
+		if decision.Action != policy.ActionDeny {
+			t.Errorf("%s on denied day should be denied with wildcard, got %s", tool, decision.Action)
+		}
 	}
 }
