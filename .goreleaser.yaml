@@ -31,11 +31,6 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-sboms:
-  - artifacts: archive
-    documents:
-      - "${artifact}.spdx.json"
-
 snapshot:
   name_template: "{{ incpatch .Version }}-next"
 
