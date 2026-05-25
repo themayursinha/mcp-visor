@@ -9,8 +9,6 @@ import (
 type ArgValidator struct {
 	compiledDenyPatterns  []*compiledPattern
 	compiledAllowPatterns []*compiledPattern
-	compiledDenyRegex     []*regexp.Regexp
-	compiledAllowRegex    []*regexp.Regexp
 }
 
 type compiledPattern struct {

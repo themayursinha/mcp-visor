@@ -122,7 +122,7 @@ func TestProxyIntegrationHandshake(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start visor: %v", err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	w := bufio.NewWriter(stdin)
 	r := bufio.NewReader(stdout)
@@ -198,7 +198,7 @@ func TestProxyIntegrationToolsCall(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start visor: %v", err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	w := bufio.NewWriter(stdin)
 	r := bufio.NewReader(stdout)
@@ -268,7 +268,7 @@ func TestProxyIntegrationPing(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start visor: %v", err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	w := bufio.NewWriter(stdin)
 	r := bufio.NewReader(stdout)
@@ -326,7 +326,7 @@ func TestProxyIntegrationToolsList(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start visor: %v", err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	w := bufio.NewWriter(stdin)
 	r := bufio.NewReader(stdout)
