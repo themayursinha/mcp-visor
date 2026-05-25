@@ -35,6 +35,7 @@ func main() {
 	policyPath := serveCmd.String("policy", "", "Path to policy YAML file")
 	auditPath := serveCmd.String("audit-log", "", "Path to JSONL audit log file (default: stderr)")
 	approvalDir := serveCmd.String("approval-dir", "", "Directory for file-based approval workflow")
+	approvalCLI := serveCmd.Bool("approval-cli", false, "Use interactive CLI prompt for approval (stdin/stderr)")
 	demoMode := serveCmd.Bool("demo", false, "Start in demo mode with built-in mock server and permissive policy")
 
 	if len(os.Args) < 2 {
@@ -99,6 +100,7 @@ func main() {
 			Engine:        eng,
 			AuditLogPath:  *auditPath,
 			ApprovalDir:   *approvalDir,
+			ApprovalCLI:   *approvalCLI,
 		})
 
 		if err := p.Run(ctx); err != nil {
