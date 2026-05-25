@@ -28,6 +28,7 @@ func main() {
 
 	serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
 	serverCmd := serveCmd.String("server", "", "MCP server command to proxy")
+	serverName := serveCmd.String("server-name", "", "Logical server name used for policy matching (defaults to command path)")
 	serverArgs := &stringSlice{}
 	serveCmd.Var(serverArgs, "server-arg", "Argument for the MCP server command (repeatable)")
 	sessionID := serveCmd.String("session-id", "", "Session identifier")
@@ -93,6 +94,7 @@ func main() {
 
 		p := proxy.New(proxy.Config{
 			ServerCommand: *serverCmd,
+			ServerName:    *serverName,
 			ServerArgs:    *serverArgs,
 			ClientID:      *clientID,
 			SessionID:     *sessionID,
