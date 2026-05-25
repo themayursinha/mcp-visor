@@ -237,3 +237,33 @@ func TestApprovalRequestFileContainsContext(t *testing.T) {
 	}
 	t.Logf("request file:\n%s", content)
 }
+
+func TestCLIApprovalEngineEnabled(t *testing.T) {
+	eng := approval.NewCLIEngine(30 * time.Second)
+	if !eng.IsEnabled() {
+		t.Error("CLI engine should be enabled")
+	}
+}
+
+func TestCLIApprovalEngineTimeout(t *testing.T) {
+	eng := approval.NewCLIEngine(500 * time.Millisecond)
+
+	req := approval.Request{
+		ID:        "test-cli-timeout",
+		Tool:      "shell_exec",
+		Server:    "shell",
+		Reason:    "dangerous command",
+		RiskLevel: "critical",
+		SessionID: "sess-1",
+		AgentID:   "agent-1",
+	}
+
+	approved, err := eng.RequestApproval(req)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if approved {
+		t.Error("expected denied on timeout")
+	}
+	t.Logf("timeout error: %v", err)
+}

@@ -1,11 +1,13 @@
 package approval
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -23,6 +25,7 @@ type Request struct {
 type Engine struct {
 	dir     string
 	timeout time.Duration
+	cli     bool
 }
 
 func NewEngine(dir string, timeout time.Duration) (*Engine, error) {
@@ -39,6 +42,10 @@ func NewEngine(dir string, timeout time.Duration) (*Engine, error) {
 	return &Engine{dir: abs, timeout: timeout}, nil
 }
 
+func NewCLIEngine(timeout time.Duration) *Engine {
+	return &Engine{cli: true, timeout: timeout}
+}
+
 func MustEngine(dir string, timeout time.Duration) *Engine {
 	eng, err := NewEngine(dir, timeout)
 	if err != nil {
@@ -49,10 +56,14 @@ func MustEngine(dir string, timeout time.Duration) *Engine {
 }
 
 func (e *Engine) IsEnabled() bool {
-	return e.dir != ""
+	return e.dir != "" || e.cli
 }
 
 func (e *Engine) RequestApproval(req Request) (bool, error) {
+	if e.cli {
+		return e.requestCLIApproval(req)
+	}
+
 	if !e.IsEnabled() {
 		return true, nil
 	}
@@ -65,6 +76,55 @@ func (e *Engine) RequestApproval(req Request) (bool, error) {
 	defer cancel()
 
 	return e.waitForDecision(ctx, req.ID)
+}
+
+func (e *Engine) requestCLIApproval(req Request) (bool, error) {
+	fmt.Fprintf(os.Stderr, "\n========================================\n")
+	fmt.Fprintf(os.Stderr, " APPROVAL REQUIRED\n")
+	fmt.Fprintf(os.Stderr, "========================================\n")
+	fmt.Fprintf(os.Stderr, " Tool:      %s\n", req.Tool)
+	fmt.Fprintf(os.Stderr, " Server:    %s\n", req.Server)
+	fmt.Fprintf(os.Stderr, " Risk:      %s\n", req.RiskLevel)
+	fmt.Fprintf(os.Stderr, " Reason:    %s\n", req.Reason)
+	fmt.Fprintf(os.Stderr, " Agent:     %s\n", req.AgentID)
+	fmt.Fprintf(os.Stderr, " Session:   %s\n", req.SessionID)
+	if len(req.Arguments) > 0 {
+		fmt.Fprintf(os.Stderr, " Arguments:\n")
+		for k, v := range req.Arguments {
+			fmt.Fprintf(os.Stderr, "   %s: %v\n", k, v)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "========================================\n")
+	fmt.Fprintf(os.Stderr, " Timeout in %v. Type 'yes' to approve, anything else to deny.\n", e.timeout)
+	fmt.Fprintf(os.Stderr, "> ")
+
+	done := make(chan bool, 1)
+	errCh := make(chan error, 1)
+
+	go func() {
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- strings.TrimSpace(strings.ToLower(input)) == "yes"
+	}()
+
+	select {
+	case <-time.After(e.timeout):
+		fmt.Fprintf(os.Stderr, "\nApproval timed out. Denied.\n")
+		return false, fmt.Errorf("approval timed out after %v", e.timeout)
+	case err := <-errCh:
+		return false, fmt.Errorf("read input: %w", err)
+	case approved := <-done:
+		if approved {
+			fmt.Fprintf(os.Stderr, "Approved.\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "Denied.\n")
+		}
+		return approved, nil
+	}
 }
 
 func (e *Engine) writeRequest(req Request) error {

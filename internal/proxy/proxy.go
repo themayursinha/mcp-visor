@@ -37,6 +37,7 @@ type Config struct {
 	Engine        *policy.Engine
 	AuditLogPath  string
 	ApprovalDir   string
+	ApprovalCLI   bool
 }
 
 func New(cfg Config) *Proxy {
@@ -60,7 +61,12 @@ func New(cfg Config) *Proxy {
 	}
 	eng.SetClientID(cfg.ClientID)
 	red := redaction.NewEngine(p.Redaction)
-	appr := approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
+	var appr *approval.Engine
+	if cfg.ApprovalCLI {
+		appr = approval.NewCLIEngine(time.Duration(p.Settings.ApprovalTimeoutSecs) * time.Second)
+	} else {
+		appr = approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
+	}
 
 	return &Proxy{
 		cfg:      cfg,
