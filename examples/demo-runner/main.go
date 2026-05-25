@@ -84,7 +84,7 @@ redaction:
     - "**/*.key"
     - "**/.ssh/**"
 `, serverName)
-	os.WriteFile(path, []byte(policy), 0644)
+	_ = os.WriteFile(path, []byte(policy), 0644)
 }
 
 func main() {
@@ -122,8 +122,8 @@ func main() {
 	defer os.Remove(auditLog)
 
 	approvalDir := filepath.Join(os.TempDir(), fmt.Sprintf("visor-approvals-%d", os.Getpid()))
-	os.MkdirAll(approvalDir, 0700)
-	defer os.RemoveAll(approvalDir)
+	_ = os.MkdirAll(approvalDir, 0700)
+	defer func() { _ = os.RemoveAll(approvalDir) }()
 
 	fmt.Println("[start] launching mcp-visor proxy...")
 	visorCmd := exec.Command(visorBin, "serve",
@@ -140,7 +140,7 @@ func main() {
 		fmt.Printf("  failed to start visor: %v\n", err)
 		os.Exit(1)
 	}
-	defer visorCmd.Process.Kill()
+	defer func() { _ = visorCmd.Process.Kill() }()
 
 	w := bufio.NewWriter(stdin)
 	r := bufio.NewReader(stdout)
@@ -289,7 +289,7 @@ func demoApprovalGranted(ctx *mcpContext, approvalDir string) {
 				fmt.Printf("   [approval] request file: %s\n", entry.Name())
 				fmt.Println("   [approval] operator approves...")
 				okPath := filepath.Join(approvalDir, fmt.Sprintf("req-%s.ok", id))
-				os.WriteFile(okPath, []byte{}, 0600)
+				_ = os.WriteFile(okPath, []byte{}, 0600)
 				fmt.Println("   ✓ approved")
 				return
 			}
@@ -353,8 +353,8 @@ type mcpContext struct {
 
 func (c *mcpContext) send(msg map[string]any) {
 	data, _ := json.Marshal(msg)
-	c.w.Write(append(data, '\n'))
-	c.w.Flush()
+	_, _ = c.w.Write(append(data, '\n'))
+	_ = c.w.Flush()
 }
 
 func (c *mcpContext) recv() map[string]any {

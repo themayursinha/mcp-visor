@@ -123,7 +123,7 @@ func setupDemo() (serverPath, policyPath string) {
 		os.Exit(1)
 	}
 	serverPath = mockBin.Name()
-	mockBin.Close()
+	_ = mockBin.Close()
 
 	buildCmd := exec.Command("go", "build", "-o", serverPath,
 		"github.com/themayursinha/mcp-visor/examples/demo-mcp-server")
@@ -189,7 +189,7 @@ redaction:
 		fmt.Fprintf(os.Stderr, "mcp-visor: failed to write demo policy: %v\n", err)
 		os.Exit(1)
 	}
-	policyFile.Close()
+	_ = policyFile.Close()
 
 	fmt.Fprintf(os.Stderr, "Demo mode: built mock server and policy\n")
 	return serverPath, policyPath

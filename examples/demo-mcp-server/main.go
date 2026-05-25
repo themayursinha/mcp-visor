@@ -110,7 +110,7 @@ func main() {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments,omitempty"`
 			}
-			json.Unmarshal(req.Params, &params)
+			_ = json.Unmarshal(req.Params, &params)
 
 			response = mustMarshal(map[string]any{
 				"jsonrpc": "2.0",
