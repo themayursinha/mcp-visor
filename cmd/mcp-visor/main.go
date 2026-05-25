@@ -75,6 +75,18 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Using default-deny policy\n")
 		}
 
+		var eng *policy.Engine
+		if *policyPath != "" {
+			watcher, err := policy.NewWatcher(*policyPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "mcp-visor: policy hot-reload unavailable: %v (using static policy)\n", err)
+				eng = policy.NewEngine(pol)
+			} else {
+				eng = policy.NewEngineWithWatcher(watcher)
+				fmt.Fprintf(os.Stderr, "Policy hot-reload enabled: %s\n", *policyPath)
+			}
+		}
+
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
@@ -84,6 +96,7 @@ func main() {
 			ClientID:      *clientID,
 			SessionID:     *sessionID,
 			Policy:        pol,
+			Engine:        eng,
 			AuditLogPath:  *auditPath,
 			ApprovalDir:   *approvalDir,
 		})

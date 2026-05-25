@@ -8,14 +8,18 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 )
 
 type Engine struct {
+	mu       sync.RWMutex
 	policy   *Policy
 	registry *Registry
 	logger   *slog.Logger
+
+	watcher *Watcher
 }
 
 func NewEngine(p *Policy) *Engine {
@@ -31,20 +35,53 @@ func NewEngine(p *Policy) *Engine {
 	}
 }
 
+func NewEngineWithWatcher(w *Watcher) *Engine {
+	pol, reg := w.Current()
+	return &Engine{
+		policy:   pol,
+		registry: reg,
+		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})),
+		watcher: w,
+	}
+}
+
+func (e *Engine) Reload(p *Policy) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.policy = p
+	e.registry = NewRegistry(p)
+}
+
+func (e *Engine) Close() {
+	if e.watcher != nil {
+		e.watcher.Close()
+	}
+}
+
+func (e *Engine) current() (policy *Policy, registry *Registry) {
+	if e.watcher != nil {
+		return e.watcher.Current()
+	}
+	return e.policy, e.registry
+}
+
 func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision {
-	tool, known := e.registry.Tool(serverName, req.Name)
-	srv, srvKnown := e.registry.Server(serverName)
+	pol, reg := e.current()
+	tool, known := reg.Tool(serverName, req.Name)
+	srv, srvKnown := reg.Server(serverName)
 
 	if !srvKnown {
 		e.logger.Warn("unknown server", "server", serverName, "tool", req.Name)
-		if e.policy.DefaultAction == ActionDeny {
+		if pol.DefaultAction == ActionDeny {
 			return Decision{Action: ActionDeny, Reason: fmt.Sprintf("server '%s' is not registered", serverName)}
 		}
 	}
 
 	if !known {
 		e.logger.Warn("unknown tool", "server", serverName, "tool", req.Name)
-		if e.policy.DefaultAction == ActionDeny {
+		if pol.DefaultAction == ActionDeny {
 			return Decision{Action: ActionDeny, Reason: fmt.Sprintf("tool '%s' from server '%s' is not registered", req.Name, serverName)}
 		}
 	}
@@ -57,7 +94,7 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("tool '%s' is explicitly denied", req.Name)}
 	}
 
-	if !known && !srvKnown && e.policy.DefaultAction == ActionDeny {
+	if !known && !srvKnown && pol.DefaultAction == ActionDeny {
 		return Decision{Action: ActionDeny, Reason: "unknown tool/server; default-deny policy"}
 	}
 
@@ -75,7 +112,8 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 }
 
 func (e *Engine) EvaluateChain(serverName string, req mcp.ToolsCallRequest, previousCalls []string) Decision {
-	for _, chain := range e.policy.ToolChains {
+	pol, _ := e.current()
+	for _, chain := range pol.ToolChains {
 		if chain.WithinCalls > 0 && len(previousCalls) > chain.WithinCalls {
 			previousCalls = previousCalls[len(previousCalls)-chain.WithinCalls:]
 		}
@@ -98,7 +136,8 @@ func (e *Engine) EvaluateChain(serverName string, req mcp.ToolsCallRequest, prev
 }
 
 func (e *Engine) EvaluateApproval(serverName string, req mcp.ToolsCallRequest) bool {
-	tool, known := e.registry.Tool(serverName, req.Name)
+	_, reg := e.current()
+	tool, known := reg.Tool(serverName, req.Name)
 	if !known {
 		return false
 	}
@@ -106,7 +145,8 @@ func (e *Engine) EvaluateApproval(serverName string, req mcp.ToolsCallRequest) b
 }
 
 func (e *Engine) GetRiskLevel(serverName, toolName string) RiskLevel {
-	tool, known := e.registry.Tool(serverName, toolName)
+	_, reg := e.current()
+	tool, known := reg.Tool(serverName, toolName)
 	if known && tool.Risk != "" {
 		return tool.Risk
 	}
@@ -269,11 +309,13 @@ func (e *Engine) inferRisk(toolName string) RiskLevel {
 }
 
 func (e *Engine) Registry() *Registry {
-	return e.registry
+	_, reg := e.current()
+	return reg
 }
 
 func (e *Engine) Policy() *Policy {
-	return e.policy
+	pol, _ := e.current()
+	return pol
 }
 
 func extractArgs(raw json.RawMessage) map[string]any {

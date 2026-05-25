@@ -34,6 +34,7 @@ type Config struct {
 	ClientID      string
 	SessionID     string
 	Policy        *policy.Policy
+	Engine        *policy.Engine
 	AuditLogPath  string
 	ApprovalDir   string
 }
@@ -53,7 +54,10 @@ func New(cfg Config) *Proxy {
 	al := audit.MustLogger(cfg.AuditLogPath)
 	al.SetRedactionPatterns(p.Redaction.Patterns)
 
-	eng := policy.NewEngine(p)
+	eng := cfg.Engine
+	if eng == nil {
+		eng = policy.NewEngine(p)
+	}
 	red := redaction.NewEngine(p.Redaction)
 	appr := approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
 
@@ -99,6 +103,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 			Message:   "session ended",
 		})
 		p.audit.Close()
+		p.engine.Close()
 	}()
 	p.logger.Info("mcp server started", "command", p.cfg.ServerCommand)
 
