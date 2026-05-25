@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.0 (unreleased)
+## v1.0.0 (2026-05-25)
 
 ### Core
 
@@ -15,6 +15,7 @@
 - Tool allowlist/denylist with default-deny posture
 - Risk classification (critical/high/medium/low) via policy or inference
 - Approval requirement detection
+- Policy hot-reload via fsnotify with 2-second debounce and atomic swaps
 
 ### Chain Detection
 
@@ -52,11 +53,21 @@
 - Interactive demo runner (`examples/demo-runner/`)
 - Mock MCP server (`examples/demo-mcp-server/`)
 - Example policies and malicious prompt scenarios
-- Makefile with build, test, vet, demo, fmt, clean targets
+- Makefile with build, test, vet, demo, fmt, clean, coverage targets
+
+### Documentation
+
+- Comprehensive README with architecture diagram, quickstart, and feature overview
+- Architecture documentation with component diagrams and decision pipeline
+- Policy model reference with full YAML schema documentation
+- STRIDE threat model with attack scenarios and hardening guide
+- Comparison guide with mcp-llm-security-evaluator
+- Contributing guide, security policy, and CHANGELOG
 
 ### Infrastructure
 
 - GitHub Actions CI: build, test, vet, golangci-lint, gosec, govulncheck
-- GoReleaser for cross-platform binary releases
-- Multi-stage Docker image (Alpine, ~5 MB)
-- 68 tests covering all components
+- GoReleaser for cross-platform binary releases (linux/darwin, amd64/arm64)
+- Multi-stage Docker image (Alpine, ~5 MB) pushed to ghcr.io
+- Pre-commit hook for go vet + govulncheck + go mod tidy
+- 74 tests covering all components
