@@ -311,6 +311,15 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 	decision := p.engine.Evaluate(serverName, callReq)
 	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
 
+	if decision.Action != policy.ActionDeny {
+		chainResult := p.checkChain(serverName, callReq, redactedArgs, risk)
+		if chainResult == "denied" {
+			errResp := mcp.NewErrorResponse(req.ID, -32000, "chain rule: tool sequence matches dangerous pattern")
+			client.EncodeResponse(errResp)
+			return raw, "denied"
+		}
+	}
+
 	switch decision.Action {
 	case policy.ActionDeny:
 		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
@@ -394,66 +403,67 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		return raw, "forward"
 
 	case policy.ActionAllow:
-		windowSize := p.engine.Policy().Settings.ChainWindowSize
-		if windowSize == 0 {
-			windowSize = 10
-		}
-		previousCalls := p.session.RecentCallChain(windowSize)
-		chainDecision := p.engine.EvaluateChain(serverName, callReq, previousCalls)
-
-		if chainDecision.Action == policy.ActionDeny {
-			errResp := mcp.NewErrorResponse(req.ID, -32000, chainDecision.Reason)
-			client.EncodeResponse(errResp)
-
-			p.audit.Log(audit.Event{
-				EventType:    audit.EventToolChainDetected,
-				SessionID:    p.session.ID,
-				AgentID:      p.cfg.ClientID,
-				Server:       serverName,
-				Tool:         callReq.Name,
-				Arguments:    redactedArgs,
-				Decision:     string(chainDecision.Action),
-				Reason:       chainDecision.Reason,
-				RiskLevel:    string(risk),
-				ChainContext: previousCalls,
-			})
-
-			p.logger.Warn("chain denied",
-				"tool", callReq.Name,
-				"reason", chainDecision.Reason,
-				"previous_calls", previousCalls,
-				"session", p.session.ID,
-			)
-			return raw, "denied"
-		}
-
-		if chainDecision.Action == policy.ActionRequireApproval {
-			p.audit.Log(audit.Event{
-				EventType:    audit.EventToolChainDetected,
-				SessionID:    p.session.ID,
-				AgentID:      p.cfg.ClientID,
-				Server:       serverName,
-				Tool:         callReq.Name,
-				Arguments:    redactedArgs,
-				Decision:     string(chainDecision.Action),
-				Reason:       chainDecision.Reason,
-				RiskLevel:    string(risk),
-				ChainContext: previousCalls,
-			})
-
-			p.logger.Warn("chain requires approval",
-				"tool", callReq.Name,
-				"reason", chainDecision.Reason,
-				"previous_calls", previousCalls,
-				"session", p.session.ID,
-			)
-		}
-
 		return raw, "forward"
 
 	default:
 		return raw, "forward"
 	}
+}
+
+func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, risk policy.RiskLevel) string {
+	windowSize := p.engine.Policy().Settings.ChainWindowSize
+	if windowSize == 0 {
+		windowSize = 10
+	}
+	previousCalls := p.session.RecentCallChain(windowSize)
+	chainDecision := p.engine.EvaluateChain(serverName, callReq, previousCalls)
+
+	if chainDecision.Action == policy.ActionDeny {
+		p.audit.Log(audit.Event{
+			EventType:    audit.EventToolChainDetected,
+			SessionID:    p.session.ID,
+			AgentID:      p.cfg.ClientID,
+			Server:       serverName,
+			Tool:         callReq.Name,
+			Arguments:    redactedArgs,
+			Decision:     string(chainDecision.Action),
+			Reason:       chainDecision.Reason,
+			RiskLevel:    string(risk),
+			ChainContext: previousCalls,
+		})
+
+		p.logger.Warn("chain denied",
+			"tool", callReq.Name,
+			"reason", chainDecision.Reason,
+			"previous_calls", previousCalls,
+			"session", p.session.ID,
+		)
+		return "denied"
+	}
+
+	if chainDecision.Action == policy.ActionRequireApproval {
+		p.audit.Log(audit.Event{
+			EventType:    audit.EventToolChainDetected,
+			SessionID:    p.session.ID,
+			AgentID:      p.cfg.ClientID,
+			Server:       serverName,
+			Tool:         callReq.Name,
+			Arguments:    redactedArgs,
+			Decision:     string(chainDecision.Action),
+			Reason:       chainDecision.Reason,
+			RiskLevel:    string(risk),
+			ChainContext: previousCalls,
+		})
+
+		p.logger.Warn("chain requires approval",
+			"tool", callReq.Name,
+			"reason", chainDecision.Reason,
+			"previous_calls", previousCalls,
+			"session", p.session.ID,
+		)
+	}
+
+	return "ok"
 }
 
 func (p *Proxy) relayServerToClient(ctx context.Context, server, client *mcp.Parser) error {

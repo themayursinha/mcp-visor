@@ -1,0 +1,84 @@
+version: "1.0"
+description: "Demo policy - allows the demo MCP server tools with various security controls"
+default_action: deny
+
+settings:
+  session_max_tools: 200
+  chain_window_size: 5
+  approval_timeout_seconds: 10
+  log_level: info
+
+servers:
+  - name: "demo-mcp-server"
+    transport: stdio
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        rules:
+          - type: deny_path
+            patterns:
+              - "/etc/passwd"
+              - "/etc/shadow"
+              - "**/.env"
+              - "**/.env.*"
+              - "**/credentials*"
+              - "**/*.pem"
+              - "**/*.key"
+              - "**/.ssh/**"
+          - type: allow_path
+            patterns:
+              - "/home/**"
+              - "/tmp/**"
+              - "/var/log/**"
+
+      - name: "http_post"
+        allowed: true
+        risk: high
+        approval_required: true
+
+      - name: "shell_exec"
+        allowed: true
+        risk: critical
+        approval_required: true
+        rules:
+          - type: deny_command_pattern
+            patterns:
+              - "rm\\s+-rf\\s+/"
+              - "curl.*\\|.*(bash|sh)"
+              - "bash\\s+-i\\s+>&"
+              - ">\\s*/dev/sda"
+              - "dd\\s+if="
+          - type: deny_command_keyword
+            keywords:
+              - "reverse shell"
+              - "backdoor"
+
+      - name: "slack_send_message"
+        allowed: true
+        risk: high
+        approval_required: true
+
+tool_chains:
+  - name: "prevent_data_exfiltration"
+    description: "Block read operations followed by external sends"
+    sources:
+      - server: "*"
+        tool_pattern: "file_read"
+    sinks:
+      - server: "*"
+        tool_pattern: "(http_post|slack_send_message)"
+    action: deny
+    within_calls: 3
+
+redaction:
+  output_redaction: true
+  sensitive_files:
+    - "**/.env"
+    - "**/.env.*"
+    - "**/credentials"
+    - "**/secrets"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.ssh/**"
