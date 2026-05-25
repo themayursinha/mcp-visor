@@ -123,7 +123,7 @@ func TestApprovalRequestFileCreated(t *testing.T) {
 	go func() {
 		time.Sleep(300 * time.Millisecond)
 		okPath := filepath.Join(dir, "req-test-file.ok")
-		os.WriteFile(okPath, []byte{}, 0o600)
+		_ = os.WriteFile(okPath, []byte{}, 0o600)
 	}()
 
 	approved, err := eng.RequestApproval(req)
@@ -152,7 +152,7 @@ func TestApprovalFilesCleanedUp(t *testing.T) {
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		okPath := filepath.Join(dir, "req-cleanup-test.ok")
-		os.WriteFile(okPath, []byte{}, 0o600)
+		_ = os.WriteFile(okPath, []byte{}, 0o600)
 	}()
 
 	_, err = eng.RequestApproval(req)
@@ -215,7 +215,7 @@ func TestApprovalRequestFileContainsContext(t *testing.T) {
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		okPath := filepath.Join(dir, "req-ctx-001.ok")
-		os.WriteFile(okPath, []byte{}, 0o600)
+		_ = os.WriteFile(okPath, []byte{}, 0o600)
 		time.Sleep(50 * time.Millisecond)
 		close(done)
 	}()
