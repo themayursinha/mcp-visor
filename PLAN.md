@@ -2,22 +2,8 @@
 
 > Runtime Policy Enforcement and Audit Control Plane for MCP Tool Execution
 
-**Status**: MVP Complete (Phases 0-7 done, Phase 8 in progress)  
-**Last Updated**: 2026-05-25
-
-## MVP Completion Status
-
-| Phase | Description | Status | Commit |
-|-------|-------------|--------|--------|
-| 0 | Research and design | [x] Done | — |
-| 1 | Basic MCP proxy | [x] Done | `f523b10` |
-| 2 | Policy engine | [x] Done | `e98e7ca` |
-| 3 | Audit logging | [x] Done | `f87ca34` |
-| 4 | Chain detection | [x] Done | `3d11ce7` |
-| 5 | Redaction engine | [x] Done | `8e8ab9e` |
-| 6 | Approval workflow | [x] Done | `8284828` |
-| 7 | Demo environment | [x] Done | `c293dca` |
-| 8 | Hardening, documentation, release | [ ] In progress | — |  
+**Status**: v1.0.0 Released (all 8 phases complete). v1.1 in progress.  
+**Last Updated**: 2026-05-25  
 **Version**: 1.0  
 **Author**: Security Architecture Working Draft
 
@@ -1641,9 +1627,33 @@ mcp-visor/
 | Phase 5: Redaction Engine | 2 weeks | 11-15 weeks | [x] |
 | Phase 6: Approval Workflow | 2-3 weeks | 13-18 weeks | [x] |
 | Phase 7: Demo Environment | 1-2 weeks | 14-20 weeks | [x] |
-| Phase 8: Hardening + Release | 2-3 weeks | 16-23 weeks | [ ] |
+| Phase 8: Hardening + Release | 2-3 weeks | 16-23 weeks | [x] |
+| Phase 9: Enforcement Gaps (v1.1) | 1-2 weeks | 17-25 weeks | [ ] |
 
 **Total estimated: 4-6 months** for a solo developer working part-time. A full-time developer could complete in 2-3 months.
+
+---
+
+### Phase 9: Policy Enforcement Gaps (v1.1) — [ ] In Progress
+
+**Goal:** Close enforcement gaps where policy types exist but runtime checks are missing.
+
+**Deliverables:**
+
+- [ ] **Identity-based policy enforcement.** `identities` types exist in `policy/types.go` but are not checked during `engine.Evaluate()`. Match `--client-id` against identity allowlists, deny tools/servers not in the identity's scope.
+- [ ] **Time-based restriction enforcement.** `time_restrictions` types exist in `policy/types.go` but are not checked. Evaluate current time against configured windows and days, apply `outside_action` (deny/require_approval).
+- [ ] **Missing example policies.** Create `full-approval.yaml`, `per-identity.yaml`, `business-hours.yaml`, `source-repo-policy.yaml` to match the 6 policy types described in section 3 #13.
+- [ ] **CLI interactive approval backend.** `approval_required` tools prompt on stdout/stdin for interactive yes/no approval (currently only file-based backend exists).
+
+### Phase 10: v2 Roadmap Items
+
+Items deferred from v1, scheduled for v2:
+
+- [ ] HTTP/SSE transport for remote MCP servers
+- [ ] Webhook-based approval notifications (Slack, Teams)
+- [ ] Cryptographic attestation of audit logs
+- [ ] mTLS for visor-to-server connections
+- [ ] SIEM export (syslog, Splunk, Elastic)
 
 ---
 
@@ -1656,7 +1666,7 @@ mcp-visor/
 | 3 | Build transparent MCP proxy | `feature` `proxy` | P0 | [x] Done |
 | 4 | Define policy YAML schema v1 | `feature` `policy` | P0 | [x] Done |
 | 5 | Implement policy loader with validation | `feature` `policy` | P0 | [x] Done |
-| 6 | Implement policy hot-reload (fsnotify) | `feature` `policy` | P1 | [ ] Phase 8 |
+| 6 | Implement policy hot-reload (fsnotify) | `feature` `policy` | P1 | [x] Done |
 | 7 | Implement tool allowlist and denylist | `feature` `policy` | P0 | [x] Done |
 | 8 | Implement argument validation rules | `feature` `policy` | P0 | [x] Done |
 | 9 | Implement risk classifier | `feature` `policy` | P1 | [x] Done |
@@ -1669,18 +1679,21 @@ mcp-visor/
 | 16 | Implement regex-based redaction engine | `feature` `redaction` | P0 | [x] Done |
 | 17 | Implement output redaction | `feature` `redaction` | P1 | [x] Done |
 | 18 | Implement file-based approval backend | `feature` `approval` | P1 | [x] Done |
-| 19 | Implement CLI interactive approval | `feature` `approval` | P2 | [ ] v2 |
-| 20 | Implement identity-based policies | `feature` `policy` | P2 | [ ] v2 |
-| 21 | Implement time-based restrictions | `feature` `policy` | P2 | [ ] v2 |
+| 19 | Implement CLI interactive approval | `feature` `approval` | P2 | [ ] v1.1 |
+| 20 | Implement identity-based policies | `feature` `policy` | P2 | [ ] v1.1 |
+| 21 | Implement time-based restrictions | `feature` `policy` | P2 | [ ] v1.1 |
 | 22 | Build demo MCP server | `feature` `demo` | P1 | [x] Done |
 | 23 | Create example policy files | `documentation` | P1 | [x] Done |
 | 24 | Write malicious prompt scenario scripts | `documentation` | P2 | [x] Done |
 | 25 | Create demo runner | `feature` `demo` | P1 | [x] Done |
 | 26 | Write comprehensive README | `documentation` | P0 | [x] Done |
-| 27 | Write architecture documentation | `documentation` | P0 | [ ] Phase 8 |
-| 28 | Write threat model document | `documentation` | P0 | [ ] Phase 8 |
-| 29 | Set up CI/CD pipeline | `infrastructure` | P0 | [ ] Phase 8 |
-| 30 | Set up release pipeline (goreleaser) | `infrastructure` | P1 | [ ] Phase 8 |
+| 27 | Write architecture documentation | `documentation` | P0 | [x] Done |
+| 28 | Write threat model document | `documentation` | P0 | [x] Done |
+| 29 | Set up CI/CD pipeline | `infrastructure` | P0 | [x] Done |
+| 30 | Set up release pipeline (goreleaser) | `infrastructure` | P1 | [x] Done |
+| 31 | Write policy model reference | `documentation` | P0 | [x] Done |
+| 32 | Write comparison with evaluator | `documentation` | P0 | [x] Done |
+| 33 | Create missing example policies | `documentation` | P1 | [ ] v1.1 |
 
 ---
 
