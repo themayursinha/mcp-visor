@@ -1,4 +1,4 @@
-.PHONY: build test vet demo clean fmt lint
+.PHONY: build test vet demo clean fmt lint setup-hooks
 
 GOPATH ?= $(shell go env GOPATH)
 GO ?= go
@@ -17,6 +17,9 @@ demo:
 
 fmt:
 	$(GO) fmt ./...
+
+setup-hooks:
+	ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 
 clean:
 	rm -f mcp-visor
