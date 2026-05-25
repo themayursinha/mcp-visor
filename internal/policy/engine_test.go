@@ -530,3 +530,195 @@ func mustMarshal(v any) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
 }
+
+func TestIdentityPolicyEnforcement(t *testing.T) {
+	yaml := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+      - name: "file_write"
+        allowed: true
+        risk: high
+  - name: "github"
+    allowed: true
+    tools:
+      - name: "github_read_code"
+        allowed: true
+        risk: low
+      - name: "github_create_pr"
+        allowed: true
+        risk: medium
+identities:
+  - name: "copilot-dev"
+    description: "Standard developer agent"
+    allowed_servers:
+      - "filesystem"
+      - "github"
+    allowed_tools:
+      - "filesystem/file_read"
+      - "github/github_read_code"
+      - "github/github_create_pr"
+  - name: "readonly-agent"
+    description: "Read-only agent"
+    allowed_servers:
+      - "filesystem"
+    allowed_tools:
+      - "filesystem/file_read"
+`
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+	eng.SetClientID("copilot-dev")
+
+	req := mcp.ToolsCallRequest{
+		Name:      "file_read",
+		Arguments: json.RawMessage(`{"path": "/home/user/file.txt"}`),
+	}
+	decision := eng.Evaluate("filesystem", req)
+	if decision.Action != policy.ActionAllow {
+		t.Errorf("copilot-dev should be allowed file_read, got %s: %s", decision.Action, decision.Reason)
+	}
+
+	req = mcp.ToolsCallRequest{
+		Name:      "github_create_pr",
+		Arguments: json.RawMessage(`{}`),
+	}
+	decision = eng.Evaluate("github", req)
+	if decision.Action != policy.ActionAllow {
+		t.Errorf("copilot-dev should be allowed github_create_pr, got %s: %s", decision.Action, decision.Reason)
+	}
+
+	req = mcp.ToolsCallRequest{
+		Name:      "file_write",
+		Arguments: json.RawMessage(`{"path": "/home/user/file.txt"}`),
+	}
+	decision = eng.Evaluate("filesystem", req)
+	if decision.Action != policy.ActionDeny {
+		t.Errorf("copilot-dev should NOT be allowed file_write, got %s", decision.Action)
+	}
+}
+
+func TestIdentityPolicyNoMatch(t *testing.T) {
+	yaml := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+identities:
+  - name: "copilot-dev"
+    allowed_servers:
+      - "github"
+    allowed_tools:
+      - "github/github_read_code"
+`
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+	eng.SetClientID("unknown-agent")
+
+	req := mcp.ToolsCallRequest{
+		Name:      "file_read",
+		Arguments: json.RawMessage(`{"path": "/home/user/file.txt"}`),
+	}
+	decision := eng.Evaluate("filesystem", req)
+	if decision.Action != policy.ActionDeny {
+		t.Errorf("unknown agent should be denied, got %s", decision.Action)
+	}
+}
+
+func TestIdentityPolicyReadonlyAgent(t *testing.T) {
+	yaml := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+      - name: "file_write"
+        allowed: true
+identities:
+  - name: "readonly-agent"
+    allowed_servers:
+      - "filesystem"
+    allowed_tools:
+      - "filesystem/file_read"
+`
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+	eng.SetClientID("readonly-agent")
+
+	req := mcp.ToolsCallRequest{
+		Name:      "file_read",
+		Arguments: json.RawMessage(`{"path": "/tmp/test.txt"}`),
+	}
+	decision := eng.Evaluate("filesystem", req)
+	if decision.Action != policy.ActionAllow {
+		t.Errorf("readonly-agent should be allowed file_read, got %s", decision.Action)
+	}
+
+	req = mcp.ToolsCallRequest{
+		Name:      "file_write",
+		Arguments: json.RawMessage(`{"path": "/tmp/test.txt"}`),
+	}
+	decision = eng.Evaluate("filesystem", req)
+	if decision.Action != policy.ActionDeny {
+		t.Errorf("readonly-agent should be denied file_write, got %s", decision.Action)
+	}
+}
+
+func TestNoIdentitiesNoRestriction(t *testing.T) {
+	yaml := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+      - name: "file_write"
+        allowed: true
+`
+
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+
+	eng := policy.NewEngine(p)
+	eng.SetClientID("any-agent")
+
+	req := mcp.ToolsCallRequest{
+		Name:      "file_write",
+		Arguments: json.RawMessage(`{"path": "/tmp/test.txt"}`),
+	}
+	decision := eng.Evaluate("filesystem", req)
+	if decision.Action != policy.ActionAllow {
+		t.Errorf("no identities configured should allow all, got %s", decision.Action)
+	}
+}
