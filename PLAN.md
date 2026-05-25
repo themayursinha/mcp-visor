@@ -2,7 +2,7 @@
 
 > Runtime Policy Enforcement and Audit Control Plane for MCP Tool Execution
 
-**Status**: v1.0.0 Released (all 8 phases complete). v1.1 in progress.  
+**Status**: v1.1 complete. All 33 issues done.  
 **Last Updated**: 2026-05-25  
 **Version**: 1.0  
 **Author**: Security Architecture Working Draft
@@ -1628,22 +1628,22 @@ mcp-visor/
 | Phase 6: Approval Workflow | 2-3 weeks | 13-18 weeks | [x] |
 | Phase 7: Demo Environment | 1-2 weeks | 14-20 weeks | [x] |
 | Phase 8: Hardening + Release | 2-3 weeks | 16-23 weeks | [x] |
-| Phase 9: Enforcement Gaps (v1.1) | 1-2 weeks | 17-25 weeks | [ ] |
+| Phase 9: Enforcement Gaps (v1.1) | 1-2 weeks | 17-25 weeks | [x] |
 
 **Total estimated: 4-6 months** for a solo developer working part-time. A full-time developer could complete in 2-3 months.
 
 ---
 
-### Phase 9: Policy Enforcement Gaps (v1.1) — [ ] In Progress
+### Phase 9: Policy Enforcement Gaps (v1.1) — [x] Done
 
 **Goal:** Close enforcement gaps where policy types exist but runtime checks are missing.
 
 **Deliverables:**
 
-- [ ] **Identity-based policy enforcement.** `identities` types exist in `policy/types.go` but are not checked during `engine.Evaluate()`. Match `--client-id` against identity allowlists, deny tools/servers not in the identity's scope.
-- [ ] **Time-based restriction enforcement.** `time_restrictions` types exist in `policy/types.go` but are not checked. Evaluate current time against configured windows and days, apply `outside_action` (deny/require_approval).
-- [ ] **Missing example policies.** Create `full-approval.yaml`, `per-identity.yaml`, `business-hours.yaml`, `source-repo-policy.yaml` to match the 6 policy types described in section 3 #13.
-- [ ] **CLI interactive approval backend.** `approval_required` tools prompt on stdout/stdin for interactive yes/no approval (currently only file-based backend exists).
+- [x] **Identity-based policy enforcement.** Match `--client-id` against identity allowlists in `engine.Evaluate()`. Deny tools/servers not in the identity's scope.
+- [x] **Time-based restriction enforcement.** Evaluate current time against configured windows and denied days. Apply `outside_action` (deny/require_approval).
+- [x] **Missing example policies.** Created `full-approval.yaml`, `per-identity.yaml`, `business-hours.yaml`, `source-repo-policy.yaml`.
+- [x] **CLI interactive approval backend.** `--approval-cli` flag enables interactive yes/no approval prompt on stderr/stdin.
 
 ### Phase 10: v2 Roadmap Items
 
@@ -1679,9 +1679,9 @@ Items deferred from v1, scheduled for v2:
 | 16 | Implement regex-based redaction engine | `feature` `redaction` | P0 | [x] Done |
 | 17 | Implement output redaction | `feature` `redaction` | P1 | [x] Done |
 | 18 | Implement file-based approval backend | `feature` `approval` | P1 | [x] Done |
-| 19 | Implement CLI interactive approval | `feature` `approval` | P2 | [ ] v1.1 |
-| 20 | Implement identity-based policies | `feature` `policy` | P2 | [ ] v1.1 |
-| 21 | Implement time-based restrictions | `feature` `policy` | P2 | [ ] v1.1 |
+| 19 | Implement CLI interactive approval | `feature` `approval` | P2 | [x] Done |
+| 20 | Implement identity-based policies | `feature` `policy` | P2 | [x] Done |
+| 21 | Implement time-based restrictions | `feature` `policy` | P2 | [x] Done |
 | 22 | Build demo MCP server | `feature` `demo` | P1 | [x] Done |
 | 23 | Create example policy files | `documentation` | P1 | [x] Done |
 | 24 | Write malicious prompt scenario scripts | `documentation` | P2 | [x] Done |
@@ -1693,7 +1693,7 @@ Items deferred from v1, scheduled for v2:
 | 30 | Set up release pipeline (goreleaser) | `infrastructure` | P1 | [x] Done |
 | 31 | Write policy model reference | `documentation` | P0 | [x] Done |
 | 32 | Write comparison with evaluator | `documentation` | P0 | [x] Done |
-| 33 | Create missing example policies | `documentation` | P1 | [ ] v1.1 |
+| 33 | Create missing example policies | `documentation` | P1 | [x] Done |
 
 ---
 
