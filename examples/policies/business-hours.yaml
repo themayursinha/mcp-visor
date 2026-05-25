@@ -1,0 +1,133 @@
+# Business Hours Policy
+# Restricts sensitive tools to business hours only.
+# Outside hours, tools are either denied or require human approval.
+version: "1.0"
+description: "Time-based policy - shell and deployment tools restricted to business hours"
+
+default_action: deny
+
+settings:
+  chain_window_size: 5
+  approval_timeout_seconds: 300
+
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        rules:
+          - type: deny_path
+            patterns:
+              - "**/.env"
+              - "**/.ssh/**"
+              - "**/*.pem"
+          - type: allow_path
+            patterns:
+              - "/home/**"
+              - "/tmp/**"
+
+      - name: "file_write"
+        allowed: true
+        risk: high
+        approval_required: true
+        rules:
+          - type: deny_path
+            patterns:
+              - "/etc/**"
+              - "/usr/**"
+          - type: allow_path
+            patterns:
+              - "/home/**"
+              - "/tmp/**"
+
+  - name: "shell"
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+        risk: critical
+        approval_required: true
+
+  - name: "cloud"
+    allowed: true
+    allowed_destinations:
+      - "*.amazonaws.com"
+    tools:
+      - name: "aws_iam_create_user"
+        allowed: true
+        risk: critical
+        approval_required: true
+      - name: "aws_iam_attach_policy"
+        allowed: true
+        risk: critical
+        approval_required: true
+      - name: "aws_s3_list_buckets"
+        allowed: true
+        risk: low
+      - name: "aws_s3_read_object"
+        allowed: true
+        risk: medium
+
+  - name: "github"
+    allowed: true
+    allowed_destinations:
+      - "api.github.com"
+    tools:
+      - name: "github_read_code"
+        allowed: true
+        risk: low
+      - name: "github_create_issue"
+        allowed: true
+        risk: medium
+      - name: "github_create_pr"
+        allowed: true
+        risk: medium
+      - name: "github_merge_pr"
+        allowed: true
+        risk: high
+        approval_required: true
+
+# Shell access limited to 9 AM - 5 PM business hours, Monday-Friday.
+# Outside those hours, shell_exec requires human approval.
+time_restrictions:
+  - name: "shell_business_hours_only"
+    description: "Shell access requires approval outside 9-5 business hours"
+    servers: ["shell"]
+    tools: ["shell_exec"]
+    allowed_hours:
+      - start: "09:00"
+        end: "17:00"
+        timezone: "America/Chicago"
+        days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    outside_action: require_approval
+
+  # Cloud IAM operations completely denied on weekends.
+  - name: "no_deployment_on_weekends"
+    description: "Cloud IAM changes denied entirely on weekends"
+    servers: ["cloud"]
+    tools: ["aws_iam_*"]
+    denied_days: ["saturday", "sunday"]
+    outside_action: deny
+
+tool_chains:
+  - name: "prevent_exfiltration_via_http"
+    sources:
+      - server: "*"
+        tool_pattern: "file_read"
+    sinks:
+      - server: "*"
+        tool_pattern: "http_post"
+    action: deny
+    within_calls: 3
+
+redaction:
+  output_redaction: true
+  sensitive_files:
+    - "**/.env"
+    - "**/credentials"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.ssh/**"
+    - "**/kubeconfig"

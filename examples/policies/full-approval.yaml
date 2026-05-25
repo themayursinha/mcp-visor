@@ -1,0 +1,119 @@
+# Full Approval Policy
+# Every tool call requires human approval before execution.
+# Suitable for high-security environments, auditing scenarios,
+# and initial deployment before tightening to specific rules.
+version: "1.0"
+description: "Full approval posture - every tool requires human confirmation"
+
+default_action: deny
+
+settings:
+  approval_timeout_seconds: 300
+  chain_window_size: 10
+
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        approval_required: true
+        rules:
+          - type: deny_path
+            patterns:
+              - "/etc/passwd"
+              - "/etc/shadow"
+              - "**/.env"
+              - "**/*.pem"
+              - "**/*.key"
+              - "**/.ssh/**"
+          - type: allow_path
+            patterns:
+              - "/home/user/**"
+              - "/tmp/**"
+
+      - name: "file_write"
+        allowed: true
+        risk: high
+        approval_required: true
+        rules:
+          - type: deny_path
+            patterns:
+              - "/etc/**"
+              - "/usr/**"
+              - "/bin/**"
+          - type: allow_path
+            patterns:
+              - "/home/user/**"
+              - "/tmp/**"
+
+  - name: "shell"
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+        risk: critical
+        approval_required: true
+        rules:
+          - type: deny_command_pattern
+            patterns:
+              - "bash\\s+-i\\s+>&"
+              - "rm\\s+-rf\\s+/"
+              - "curl.*\\|.*(bash|sh)"
+              - "nc\\s+-[nl]"
+
+  - name: "github"
+    allowed: true
+    allowed_destinations:
+      - "api.github.com"
+    tools:
+      - name: "github_create_issue"
+        allowed: true
+        risk: medium
+        approval_required: true
+      - name: "github_create_pr"
+        allowed: true
+        risk: medium
+        approval_required: true
+      - name: "github_merge_pr"
+        allowed: true
+        risk: high
+        approval_required: true
+      - name: "github_read_code"
+        allowed: true
+        risk: low
+        approval_required: true
+
+  - name: "slack"
+    allowed: true
+    tools:
+      - name: "slack_send_message"
+        allowed: true
+        risk: high
+        approval_required: true
+      - name: "slack_read_messages"
+        allowed: true
+        risk: medium
+        approval_required: true
+
+tool_chains:
+  - name: "prevent_exfiltration_via_http"
+    sources:
+      - server: "*"
+        tool_pattern: "file_read"
+    sinks:
+      - server: "*"
+        tool_pattern: "http_post"
+    action: deny
+    within_calls: 3
+
+redaction:
+  output_redaction: true
+  sensitive_files:
+    - "**/.env"
+    - "**/credentials"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.ssh/**"
+    - "**/kubeconfig"

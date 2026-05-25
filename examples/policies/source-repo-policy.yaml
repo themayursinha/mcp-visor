@@ -1,0 +1,132 @@
+# Source-Repo Policy
+# GitHub tools are restricted to specific approved repositories.
+# Other operations are controlled independently.
+version: "1.0"
+description: "Source-repo-based policy - GitHub tools limited to approved repositories"
+
+default_action: deny
+
+settings:
+  chain_window_size: 5
+
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        rules:
+          - type: deny_path
+            patterns:
+              - "**/.env"
+              - "**/.ssh/**"
+              - "**/*.pem"
+          - type: allow_path
+            patterns:
+              - "/home/**"
+              - "/tmp/**"
+
+      - name: "file_write"
+        allowed: true
+        risk: high
+        approval_required: true
+        rules:
+          - type: deny_path
+            patterns:
+              - "/etc/**"
+              - "/usr/**"
+          - type: allow_path
+            patterns:
+              - "/home/**"
+              - "/tmp/**"
+
+  - name: "github"
+    allowed: true
+    allowed_destinations:
+      - "api.github.com"
+    tools:
+      - name: "github_read_code"
+        allowed: true
+        risk: low
+
+      - name: "github_create_issue"
+        allowed: true
+        risk: medium
+        rules:
+          - type: allowed_repos
+            repos:
+              - "acme-corp/service-a"
+              - "acme-corp/service-b"
+              - "acme-corp/docs"
+              - "acme-corp/website"
+              - "acme-corp/internal-tools"
+
+      - name: "github_create_pr"
+        allowed: true
+        risk: medium
+        approval_required: true
+        rules:
+          - type: allowed_repos
+            repos:
+              - "acme-corp/service-a"
+              - "acme-corp/service-b"
+              - "acme-corp/docs"
+              - "acme-corp/website"
+              - "acme-corp/internal-tools"
+
+      - name: "github_merge_pr"
+        allowed: true
+        risk: high
+        approval_required: true
+        rules:
+          - type: allowed_repos
+            repos:
+              - "acme-corp/service-a"
+              - "acme-corp/service-b"
+
+      - name: "github_delete_repo"
+        allowed: false
+        risk: critical
+
+  - name: "slack"
+    allowed: true
+    tools:
+      - name: "slack_send_message"
+        allowed: true
+        risk: high
+        approval_required: true
+        rules:
+          - type: allow_recipient_domain
+            domains:
+              - "acme-corp.com"
+
+tool_chains:
+  - name: "prevent_exfiltration_via_http"
+    sources:
+      - server: "*"
+        tool_pattern: "file_read"
+    sinks:
+      - server: "*"
+        tool_pattern: "http_post"
+    action: deny
+    within_calls: 3
+
+  - name: "prevent_exfiltration_via_slack"
+    sources:
+      - server: "*"
+        tool_pattern: "(file_read|github_read_code)"
+    sinks:
+      - server: "slack"
+        tool_pattern: "slack_send_message"
+    action: deny
+    within_calls: 3
+
+redaction:
+  output_redaction: true
+  sensitive_files:
+    - "**/.env"
+    - "**/credentials"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.ssh/**"

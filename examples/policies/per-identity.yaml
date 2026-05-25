@@ -1,0 +1,174 @@
+# Per-Identity Policy
+# Different MCP tool access per agent identity.
+# Use with: mcp-visor serve -server <cmd> -policy per-identity.yaml -client-id <identity>
+version: "1.0"
+description: "Per-identity access control - different agents get different tool access"
+
+default_action: deny
+
+settings:
+  chain_window_size: 5
+
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        rules:
+          - type: deny_path
+            patterns:
+              - "**/.env"
+              - "**/.ssh/**"
+              - "**/*.pem"
+          - type: allow_path
+            patterns:
+              - "/home/**"
+              - "/tmp/**"
+
+      - name: "file_write"
+        allowed: true
+        risk: high
+        approval_required: true
+
+  - name: "shell"
+    allowed: true
+    tools:
+      - name: "shell_exec"
+        allowed: true
+        risk: critical
+        approval_required: true
+
+  - name: "github"
+    allowed: true
+    allowed_destinations:
+      - "api.github.com"
+    tools:
+      - name: "github_read_code"
+        allowed: true
+        risk: low
+      - name: "github_create_issue"
+        allowed: true
+        risk: medium
+      - name: "github_create_pr"
+        allowed: true
+        risk: medium
+        approval_required: true
+      - name: "github_merge_pr"
+        allowed: true
+        risk: high
+        approval_required: true
+
+  - name: "slack"
+    allowed: true
+    tools:
+      - name: "slack_send_message"
+        allowed: true
+        risk: high
+        approval_required: true
+
+  - name: "cloud"
+    allowed: true
+    allowed_destinations:
+      - "*.amazonaws.com"
+    tools:
+      - name: "aws_iam_create_user"
+        allowed: true
+        risk: critical
+        approval_required: true
+      - name: "aws_iam_attach_policy"
+        allowed: true
+        risk: critical
+        approval_required: true
+      - name: "aws_s3_list_buckets"
+        allowed: true
+        risk: low
+      - name: "aws_s3_read_object"
+        allowed: true
+        risk: medium
+
+# Identities define per-agent access scopes.
+# Only tools listed in an identity's allowed_tools are permitted.
+identities:
+  # Developer agent: read code, create PRs, navigate docs
+  - name: "github-copilot-dev"
+    description: "Standard developer agent"
+    allowed_servers:
+      - "filesystem"
+      - "github"
+    allowed_tools:
+      - "filesystem/file_read"
+      - "filesystem/file_write"
+      - "github/github_read_code"
+      - "github/github_create_pr"
+
+  # Operations agent: broader access including shell and cloud
+  - name: "ops-agent"
+    description: "Operations agent with broader access"
+    allowed_servers:
+      - "filesystem"
+      - "shell"
+      - "github"
+      - "slack"
+      - "cloud"
+    allowed_tools:
+      - "filesystem/file_read"
+      - "shell/shell_exec"
+      - "github/github_read_code"
+      - "slack/slack_send_message"
+      - "cloud/aws_s3_list_buckets"
+      - "cloud/aws_s3_read_object"
+
+  # Read-only auditor agent
+  - name: "auditor"
+    description: "Read-only auditor agent"
+    allowed_servers:
+      - "filesystem"
+      - "github"
+    allowed_tools:
+      - "filesystem/file_read"
+      - "github/github_read_code"
+
+  # Admin agent: full access including IAM
+  - name: "admin-agent"
+    description: "Administrator with full access"
+    allowed_servers:
+      - "filesystem"
+      - "shell"
+      - "github"
+      - "slack"
+      - "cloud"
+    allowed_tools:
+      - "filesystem/file_read"
+      - "filesystem/file_write"
+      - "shell/shell_exec"
+      - "github/github_read_code"
+      - "github/github_create_issue"
+      - "github/github_create_pr"
+      - "github/github_merge_pr"
+      - "slack/slack_send_message"
+      - "cloud/aws_iam_create_user"
+      - "cloud/aws_iam_attach_policy"
+      - "cloud/aws_s3_list_buckets"
+      - "cloud/aws_s3_read_object"
+
+tool_chains:
+  - name: "prevent_exfiltration_via_http"
+    sources:
+      - server: "*"
+        tool_pattern: "file_read"
+    sinks:
+      - server: "*"
+        tool_pattern: "http_post"
+    action: deny
+    within_calls: 3
+
+redaction:
+  output_redaction: true
+  sensitive_files:
+    - "**/.env"
+    - "**/credentials"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.ssh/**"
