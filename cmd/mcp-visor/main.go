@@ -5,14 +5,27 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/proxy"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "version" {
+		fmt.Printf("mcp-visor %s\n  commit: %s\n  date:   %s\n", version, commit, date)
+		os.Exit(0)
+	}
+
 	serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
 	serverCmd := serveCmd.String("server", "", "MCP server command to proxy")
 	serverArgs := &stringSlice{}
@@ -22,11 +35,13 @@ func main() {
 	policyPath := serveCmd.String("policy", "", "Path to policy YAML file")
 	auditPath := serveCmd.String("audit-log", "", "Path to JSONL audit log file (default: stderr)")
 	approvalDir := serveCmd.String("approval-dir", "", "Directory for file-based approval workflow")
+	demoMode := serveCmd.Bool("demo", false, "Start in demo mode with built-in mock server and permissive policy")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  serve    Start the MCP proxy\n")
+		fmt.Fprintf(os.Stderr, "  version  Print version\n")
 		fmt.Fprintf(os.Stderr, "\nRun 'mcp-visor serve -h' for serve options.\n")
 		os.Exit(1)
 	}
@@ -34,8 +49,15 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serveCmd.Parse(os.Args[2:])
+
+		if *demoMode {
+			*serverCmd, *policyPath = setupDemo()
+			defer os.Remove(*serverCmd)
+			defer os.Remove(*policyPath)
+		}
+
 		if *serverCmd == "" {
-			fmt.Fprintf(os.Stderr, "mcp-visor serve: -server is required\n")
+			fmt.Fprintf(os.Stderr, "mcp-visor serve: -server is required (or use --demo)\n")
 			os.Exit(1)
 		}
 
@@ -75,6 +97,85 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
 		os.Exit(1)
 	}
+}
+
+func setupDemo() (serverPath, policyPath string) {
+	mockBin, err := os.CreateTemp("", "mcp-visor-demo-server-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-visor: failed to create temp file: %v\n", err)
+		os.Exit(1)
+	}
+	serverPath = mockBin.Name()
+	mockBin.Close()
+
+	buildCmd := exec.Command("go", "build", "-o", serverPath,
+		"github.com/themayursinha/mcp-visor/examples/demo-mcp-server")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-visor: failed to build demo server: %v\n%s\n", err, out)
+		os.Exit(1)
+	}
+
+	policyFile, err := os.CreateTemp("", "mcp-visor-demo-policy-*.yaml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-visor: failed to create temp file: %v\n", err)
+		os.Exit(1)
+	}
+	policyPath = policyFile.Name()
+
+	demoPolicy := fmt.Sprintf(`version: "1.0"
+description: "Demo mode - auto-generated permissive policy"
+default_action: deny
+settings:
+  chain_window_size: 3
+  approval_timeout_seconds: 10
+servers:
+  - name: "%s"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+      - name: "http_post"
+        allowed: true
+        risk: high
+        approval_required: true
+      - name: "shell_exec"
+        allowed: true
+        risk: critical
+        approval_required: true
+      - name: "slack_send_message"
+        allowed: true
+        risk: high
+        approval_required: true
+tool_chains:
+  - name: "prevent_exfiltration"
+    sources:
+      - server: "*"
+        tool_pattern: "file_read"
+    sinks:
+      - server: "*"
+        tool_pattern: "(http_post|slack_send_message)"
+    action: deny
+    within_calls: 3
+redaction:
+  output_redaction: true
+  sensitive_files:
+    - "**/.env"
+    - "**/.env.*"
+    - "**/credentials"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.ssh/**"
+`, filepath.ToSlash(serverPath))
+
+	if _, err := policyFile.WriteString(demoPolicy); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-visor: failed to write demo policy: %v\n", err)
+		os.Exit(1)
+	}
+	policyFile.Close()
+
+	fmt.Fprintf(os.Stderr, "Demo mode: built mock server and policy\n")
+	return serverPath, policyPath
 }
 
 type stringSlice []string
