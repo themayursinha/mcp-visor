@@ -113,7 +113,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 			Server:    p.cfg.ServerName,
 			Message:   "session ended",
 		})
-		p.audit.Close()
+		_ = p.audit.Close()
 		p.engine.Close()
 	}()
 	p.logger.Info("mcp server started", "command", p.cfg.ServerCommand)

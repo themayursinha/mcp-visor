@@ -102,7 +102,7 @@ func main() {
 		fmt.Printf("  failed to build mock server: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.Remove(mockBin)
+	defer func() { _ = os.Remove(mockBin) }()
 
 	fmt.Println("[build] building mcp-visor...")
 	visorBin := filepath.Join(os.TempDir(), fmt.Sprintf("mcp-visor-%d", os.Getpid()))
@@ -112,14 +112,14 @@ func main() {
 		fmt.Printf("  failed to build visor: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.Remove(visorBin)
+	defer func() { _ = os.Remove(visorBin) }()
 
 	policyPath := filepath.Join(os.TempDir(), fmt.Sprintf("visor-policy-%d.yaml", os.Getpid()))
 	writeDemoPolicy(policyPath, mockBin)
-	defer os.Remove(policyPath)
+	defer func() { _ = os.Remove(policyPath) }()
 
 	auditLog := filepath.Join(os.TempDir(), fmt.Sprintf("visor-audit-%d.jsonl", os.Getpid()))
-	defer os.Remove(auditLog)
+	defer func() { _ = os.Remove(auditLog) }()
 
 	approvalDir := filepath.Join(os.TempDir(), fmt.Sprintf("visor-approvals-%d", os.Getpid()))
 	_ = os.MkdirAll(approvalDir, 0700)
@@ -363,7 +363,7 @@ func (c *mcpContext) recv() map[string]any {
 		return map[string]any{"error": map[string]any{"message": err.Error()}}
 	}
 	var msg map[string]any
-	json.Unmarshal(line, &msg)
+	_ = json.Unmarshal(line, &msg)
 	return msg
 }
 

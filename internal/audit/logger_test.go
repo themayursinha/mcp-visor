@@ -18,7 +18,7 @@ func TestNewLoggerCreatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Error("audit log file should exist")
@@ -33,7 +33,7 @@ func TestLogEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	event := audit.Event{
 		EventType: audit.EventToolAllowed,
@@ -81,7 +81,7 @@ func TestLogMultipleEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	for i := 0; i < 5; i++ {
 		l.Log(audit.Event{
@@ -118,7 +118,7 @@ func TestRedactionInAuditLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	l.SetRedactionPatterns(policy.DefaultRedactionPatterns())
 
@@ -175,7 +175,7 @@ func TestRedactionInResultPreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	l.SetRedactionPatterns(policy.DefaultRedactionPatterns())
 
@@ -210,7 +210,7 @@ func TestSessionLifecycleEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-1", Server: "test"})
 	l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-1", Tool: "tool1", Decision: "allow"})
@@ -239,7 +239,7 @@ func TestSessionLifecycleEvents(t *testing.T) {
 
 func TestMustLoggerWithInvalidPath(t *testing.T) {
 	l := audit.MustLogger("/nonexistent/dir/should/fail/audit.jsonl")
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	l.Log(audit.Event{
 		EventType: audit.EventToolAllowed,
@@ -252,7 +252,7 @@ func TestMustLoggerWithInvalidPath(t *testing.T) {
 
 func TestMustLoggerWithEmptyPath(t *testing.T) {
 	l := audit.MustLogger("")
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	l.Log(audit.Event{
 		EventType: audit.EventToolAllowed,
@@ -269,7 +269,7 @@ func TestLoggerConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	done := make(chan struct{})
 	for i := 0; i < 10; i++ {
