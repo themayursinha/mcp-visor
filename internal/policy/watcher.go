@@ -34,7 +34,7 @@ func NewWatcher(path string) (*Watcher, error) {
 	}
 
 	if err := fw.Add(path); err != nil {
-		fw.Close()
+		_ = fw.Close()
 		return nil, fmt.Errorf("watch policy file '%s': %w", path, err)
 	}
 
@@ -153,6 +153,6 @@ func (w *Watcher) Registry() *Registry {
 
 func (w *Watcher) Close() {
 	close(w.done)
-	w.fw.Close()
+	_ = w.fw.Close()
 	w.logger.Info("policy watcher stopped", "path", w.path)
 }
