@@ -283,10 +283,10 @@ func TestChainDetectionAuditEvent(t *testing.T) {
 			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
-	sendMessage(w, initMsg)
+	_ = sendMessage(w, initMsg)
 	_, _ = readMessage(r)
 
-	sendMessage(w, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
+	_ = sendMessage(w, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
 
 	call1 := map[string]any{
 		"jsonrpc": "2.0",

@@ -215,11 +215,11 @@ func TestProxyIntegrationToolsCall(t *testing.T) {
 			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
-	sendMessage(w, initMsg)
-	readMessage(r)
+	_ = sendMessage(w, initMsg)
+	_, _ = readMessage(r)
 
 	initDone := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
-	sendMessage(w, initDone)
+	_ = sendMessage(w, initDone)
 
 	toolCall := map[string]any{
 		"jsonrpc": "2.0",
@@ -283,11 +283,11 @@ func TestProxyIntegrationPing(t *testing.T) {
 			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
-	sendMessage(w, initMsg)
-	readMessage(r)
+	_ = sendMessage(w, initMsg)
+	_, _ = readMessage(r)
 
 	initDone := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
-	sendMessage(w, initDone)
+	_ = sendMessage(w, initDone)
 
 	pingMsg := map[string]any{"jsonrpc": "2.0", "id": 2, "method": "ping"}
 	if err := sendMessage(w, pingMsg); err != nil {
@@ -341,14 +341,14 @@ func TestProxyIntegrationToolsList(t *testing.T) {
 			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	}
-	sendMessage(w, initMsg)
-	readMessage(r)
+	_ = sendMessage(w, initMsg)
+	_, _ = readMessage(r)
 
 	initDone := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
-	sendMessage(w, initDone)
+	_ = sendMessage(w, initDone)
 
 	toolsList := map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
-	sendMessage(w, toolsList)
+	_ = sendMessage(w, toolsList)
 
 	resp, err := readMessage(r)
 	if err != nil {
