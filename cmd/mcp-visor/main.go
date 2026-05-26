@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"syscall"
 
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -43,12 +44,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  serve    Start the MCP proxy\n")
+		fmt.Fprintf(os.Stderr, "  lint     Validate a policy file\n")
 		fmt.Fprintf(os.Stderr, "  version  Print version\n")
 		fmt.Fprintf(os.Stderr, "\nRun 'mcp-visor serve -h' for serve options.\n")
+		fmt.Fprintf(os.Stderr, "Run 'mcp-visor lint -h' for lint options.\n")
 		os.Exit(1)
 	}
 
 	switch os.Args[1] {
+	case "lint":
+		runLint()
 	case "serve":
 		_ = serveCmd.Parse(os.Args[2:])
 
@@ -193,6 +198,120 @@ redaction:
 
 	fmt.Fprintf(os.Stderr, "Demo mode: built mock server and policy\n")
 	return serverPath, policyPath
+}
+
+func runLint() {
+	lintCmd := flag.NewFlagSet("lint", flag.ContinueOnError)
+	jsonFlag := lintCmd.Bool("json", false, "Output in JSON format")
+	strictFlag := lintCmd.Bool("strict", false, "Treat warnings as errors")
+	noInfoFlag := lintCmd.Bool("no-info", false, "Hide info-level findings")
+	noWarnFlag := lintCmd.Bool("no-warnings", false, "Hide warning-level findings")
+	lintCmd.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: mcp-visor lint [flags] <policy-file>\n\nFlags:\n")
+		lintCmd.PrintDefaults()
+	}
+
+	if err := lintCmd.Parse(os.Args[2:]); err != nil {
+		lintCmd.Usage()
+		os.Exit(1)
+	}
+	args := lintCmd.Args()
+	if len(args) < 1 {
+		lintCmd.Usage()
+		os.Exit(1)
+	}
+
+	policyPath := args[0]
+	pol, err := policy.LoadFile(policyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-visor lint: failed to load policy: %v\n", err)
+		os.Exit(1)
+	}
+
+	result := policy.Lint(pol)
+	result.FilePath = policyPath
+
+	if *noInfoFlag {
+		filtered := make([]policy.LintViolation, 0, len(result.Violations))
+		for _, v := range result.Violations {
+			if v.Severity != policy.SeverityInfo {
+				filtered = append(filtered, v)
+			}
+		}
+		result.Violations = filtered
+		result.Summary.Info = 0
+		result.Summary.Total = len(filtered)
+	}
+
+	if *noWarnFlag {
+		filtered := make([]policy.LintViolation, 0, len(result.Violations))
+		for _, v := range result.Violations {
+			if v.Severity != policy.SeverityWarning && v.Severity != policy.SeverityInfo {
+				filtered = append(filtered, v)
+			}
+		}
+		result.Violations = filtered
+		result.Summary.Warnings = 0
+		result.Summary.Info = 0
+		result.Summary.Total = len(filtered)
+	}
+
+	if *jsonFlag {
+		data, err := result.ToJSON()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mcp-visor lint: JSON output error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(data))
+	} else {
+		printLintText(&result)
+	}
+
+	if result.Summary.Errors > 0 {
+		os.Exit(1)
+	}
+
+	if *strictFlag && (result.Summary.Warnings > 0 || result.Summary.Errors > 0) {
+		os.Exit(1)
+	}
+}
+
+func printLintText(result *policy.LintResult) {
+	if result.Policy != "" {
+		fmt.Printf("Policy: %s\n", result.Policy)
+	}
+	fmt.Printf("File: %s\n", result.FilePath)
+
+	if result.Summary.Total == 0 {
+		fmt.Println("No issues found.")
+		return
+	}
+
+	sort.Slice(result.Violations, func(i, j int) bool {
+		order := map[policy.Severity]int{
+			policy.SeverityError:   0,
+			policy.SeverityWarning: 1,
+			policy.SeverityInfo:    2,
+		}
+		if order[result.Violations[i].Severity] != order[result.Violations[j].Severity] {
+			return order[result.Violations[i].Severity] < order[result.Violations[j].Severity]
+		}
+		return result.Violations[i].Path < result.Violations[j].Path
+	})
+
+	fmt.Printf("Errors: %d  Warnings: %d  Info: %d\n\n", result.Summary.Errors, result.Summary.Warnings, result.Summary.Info)
+
+	for _, v := range result.Violations {
+		prefix := "[INFO]  "
+		switch v.Severity {
+		case policy.SeverityError:
+			prefix = "[ERROR] "
+		case policy.SeverityWarning:
+			prefix = "[WARN]  "
+		}
+		fmt.Printf("%s%s\n", prefix, v.Message)
+		fmt.Printf("        path=%s  field=%s\n", v.Path, v.Field)
+	}
 }
 
 type stringSlice []string
