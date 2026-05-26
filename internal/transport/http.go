@@ -144,7 +144,7 @@ func (t *HTTPTransport) ReadRaw() (json.RawMessage, error) {
 
 		if strings.HasPrefix(data, "data: ") {
 			jsonData := strings.TrimPrefix(data, "data: ")
-			return json.RawMessage(jsonData), nil
+			return json.RawMessage(jsonData + "\n"), nil
 		}
 	}
 
