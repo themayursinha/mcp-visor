@@ -1,4 +1,4 @@
-.PHONY: build test vet demo clean fmt lint setup-hooks
+.PHONY: build test bench vet demo clean fmt lint setup-hooks
 
 GOPATH ?= $(shell go env GOPATH)
 GO ?= go
@@ -8,6 +8,9 @@ build:
 
 test:
 	$(GO) test ./... -count=1 -timeout 120s
+
+bench:
+	$(GO) test -bench=. -benchmem -count=1 -timeout 120s ./internal/...
 
 vet:
 	$(GO) vet ./...
