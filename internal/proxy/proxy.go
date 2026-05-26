@@ -47,6 +47,16 @@ type Config struct {
 	ServerURL     string
 	SSEPath       string
 	InsecureTLS   bool
+	Vault         VaultConfig
+}
+
+type VaultConfig struct {
+	Addr       string
+	Token      string
+	KeyName    string
+	Namespace  string
+	CACert     string
+	SkipVerify bool
 }
 
 func New(cfg Config) *Proxy {

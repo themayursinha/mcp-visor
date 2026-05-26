@@ -46,6 +46,12 @@ func main() {
 	serverURL := serveCmd.String("server-url", "", "Remote MCP server URL (enables HTTP+SSE transport, e.g. https://remote:8080)")
 	ssePath := serveCmd.String("sse-path", "", "SSE endpoint path (default /sse)")
 	insecureTLS := serveCmd.Bool("insecure-tls", false, "Skip TLS certificate verification for remote servers")
+	vaultAddr := serveCmd.String("vault-addr", "", "Vault server address (enables Vault Transit signing)")
+	vaultToken := serveCmd.String("vault-token", "", "Vault authentication token")
+	vaultKeyName := serveCmd.String("vault-key-name", "", "Vault Transit key name for approval signing")
+	vaultNamespace := serveCmd.String("vault-namespace", "", "Vault namespace (Enterprise)")
+	vaultCACert := serveCmd.String("vault-ca-cert", "", "Vault CA certificate file")
+	vaultSkipVerify := serveCmd.Bool("vault-skip-verify", false, "Skip Vault TLS verification")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -157,6 +163,14 @@ func main() {
 			ServerURL:     *serverURL,
 			SSEPath:       *ssePath,
 			InsecureTLS:   *insecureTLS,
+			Vault: proxy.VaultConfig{
+				Addr:       *vaultAddr,
+				Token:      *vaultToken,
+				KeyName:    *vaultKeyName,
+				Namespace:  *vaultNamespace,
+				CACert:     *vaultCACert,
+				SkipVerify: *vaultSkipVerify,
+			},
 		})
 
 		if err := p.Run(ctx); err != nil {
