@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,13 +41,18 @@ type Event struct {
 	ResultPreview  string         `json:"result_preview,omitempty"`
 	IsError        bool           `json:"is_error,omitempty"`
 	Message        string         `json:"message,omitempty"`
+	Hash           string         `json:"hash,omitempty"`
+	PrevHash       string         `json:"prev_hash,omitempty"`
+	ChainIndex     uint64         `json:"chain_index,omitempty"`
 }
 
 type Logger struct {
-	path     string
-	mu       sync.Mutex
-	file     *os.File
-	patterns []*regexp.Regexp
+	path       string
+	mu         sync.Mutex
+	file       *os.File
+	patterns   []*regexp.Regexp
+	prevHash   string
+	chainIndex uint64
 }
 
 func NewLogger(path string) (*Logger, error) {
@@ -102,6 +109,15 @@ func (l *Logger) Log(event Event) {
 		event.Reason = l.redactString(event.Reason)
 	}
 
+	event.PrevHash = l.prevHash
+	event.ChainIndex = l.chainIndex
+	l.chainIndex++
+
+	hashData := l.eventHashPayload(event)
+	h := sha256.Sum256(hashData)
+	event.Hash = hex.EncodeToString(h[:])
+	l.prevHash = event.Hash
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "audit logger: marshal error: %v\n", err)
@@ -113,6 +129,13 @@ func (l *Logger) Log(event Event) {
 	if _, err := l.file.Write(data); err != nil {
 		fmt.Fprintf(os.Stderr, "audit logger: write error: %v\n", err)
 	}
+}
+
+func (l *Logger) eventHashPayload(event Event) []byte {
+	e := event
+	e.Hash = ""
+	data, _ := json.Marshal(e)
+	return data
 }
 
 func (l *Logger) Close() error {

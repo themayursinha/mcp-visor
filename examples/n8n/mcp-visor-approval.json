@@ -1,0 +1,357 @@
+{
+  "name": "MCP Visor - Approval & SIEM Control Plane",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "visor-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-receiver",
+      "name": "Receive Visor Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event_type }}",
+              "operation": "equals",
+              "value2": "tool_call_approval_required"
+            }
+          ]
+        }
+      },
+      "id": "if-approval-required",
+      "name": "Is Approval Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $input.first().json;\n\nconst approval = {\n  execution_id: `exec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,\n  request_id: `${event.session_id}-${event.tool}`,\n  requester: event.agent_id,\n  server: event.server,\n  tool: event.tool,\n  reason: event.reason,\n  risk_level: event.risk_level,\n  arguments: event.arguments,\n  timestamp: event.timestamp,\n  session_id: event.session_id\n};\n\nreturn [{ json: approval }];"
+      },
+      "id": "enrich-approval",
+      "name": "Enrich Approval Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "channelId": "C0123456789",
+        "text": "=🔴 **Approval Required**\n\n**Tool:** {{ $json.tool }}\n**Server:** {{ $json.server }}\n**Risk Level:** {{ $json.risk_level }}\n**Requester:** {{ $json.requester }}\n**Reason:** {{ $json.reason }}\n**Execution ID:** {{ $json.execution_id }}\n\n*Arguments:*\n```{{ JSON.stringify($json.arguments) }}```\n\nReply with `approve {{ $json.execution_id }}` or `deny {{ $json.execution_id }}` within 5 minutes.",
+        "otherOptions": {}
+      },
+      "id": "slack-notify",
+      "name": "Send Slack Approval Request",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "webhookSuffix": "slack-interactive",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "slack-interactive-webhook",
+      "name": "Receive Slack Response",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [850, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $input.first().json.event?.text || '';\nconst match = text.match(/(approve|deny)\\s+(exec-[\\w-]+)/i);\n\nif (!match) {\n  throw new Error('Invalid response format');\n}\n\nreturn [{\n  json: {\n    action: match[1].toLowerCase(),\n    execution_id: match[2],\n    approver: $input.first().json.user?.name || 'unknown'\n  }\n}];"
+      },
+      "id": "parse-slack-response",
+      "name": "Parse Slack Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1050, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.action }}",
+              "operation": "equals",
+              "value2": "approve"
+            }
+          ]
+        }
+      },
+      "id": "if-approved",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const decision = $input.first().json;\n\nconst receipt = {\n  execution_id: decision.execution_id,\n  decision: 'approve',\n  approver_id: decision.approver,\n  approved_at: new Date().toISOString(),\n  signature: ''\n};\n\nreturn [{ json: receipt }];"
+      },
+      "id": "build-receipt",
+      "name": "Build Approval Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MCP_VISOR_CALLBACK_URL || 'http://localhost:8082' }}/api/v1/approval/callback",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "execution_id",
+              "value": "={{ $json.execution_id }}"
+            },
+            {
+              "name": "decision",
+              "value": "={{ $json.decision }}"
+            },
+            {
+              "name": "approver_id",
+              "value": "={{ $json.approver_id }}"
+            },
+            {
+              "name": "approved_at",
+              "value": "={{ $json.approved_at }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "callback-to-visor",
+      "name": "POST Approval to Visor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1650, 400]
+    },
+    {
+      "parameters": {
+        "telegramChatId": "",
+        "text": "=❌ Approval **DENIED** for {{ $json.tool }} by {{ $json.approver }}",
+        "otherOptions": {}
+      },
+      "id": "slack-deny-notify",
+      "name": "Notify Denial",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $input.first().json;\n\nif (event.event_type === 'session_started' || event.event_type === 'session_ended') {\n  return [{ json: event }];\n}\n\nreturn [];"
+      },
+      "id": "filter-siem",
+      "name": "Filter Audit Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [450, 700]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SIEM_ENDPOINT || 'udp://splunk.internal:9997' }}",
+        "sendBody": true,
+        "options": {}
+      },
+      "id": "siem-forward",
+      "name": "Forward to SIEM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 700]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.risk_level }}",
+              "operation": "equals",
+              "value2": "critical"
+            }
+          ]
+        }
+      },
+      "id": "if-critical",
+      "name": "Critical Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 850]
+    },
+    {
+      "parameters": {
+        "channelId": "C0987654321",
+        "text": "=🚨 **CRITICAL** mcp-visor event\n```{{ JSON.stringify($json) }}```",
+        "otherOptions": {}
+      },
+      "id": "pagerduty-notify",
+      "name": "PagerDuty Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [650, 850]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO audit_events (timestamp, event_type, session_id, agent_id, server, tool, decision, reason, risk_level) VALUES ('{{ $json.timestamp }}', '{{ $json.event_type }}', '{{ $json.session_id }}', '{{ $json.agent_id }}', '{{ $json.server }}', '{{ $json.tool }}', '{{ $json.decision }}', '{{ $json.reason }}', '{{ $json.risk_level }}')",
+        "options": {}
+      },
+      "id": "db-store",
+      "name": "Store in Audit Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [850, 700]
+    }
+  ],
+  "connections": {
+    "Receive Visor Webhook": {
+      "main": [
+        [
+          {
+            "node": "Is Approval Required?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter Audit Events",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If Critical?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Approval Required?": {
+      "main": [
+        [
+          {
+            "node": "Enrich Approval Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Filter Audit Events",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Enrich Approval Context": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Approval Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Slack Response": {
+      "main": [
+        [
+          {
+            "node": "Parse Slack Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Slack Response": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Build Approval Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Denial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Approval Receipt": {
+      "main": [
+        [
+          {
+            "node": "POST Approval to Visor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Audit Events": {
+      "main": [
+        [
+          {
+            "node": "Forward to SIEM",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Store in Audit Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Critical?": {
+      "main": [
+        [
+          {
+            "node": "PagerDuty Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "1.0.0",
+  "active": true,
+  "description": "MCP Visor control-plane blueprint for Slack/Teams approval and SIEM forwarding. Requires: (1) MCP Visor with webhook emitter configured, (2) Slack bot credentials, (3) SIEM endpoint (optional), (4) PostgreSQL for audit storage (optional)."
+}
