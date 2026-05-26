@@ -57,7 +57,7 @@ Each server entry defines an MCP server and its tools:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Server identifier matching the MCP command. |
-| `transport` | string | No | `"stdio"` or `"http"`. Informational (v1 is stdio only). |
+| `transport` | string | No | `"stdio"` (local child process) or `"http"` (remote HTTP+SSE). |
 | `allowed` | bool | Yes | Whether this server is allowed (`true`/`false`). |
 | `allowed_destinations` | array | No | Allowed network destinations (hosts/domains). |
 | `denied_destinations` | array | No | Blocked network destinations. |
