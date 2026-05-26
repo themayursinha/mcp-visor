@@ -347,6 +347,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 
 	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
 	if redactionResult.Redacted {
+		p.metrics.AddBytesRedacted(int64(len(raw)))
 		p.logger.Info("arguments redacted",
 			"tool", callReq.Name,
 			"fields", redactionResult.RedactedFields,
@@ -400,6 +401,8 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 	if decision.Action != policy.ActionDeny {
 		chainResult := p.checkChain(serverName, callReq, redactedArgs, risk)
 		if chainResult == "denied" {
+			p.metrics.IncrementDenied()
+			p.metrics.IncrementChains()
 			errResp := mcp.NewErrorResponse(req.ID, -32000, "chain rule: tool sequence matches dangerous pattern")
 			_ = client.EncodeResponse(errResp)
 			return raw, "denied"
@@ -408,6 +411,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 
 	switch decision.Action {
 	case policy.ActionDeny:
+		p.metrics.IncrementDenied()
 		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
 		_ = client.EncodeResponse(errResp)
 
@@ -486,12 +490,16 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 			"tool", callReq.Name,
 			"session", p.session.ID,
 		)
+		p.metrics.IncrementApproved()
+		p.metrics.IncrementApprovals()
 		return raw, "forward"
 
 	case policy.ActionAllow:
+		p.metrics.IncrementAllowed()
 		return raw, "forward"
 
 	default:
+		p.metrics.IncrementAllowed()
 		return raw, "forward"
 	}
 }
