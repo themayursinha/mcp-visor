@@ -279,7 +279,7 @@ func (m *MockTransport) ServeMCP() http.HandlerFunc {
 			return
 		}
 
-		w.Write(resp)
+		_, _ = w.Write(resp)
 	}
 }
 

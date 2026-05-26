@@ -240,7 +240,7 @@ func (de *DurableEngine) persistRequest(dr *durableRequest) {
 	}
 	path := filepath.Join(de.stateDir, fmt.Sprintf("pending-%s.json", dr.ID))
 	data, _ := json.MarshalIndent(dr, "", "  ")
-	os.WriteFile(path, data, 0o600)
+	_ = os.WriteFile(path, data, 0o600)
 }
 
 func (de *DurableEngine) persistReceipt(rec *receipt.DecisionReceipt) {
@@ -249,7 +249,7 @@ func (de *DurableEngine) persistReceipt(rec *receipt.DecisionReceipt) {
 	}
 	path := filepath.Join(de.stateDir, fmt.Sprintf("receipt-%s.json", rec.ExecutionID))
 	data, _ := json.MarshalIndent(rec, "", "  ")
-	os.WriteFile(path, data, 0o600)
+	_ = os.WriteFile(path, data, 0o600)
 }
 
 func (de *DurableEngine) loadState() {

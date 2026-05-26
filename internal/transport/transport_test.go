@@ -86,10 +86,6 @@ func TestMockTransport(t *testing.T) {
 	}
 }
 
-type pipePair struct {
-	reader *channelReader
-	writer *channelWriter
-}
 
 func NewPipePair() (*channelReader, *channelWriter) {
 	ch := make(chan byte, 4096)
