@@ -15,6 +15,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
+	"github.com/themayursinha/mcp-visor/internal/trace"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
 )
 
@@ -26,6 +27,9 @@ type Proxy struct {
 	audit     *audit.Logger
 	redactor  *redaction.Engine
 	approval  *approval.Engine
+	tracer    trace.TraceLogger
+	tracing   TracingConfig
+	metrics   ProxyMetrics
 }
 
 type Config struct {
@@ -39,6 +43,7 @@ type Config struct {
 	AuditLogPath  string
 	ApprovalDir   string
 	ApprovalCLI   bool
+	Tracing       TracingConfig
 }
 
 func New(cfg Config) *Proxy {
@@ -82,7 +87,55 @@ func New(cfg Config) *Proxy {
 		audit:    al,
 		redactor: red,
 		approval: appr,
+		tracing:  cfg.Tracing,
 	}
+}
+
+func NewWithTracing(cfg Config) *Proxy {
+	if cfg.SessionID == "" {
+		cfg.SessionID = fmt.Sprintf("sess-%d", os.Getpid())
+	}
+	if cfg.ClientID == "" {
+		cfg.ClientID = "mcp-client"
+	}
+	if cfg.ServerName == "" {
+		cfg.ServerName = cfg.ServerCommand
+	}
+	p := cfg.Policy
+	if p == nil {
+		p = policy.DefaultPolicy()
+	}
+
+	al := audit.MustLogger(cfg.AuditLogPath)
+	al.SetRedactionPatterns(p.Redaction.Patterns)
+
+	eng := cfg.Engine
+	if eng == nil {
+		eng = policy.NewEngine(p)
+	}
+	eng.SetClientID(cfg.ClientID)
+	red := redaction.NewEngine(p.Redaction)
+	var appr *approval.Engine
+	if cfg.ApprovalCLI {
+		appr = approval.NewCLIEngine(time.Duration(p.Settings.ApprovalTimeoutSecs) * time.Second)
+	} else {
+		appr = approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
+	}
+
+	proxy := &Proxy{
+		cfg:      cfg,
+		session:  NewSession(cfg.SessionID, cfg.ClientID),
+		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})),
+		engine:   eng,
+		audit:    al,
+		redactor: red,
+		approval: appr,
+		tracing:  cfg.Tracing,
+	}
+	proxy.tracer = proxy.initTracer(cfg.Tracing)
+	return proxy
 }
 
 func (p *Proxy) Run(ctx context.Context) error {
@@ -696,4 +749,39 @@ var sessionCounter int
 func GenerateSessionID() string {
 	sessionCounter++
 	return fmt.Sprintf("sess-%d-%d", os.Getpid(), sessionCounter)
+}
+
+func (p *Proxy) initTracer(cfg TracingConfig) trace.TraceLogger {
+	if !cfg.Enabled {
+		return nil
+	}
+	switch cfg.Format {
+	case TraceFormatJSONL:
+		return &trace.JSONLLogger{}
+	case TraceFormatSummary:
+		return trace.NewSummaryLogger()
+	default:
+		return &trace.TextLogger{}
+	}
+}
+
+func (p *Proxy) Metrics() *ProxyMetrics {
+	return &p.metrics
+}
+
+func (p *Proxy) SetLogLevel(level slog.Level) {
+	p.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: level,
+	}))
+}
+
+func (p *Proxy) logTrace(direction trace.MessageDirection, method, jsonrpc string, id any, raw []byte, err error) {
+	if p.tracer == nil {
+		return
+	}
+	trace.LogEvent(p.tracer, direction, method, jsonrpc, id, raw, err)
+}
+
+func (p *Proxy) Tracer() trace.TraceLogger {
+	return p.tracer
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -39,6 +40,9 @@ func main() {
 	approvalDir := serveCmd.String("approval-dir", "", "Directory for file-based approval workflow")
 	approvalCLI := serveCmd.Bool("approval-cli", false, "Use interactive CLI prompt for approval (stdin/stderr)")
 	demoMode := serveCmd.Bool("demo", false, "Start in demo mode with built-in mock server and permissive policy")
+	traceEnable := serveCmd.Bool("trace", false, "Enable MCP message tracing")
+	traceFormat := serveCmd.String("trace-format", "text", "Trace output format: text, jsonl, summary")
+	logLevel := serveCmd.String("log-level", "info", "Log level: debug, info, warn, error")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -97,7 +101,41 @@ func main() {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
 
-		p := proxy.New(proxy.Config{
+		var tracingFormat proxy.TraceFormat
+		switch *traceFormat {
+		case "jsonl":
+			tracingFormat = proxy.TraceFormatJSONL
+		case "summary":
+			tracingFormat = proxy.TraceFormatSummary
+		case "text":
+			tracingFormat = proxy.TraceFormatText
+		default:
+			tracingFormat = proxy.TraceFormatText
+		}
+
+		var logLevelOpt slog.Level
+		switch *logLevel {
+		case "debug":
+			logLevelOpt = slog.LevelDebug
+		case "warn":
+			logLevelOpt = slog.LevelWarn
+		case "error":
+			logLevelOpt = slog.LevelError
+		default:
+			logLevelOpt = slog.LevelInfo
+		}
+
+		_ = logLevelOpt // TODO: apply to proxy
+
+		var enabledTracing proxy.TracingConfig
+		if *traceEnable {
+			enabledTracing = proxy.TracingConfig{
+				Enabled: true,
+				Format:  tracingFormat,
+			}
+		}
+
+		p := proxy.NewWithTracing(proxy.Config{
 			ServerCommand: *serverCmd,
 			ServerName:    *serverName,
 			ServerArgs:    *serverArgs,
@@ -108,6 +146,7 @@ func main() {
 			AuditLogPath:  *auditPath,
 			ApprovalDir:   *approvalDir,
 			ApprovalCLI:   *approvalCLI,
+			Tracing:       enabledTracing,
 		})
 
 		if err := p.Run(ctx); err != nil {
