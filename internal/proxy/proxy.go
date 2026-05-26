@@ -44,6 +44,9 @@ type Config struct {
 	ApprovalDir   string
 	ApprovalCLI   bool
 	Tracing       TracingConfig
+	ServerURL     string
+	SSEPath       string
+	InsecureTLS   bool
 }
 
 func New(cfg Config) *Proxy {
@@ -139,6 +142,10 @@ func NewWithTracing(cfg Config) *Proxy {
 }
 
 func (p *Proxy) Run(ctx context.Context) error {
+	if p.cfg.ServerURL != "" {
+		return p.RunRemote(ctx)
+	}
+
 	serverCmd := exec.CommandContext(ctx, p.cfg.ServerCommand, p.cfg.ServerArgs...)
 
 	serverStdin, err := serverCmd.StdinPipe()

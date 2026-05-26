@@ -43,6 +43,9 @@ func main() {
 	traceEnable := serveCmd.Bool("trace", false, "Enable MCP message tracing")
 	traceFormat := serveCmd.String("trace-format", "text", "Trace output format: text, jsonl, summary")
 	logLevel := serveCmd.String("log-level", "info", "Log level: debug, info, warn, error")
+	serverURL := serveCmd.String("server-url", "", "Remote MCP server URL (enables HTTP+SSE transport, e.g. https://remote:8080)")
+	ssePath := serveCmd.String("sse-path", "", "SSE endpoint path (default /sse)")
+	insecureTLS := serveCmd.Bool("insecure-tls", false, "Skip TLS certificate verification for remote servers")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -67,9 +70,13 @@ func main() {
 			defer os.Remove(*policyPath)
 		}
 
-		if *serverCmd == "" {
-			fmt.Fprintf(os.Stderr, "mcp-visor serve: -server is required (or use --demo)\n")
+		if *serverCmd == "" && *serverURL == "" {
+			fmt.Fprintf(os.Stderr, "mcp-visor serve: -server or -server-url is required (or use --demo)\n")
 			os.Exit(1)
+		}
+
+		if *serverURL != "" && *serverName == "" {
+			*serverName = *serverURL
 		}
 
 		var pol *policy.Policy
@@ -147,6 +154,9 @@ func main() {
 			ApprovalDir:   *approvalDir,
 			ApprovalCLI:   *approvalCLI,
 			Tracing:       enabledTracing,
+			ServerURL:     *serverURL,
+			SSEPath:       *ssePath,
+			InsecureTLS:   *insecureTLS,
 		})
 
 		if err := p.Run(ctx); err != nil {
