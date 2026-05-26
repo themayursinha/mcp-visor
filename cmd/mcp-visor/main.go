@@ -12,6 +12,7 @@ import (
 	"sort"
 	"syscall"
 
+	"github.com/themayursinha/mcp-visor/internal/dashboard"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/proxy"
 )
@@ -52,6 +53,8 @@ func main() {
 	vaultNamespace := serveCmd.String("vault-namespace", "", "Vault namespace (Enterprise)")
 	vaultCACert := serveCmd.String("vault-ca-cert", "", "Vault CA certificate file")
 	vaultSkipVerify := serveCmd.Bool("vault-skip-verify", false, "Skip Vault TLS verification")
+	dashEnabled := serveCmd.Bool("dashboard", false, "Enable web dashboard")
+	dashboardAddr := serveCmd.String("dashboard-addr", "127.0.0.1:9090", "Dashboard listen address")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -172,6 +175,16 @@ func main() {
 				SkipVerify: *vaultSkipVerify,
 			},
 		})
+
+		if *dashEnabled {
+			ds := dashboard.NewServer(*dashboardAddr, p.DashboardProvider())
+			go func() {
+				fmt.Fprintf(os.Stderr, "Dashboard: http://%s\n", *dashboardAddr)
+				if err := ds.Start(); err != nil {
+					fmt.Fprintf(os.Stderr, "Dashboard error: %v\n", err)
+				}
+			}()
+		}
 
 		if err := p.Run(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "mcp-visor: %v\n", err)
