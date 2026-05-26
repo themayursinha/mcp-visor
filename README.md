@@ -155,13 +155,43 @@ See [examples/policies/](examples/policies/) for more examples.
 
 ### Approval Workflow
 - File-based: write `req-<id>.json`, approver creates `req-<id>.ok` to approve
+- CLI-based: interactive yes/no prompt on terminal
 - Configurable timeout with fail-closed default
 - Full audit trail for approval decisions
 
+### Durable Approval (v2)
+- Signed Decision Receipts with ed25519 signatures
+- Execution IDs with nonce and expiry for replay protection
+- Durable retry: persist pending approvals, agent retries with signed receipt
+- Pluggable signer interface (built-in ed25519, Vault Transit/KMS ready)
+
+### Webhook Event Emitter (v2)
+- Async HTTP delivery of audit and approval events
+- HMAC-SHA256 signatures for payload authenticity
+- Configurable retry with exponential backoff
+
 ### Audit Logging
 - JSONL format with redacted data
-- 7 event types: tool_call_allowed, tool_call_denied, tool_call_chain_detected, tool_call_approval_required, session_started, session_ended, policy_loaded
+- 8 event types: tool_call_allowed, tool_call_denied, tool_call_chain_detected, tool_call_approval_required, session_started, session_ended, policy_loaded, policy_reloaded
+- Hash-chained entries (SHA-256) for tamper evidence
 - O_SYNC writes for durability
+
+### SIEM Export (v2)
+- RFC 5424 syslog format
+- JSON envelope format for Splunk/Elastic
+- CEF (Common Event Format)
+- Pluggable writers: file, TCP, UDP
+
+### HTTP/SSE Transport (v2)
+- Connect to remote MCP servers over HTTP
+- Server-Sent Events (SSE) for server-to-client streaming
+- Configurable mTLS support
+- Mock transport for testing
+
+### n8n Control Plane Blueprint (v2)
+- Ready-to-import n8n workflow for Slack/Teams approval
+- SIEM forwarding integration
+- Audit database storage (PostgreSQL)
 
 ## Comparison with mcp-llm-security-evaluator
 
@@ -183,13 +213,16 @@ See [mcp-llm-security-evaluator](https://github.com/themayursinha/mcp-llm-securi
 mcp-visor serve [flags]
 
 Flags:
-  -server string       MCP server command to proxy (required)
-  -server-arg string   Argument for the MCP server command (repeatable)
-  -policy string       Path to policy YAML file (default: built-in deny-all)
-  -audit-log string    Path to JSONL audit log file (default: stderr)
-  -approval-dir string Directory for file-based approval workflow
-  -session-id string   Session identifier
-  -client-id string    Client identifier
+  -server string        MCP server command to proxy (required)
+  -server-name string   Logical server name for policy matching
+  -server-arg string    Argument for the MCP server command (repeatable)
+  -policy string        Path to policy YAML file (default: built-in deny-all)
+  -audit-log string     Path to JSONL audit log file (default: stderr)
+  -approval-dir string  Directory for file-based approval workflow
+  -approval-cli         Use interactive CLI prompt for approval
+  -session-id string    Session identifier
+  -client-id string     Client identifier
+  -demo                 Start with built-in mock server and permissive policy
 ```
 
 ## Development
@@ -198,7 +231,7 @@ Flags:
 # Build
 go build ./cmd/mcp-visor/
 
-# Test (68 tests)
+# Test
 go test ./...
 
 # Vet
@@ -211,8 +244,9 @@ go run ./examples/demo-runner/
 ## Roadmap
 
 - [x] v1.0: MCP proxy, policy engine, audit logging, chain detection, redaction, approval
-- [ ] v2.0: Webhook approvals, mTLS, signed audit logs, HTTP/SSE transport
-- [ ] v3.0: Sandboxed tool execution (WASI), eBPF syscall telemetry
+- [x] v1.1: Identity-based policies, time-based restrictions, CLI approval, policy hot-reload
+- [x] v2.0: Signed decision receipts, webhook approvals, hash-chained audit logs, mTLS, SIEM export, HTTP/SSE transport, durable retry approval, n8n control-plane blueprint
+- [ ] v3.0: Sandboxed tool execution (WASI), eBPF syscall telemetry, Vault/KMS-backed approval signing
 - [ ] v4.0: Deeper host-level enforcement, formal policy verification
 
 ## Security Model
@@ -220,21 +254,21 @@ go run ./examples/demo-runner/
 - **Deterministic** — No LLM in the decision path
 - **Fail-closed** — Unknown tools denied by default
 - **Layered** — Redaction → Policy → Chain → Approval
-- **Observable** — Every decision logged
+- **Observable** — Every decision logged with hash-chained integrity
 - **Minimal TCB** — Single Go binary, minimal dependencies
+- **Tamper-evident** — Signed decision receipts, chained audit hashes
 
-## Limitations (v1)
+## Limitations
 
-- Relies on host filesystem security for policy/audit file integrity
-- No cryptographic attestation of decisions
-- No mTLS between visor and remote servers
-- Session state is ephemeral (lost on restart)
-- Approval is file-based (not web-based)
-- Single-agent, single-server deployment
+- Relies on host filesystem security for policy/audit file integrity (v2 adds hash-chaining)
+- Approval webhooks use HMAC; full mTLS between visor and control plane is optional
+- Session state is ephemeral (lost on restart); durable approval receipts survive restarts
+- Single-agent, single-server deployment model
+- No web-based approval dashboard (n8n blueprint provides Slack/Teams path)
 
 ## Contributing
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Areas needing work: HTTP/SSE transport, web-based approval dashboard, mTLS support, additional MCP server integrations.
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Areas needing work: web-based approval dashboard, Vault/KMS live integration, additional MCP server integrations, WASI sandboxing.
 
 ## License
 
