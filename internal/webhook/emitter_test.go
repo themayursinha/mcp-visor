@@ -24,7 +24,7 @@ func TestEmitterDelivery(t *testing.T) {
 			t.Errorf("expected application/json, got %s", r.Header.Get("Content-Type"))
 		}
 		var buf []byte
-		r.Body.Read(buf)
+		_, _ = r.Body.Read(buf)
 		received <- buf
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -107,7 +107,7 @@ func TestEmitterHMACSignature(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedSig = r.Header.Get("X-MCP-Visor-Signature")
 		receivedBody = make([]byte, r.ContentLength)
-		r.Body.Read(receivedBody)
+		_, _ = r.Body.Read(receivedBody)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -135,7 +135,7 @@ func TestEmitterHMACSignature(t *testing.T) {
 		RiskLevel: "high",
 	}
 
-	e.EmitDirect(event)
+	_ = e.EmitDirect(event)
 
 	if receivedSig == "" {
 		t.Error("X-MCP-Visor-Signature header missing")
@@ -217,7 +217,7 @@ func TestEmitterApproveRequiredEvent(t *testing.T) {
 	received := make(chan EventPayload, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload EventPayload
-		json.NewDecoder(r.Body).Decode(&payload)
+		_ = json.NewDecoder(r.Body).Decode(&payload)
 		received <- payload
 		w.WriteHeader(http.StatusOK)
 	}))

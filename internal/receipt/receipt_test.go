@@ -61,7 +61,7 @@ func TestReceiptSignAndVerify(t *testing.T) {
 func TestReceiptVerifyFailsWithModifiedPayload(t *testing.T) {
 	kp, _ := GenerateKeyPair()
 	r, _ := NewReceipt("exec-001", "sess-001", "agent-001", "server", "tool", "req", "args", "1.0", "policy", "chain", "reason", "high", "approver", "approve", 5*time.Minute)
-	r.Sign(kp)
+	_ = r.Sign(kp)
 
 	r.Tool = "modified_tool"
 	if err := r.Verify(kp.PublicKey); err == nil {
@@ -73,7 +73,7 @@ func TestReceiptVerifyFailsWithWrongKey(t *testing.T) {
 	kp1, _ := GenerateKeyPair()
 	kp2, _ := GenerateKeyPair()
 	r, _ := NewReceipt("exec-001", "sess-001", "agent-001", "server", "tool", "req", "args", "1.0", "policy", "chain", "reason", "high", "approver", "approve", 5*time.Minute)
-	r.Sign(kp1)
+	_ = r.Sign(kp1)
 
 	if err := r.Verify(kp2.PublicKey); err == nil {
 		t.Error("verify should fail with wrong public key")
@@ -104,7 +104,7 @@ func TestReceiptExpiry(t *testing.T) {
 func TestReceiptMarshalRoundtrip(t *testing.T) {
 	kp, _ := GenerateKeyPair()
 	r, _ := NewReceipt("exec-001", "sess-001", "agent-001", "filesystem", "file_read", "req-hash", "args-hash", "1.0", "policy-content", "chain-content", "reason", "high", "approver", "approve", 5*time.Minute)
-	r.Sign(kp)
+	_ = r.Sign(kp)
 
 	data, err := r.Marshal()
 	if err != nil {
