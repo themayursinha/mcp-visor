@@ -53,24 +53,26 @@ go run ./cmd/mcp-visor serve \
 ## Architecture
 
 ```
-┌──────────────┐     ┌─────────────────────────────────────┐     ┌──────────────┐
-│  AI Agent    │────▶│           mcp-visor                  │────▶│  MCP Server  │
-│  (MCP Client)│     │                                      │     │  (Tools)     │
-└──────────────┘     │  ┌─────────┐  ┌─────────────────┐   │     └──────────────┘
-                      │  │Redaction│  │  Policy Engine   │   │
-                      │  │ Engine  │  │                  │   │
-                      │  └─────────┘  │ Allow/Deny       │   │
-                      │               │ Risk Classify    │   │
-                      │  ┌─────────┐  │ Arg Validate     │   │
-                      │  │ Chain   │  │ Chain Detect     │   │
-                      │  │Detector│  │                  │   │
-                      │  └─────────┘  └─────────────────┘   │
-                      │                                      │
-                      │  ┌─────────┐  ┌─────────────────┐   │
-                      │  │Approval │  │  Audit Logger   │   │
-                      │  │ Engine  │  │  (JSONL)        │   │
-                      │  └─────────┘  └─────────────────┘   │
-                      └─────────────────────────────────────┘
+┌──────────────┐     ┌────────────────────────────────────────────────┐     ┌──────────────┐
+│  AI Agent    │────▶│                  mcp-visor                      │────▶│  MCP Server  │
+│  (MCP Client)│     │                                                  │     │  (Tools)     │
+└──────────────┘     │  ┌─────────┐  ┌──────────┐  ┌──────────────┐   │     └──────────────┘
+                      │  │Redaction│  │  Policy  │  │    Chain     │   │
+                      │  │ Engine  │  │  Engine  │  │  Detector    │   │
+                      │  └─────────┘  └──────────┘  └──────────────┘   │
+                      │                                                  │
+                      │  ┌─────────┐  ┌──────────┐  ┌──────────────┐   │
+                      │  │Approval │  │  Audit   │  │    Trace     │   │
+                      │  │ Engine  │  │  Logger  │  │   Logger     │   │
+                      │  └─────────┘  └──────────┘  └──────────────┘   │
+                      │                                                  │
+                      │  ┌─────────┐  ┌──────────┐  ┌──────────────┐   │
+                      │  │Vault    │  │ Webhook  │  │    SIEM      │   │
+                      │  │ Signer  │  │ Emitter  │  │  Exporter    │   │
+                      │  └─────────┘  └──────────┘  └──────────────┘   │
+                      │                                                  │
+                      │  Transport: stdio (local) or HTTP+SSE (remote)   │
+                      └────────────────────────────────────────────────┘
 ```
 
 ## Policy Model
@@ -136,10 +138,18 @@ See [examples/policies/](examples/policies/) for more examples.
 
 ### Policy Enforcement
 - Tool allowlist/denylist with default-deny
-- 11 argument rule types: deny_path, allow_path, deny_command_pattern, allow_command_pattern, deny_query_pattern, allow_query_pattern, allowed_repos, deny_recipient_domain, allow_recipient_domain, max_file_size, max_rows
+- 16 argument rule types: deny_path, allow_path, deny_command_pattern, allow_command_pattern, deny_command_keyword, deny_command_pattern_composite, deny_query_pattern, allow_query_pattern, allowed_repos, deny_recipient_domain, allow_recipient_domain, max_file_size, max_result_rows, max_export_rows, require_approval_always
 - Risk classification (critical/high/medium/low)
-- Identity-based access control
-- Time-based restrictions
+- Identity-based access control per agent
+- Time-based access restrictions (business hours, denied days)
+- Policy hot-reload with fsnotify watcher
+
+### Policy Linting
+- `mcp-visor lint` CLI for static validation of policy YAML
+- Detects invalid regex patterns, unknown rule types, missing required fields
+- Severity-classified output (error/warning/info)
+- `--json`, `--strict`, `--no-info`, `--no-warnings` output options
+- Composite command pattern validation
 
 ### Chain Detection
 - Detects dangerous tool sequences: read → send, query → post
@@ -193,6 +203,26 @@ See [examples/policies/](examples/policies/) for more examples.
 - SIEM forwarding integration
 - Audit database storage (PostgreSQL)
 
+### Trace Logging (v1.1)
+- MCP message-level tracing for debugging and forensics
+- Three output formats: text (directional C->S/S->C), JSONL (machine-readable), summary (counters)
+- Configurable via `--trace` and `--trace-format` CLI flags
+- Granular control: handshake, decisions, redactions, chain detections
+
+### Vault Transit Integration (v1.1)
+- Cryptographic signing backed by HashiCorp Vault Transit secrets engine
+- `TransitSigner` and `TransitVerifier` implementing pluggable signer interfaces
+- Configurable via `--vault-addr`, `--vault-token`, `--vault-key-name` CLI flags
+- TLS/mTLS support with CA cert and skip-verify options
+- Namespace support for Vault Enterprise
+
+### Performance Benchmarks (v1.1)
+- 26 benchmarks across 5 hot-path packages
+- Policy evaluation: 587 ns, chain detection: 2.9 us, redaction: 1.8 us
+- JSON-RPC decode: 1 us, encode: 180 ns
+- Ed25519 signing: 12.9 us, verification: 28.4 us
+- `make bench` target for one-command benchmark run
+
 ## Comparison with mcp-llm-security-evaluator
 
 | | mcp-llm-security-evaluator | mcp-visor |
@@ -211,18 +241,38 @@ See [mcp-llm-security-evaluator](https://github.com/themayursinha/mcp-llm-securi
 
 ```
 mcp-visor serve [flags]
+mcp-visor lint [flags] <policy-file>
+mcp-visor version
 
-Flags:
-  -server string        MCP server command to proxy (required)
-  -server-name string   Logical server name for policy matching
-  -server-arg string    Argument for the MCP server command (repeatable)
-  -policy string        Path to policy YAML file (default: built-in deny-all)
-  -audit-log string     Path to JSONL audit log file (default: stderr)
-  -approval-dir string  Directory for file-based approval workflow
-  -approval-cli         Use interactive CLI prompt for approval
-  -session-id string    Session identifier
-  -client-id string     Client identifier
-  -demo                 Start with built-in mock server and permissive policy
+Serve flags:
+  -server string          MCP server command to proxy (local stdio)
+  -server-name string     Logical server name for policy matching
+  -server-arg value       Argument for the MCP server command (repeatable)
+  -server-url string      Remote MCP server URL (enables HTTP+SSE transport)
+  -sse-path string        SSE endpoint path (default: /sse)
+  -insecure-tls           Skip TLS certificate verification for remote servers
+  -policy string          Path to policy YAML file (default: built-in deny-all)
+  -audit-log string       Path to JSONL audit log file (default: stderr)
+  -approval-dir string    Directory for file-based approval workflow
+  -approval-cli           Use interactive CLI prompt for approval
+  -session-id string      Session identifier
+  -client-id string       Client identifier
+  -demo                   Start with built-in mock server and permissive policy
+  -trace                  Enable MCP message tracing
+  -trace-format string    Trace output format: text, jsonl, summary (default: text)
+  -log-level string       Log level: debug, info, warn, error (default: info)
+  -vault-addr string      Vault server address for Transit signing
+  -vault-token string     Vault authentication token
+  -vault-key-name string  Vault Transit key name (default: mcp-visor-approval)
+  -vault-namespace string Vault namespace (Enterprise)
+  -vault-ca-cert string   Vault CA certificate file
+  -vault-skip-verify      Skip Vault TLS verification
+
+Lint flags:
+  -json                   Output in JSON format
+  -strict                 Treat warnings as errors
+  -no-info                Hide info-level findings
+  -no-warnings            Hide warning-level findings
 ```
 
 ## Development
@@ -234,11 +284,17 @@ go build ./cmd/mcp-visor/
 # Test
 go test ./...
 
+# Benchmark
+make bench
+
 # Vet
 go vet ./...
 
 # Run demo
 go run ./examples/demo-runner/
+
+# Lint a policy
+go run ./cmd/mcp-visor lint examples/policies/developer-medium.yaml
 ```
 
 ## Roadmap

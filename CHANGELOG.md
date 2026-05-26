@@ -1,5 +1,69 @@
 # Changelog
 
+## v1.1.0 (2026-05-27)
+
+### Policy Linting
+
+- Policy validation CLI (`mcp-visor lint`) for static analysis of policy YAML
+- 16 known rule type validators with severity classification
+- `--json`, `--strict`, `--no-info`, `--no-warnings` output flags
+- Detection of invalid regex, unknown rule types, missing required fields
+- Composite command pattern validation
+
+### Trace Logging
+
+- MCP message-level tracing with pluggable formatters
+- Text format (human-readable directional output: C->S, S->C, INT)
+- JSONL format for machine processing
+- Summary format with message counters
+- `--trace` and `--trace-format` CLI flags
+- Configurable granularity (handshake, decisions, redactions, chains)
+
+### Performance Benchmarks
+
+- 26 benchmarks across 5 packages (policy, redaction, audit, mcp, signer)
+- Policy evaluation: 587 ns single rule, 2.9 us chain detection
+- Argument redaction: 1.8 us with secrets, 579 ns clean
+- Audit logging: 2.6 us per event with chaining
+- JSON-RPC parsing: 1 us decode, 180 ns encode
+- Ed25519 signing: 12.9 us sign, 28.4 us verify
+- `make bench` target for one-command benchmark run
+
+### Remote HTTP/SSE Transport
+
+- Proxying remote MCP servers over HTTP with SSE event streaming
+- `--server-url`, `--sse-path`, `--insecure-tls` CLI flags
+- Full TLS/mTLS support with client certs, CA pool, and server name verification
+- SSE connection management with reconnect and timeout guards
+- Mock transport with `ServeMCP()` HTTP handler for testing
+- Backward compatible: stdio transport unchanged, auto-detected from config
+
+### Vault Transit Integration
+
+- HashiCorp Vault Transit secrets engine integration for cryptographic signing
+- `TransitSigner` implementing `signer.Signer` interface
+- `TransitVerifier` implementing `signer.Verifier` interface
+- `--vault-addr`, `--vault-token`, `--vault-key-name`, `--vault-namespace`, `--vault-ca-cert`, `--vault-skip-verify` CLI flags
+- Vault health check endpoint integration
+- Public key retrieval from Vault Transit key metadata
+- Ed25519 signature verification through Vault Transit verify endpoint
+
+### Integration Tests
+
+- End-to-end tests for sensitive file access denial, audit log redaction, unknown tool denial
+- Remote transport handshake test with mock HTTP+SSE server
+- Chain detection tests (exfiltration, no-match, database-to-slack, audit events)
+- Multiple tool call sequencing tests
+- Tools list and allowed file access verification tests
+
+### Documentation
+
+- Updated CLI reference with all 20+ flags
+- Updated architecture diagram with v2 components
+- Feature documentation for tracing, benchmarks, remote transport, and Vault integration
+- Policy linting CLI reference
+- Corrected argument rule type count from 11 to 16
+
 ## v1.0.0 (2026-05-25)
 
 ### Core
@@ -20,7 +84,7 @@
 ### Chain Detection
 
 - Sliding window session tracking (configurable size)
-- Regex-based source→sink pattern matching
+- Regex-based source->sink pattern matching
 - Deny or require-approval actions for matched chains
 - Audit events with chain context
 

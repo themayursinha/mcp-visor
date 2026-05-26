@@ -70,38 +70,56 @@ Runtime architecture and component design for the MCP Visor policy enforcement p
 ## Directory Structure
 
 ```
-cmd/mcp-visor/main.go          CLI entry point, flag parsing, --demo mode
+cmd/mcp-visor/main.go          CLI entry point, flag parsing, serve/lint/version
 internal/
   mcp/                         MCP protocol implementation
     protocol.go                 Message types (JSON-RPC 2.0, tools/call, tools/list)
-    parser.go                   JSON-RPC decoder/encoder over stdio byte stream
+    parser.go                   JSON-RPC decoder/encoder over byte stream
   proxy/                       Proxy orchestration
-    proxy.go                    Main proxy loop, interception, relay
+    proxy.go                    Main proxy loop, interception, relay (stdio)
+    remote.go                   Remote proxy relay (HTTP+SSE transport)
     session.go                  Per-connection session with call history
-    proxy_test.go               Unit tests for proxy logic
+    tracing.go                  Trace logging config and metrics
+    vault.go                    Vault signer/verifier construction
   policy/                      Policy engine
-    types.go                    Policy struct definitions (servers, tools, chains, redaction)
-    loader.go                   YAML policy file loader
-    validator.go                Policy schema validation
+    types.go                    Policy struct definitions
+    loader.go                   YAML policy file loader with hot-reload
+    validator.go                Policy argument validation
     engine.go                   Policy evaluation pipeline + chain detection
-    registry.go                 In-memory tool/server registry built from policy
-    engine_test.go              Policy engine unit tests
+    registry.go                 In-memory tool/server registry
+    linter.go                   Static policy validation CLI
+    watcher.go                  fsnotify-based policy hot-reload watcher
   audit/                       Structured audit logging
-    logger.go                   JSONL logger with O_SYNC writes, 7 event types
-    logger_test.go              Audit logger unit tests
+    logger.go                   JSONL logger with O_SYNC, hash-chaining, 8 event types
   redaction/                   Sensitive data redaction
     engine.go                   Configurable regex-based secret scanning
-    engine_test.go              Redaction engine unit tests
   approval/                    Human approval workflow
-    engine.go                   File-based approval with timeout
-    engine_test.go              Approval engine unit tests
+    engine.go                   File-based / CLI-based approval with timeout
+    durable.go                  Durable approval engine with signed receipts
+  transport/                   Transport adapters
+    transport.go                Transport interface + PipeTransport (stdio)
+    http.go                     HTTPTransport (SSE + POST), MockTransport (test)
+  trace/                       Message tracing
+    trace.go                    TraceLogger interface (Text, JSONL, Summary)
+  vault/                       Vault Transit integration
+    client.go                   HashiCorp Vault HTTP client
+    signer.go                   TransitSigner/TransitVerifier (signer.Signer)
+  signer/                      Cryptographic signing
+    signer.go                   Signer/Verifier interfaces, Ed25519 key management
+  receipt/                     Signed decision receipts
+    receipt.go                  DecisionReceipt with nonce, expiry, hash binding
+  webhook/                     Event webhook emitter
+    emitter.go                  Async HTTP delivery with HMAC + retry
+  siem/                        SIEM event export
+    siem.go                     Syslog/JSON/CEF formats over TCP/UDP/file
 examples/
   demo-mcp-server/              Mock MCP server for testing/demos
   demo-runner/                  Interactive demo walkthrough
   policies/                     5 example policy files
   malicious-prompts/            5 documented prompt injection scenarios
+  n8n/                          n8n control plane blueprint
 tests/
-  integration/                  End-to-end proxy tests with mock MCP server
+  integration/                  End-to-end proxy tests
 ```
 
 ## Decision Pipeline
@@ -290,6 +308,36 @@ See [examples/demo-runner/](../examples/demo-runner/) for an interactive walkthr
 
 ## Transport
 
-v1 supports stdio transport only. The proxy starts the MCP server as a child process and communicates over stdin/stdout pipes. This is the standard MCP transport for local tools.
+### stdio (Local)
 
-v2 will add HTTP/SSE transport for remote MCP servers.
+The default transport. The proxy starts the MCP server as a child process and communicates over stdin/stdout pipes. Newline-delimited JSON-RPC messages are relayed bidirectionally. This is the standard MCP transport for locally installed tools.
+
+### HTTP + SSE (Remote)
+
+Enabled via `--server-url`. The proxy connects to a remote MCP server over HTTP:
+- **SSE endpoint** (GET) for server-to-proxy streaming of responses and notifications
+- **Message endpoint** (POST) for proxy-to-server requests
+- Configurable TLS/mTLS with client certs, CA pool, and server name verification
+- `--sse-path` to customize the SSE endpoint, `--insecure-tls` for development
+
+The `Transport` interface (`ReadRaw`, `EncodeRaw`, `Close`) is implemented by both `PipeTransport` (stdio) and `HTTPTransport` (remote). A `MockTransport` provides an in-memory channel-based transport for testing.
+
+## Trace Logging
+
+MCP message-level tracing captures every message flowing through the proxy for debugging and forensics:
+
+- **Text format**: Human-readable directional output (`C->S`, `S->C`, `INT`) with message previews
+- **JSONL format**: Machine-readable structured trace events
+- **Summary format**: Aggregated message direction and method counters
+
+Configure via `--trace` and `--trace-format` CLI flags. Tracing granularity can be tuned to capture handshake messages, policy decisions, redaction events, and chain detections independently. `ProxyMetrics` provides 8 counters (messages processed, denied, allowed, approved, bytes redacted, etc.) for observability.
+
+## Vault Transit Integration
+
+HashiCorp Vault Transit secrets engine provides cryptographic signing without exposing private keys to the visor:
+
+- `TransitSigner` implements the `signer.Signer` interface for remote Ed25519 signing
+- `TransitVerifier` implements the `signer.Verifier` interface for signature verification
+- Vault client supports token auth, TLS/mTLS, namespace (Enterprise), and health checks
+- Public key is retrieved from Vault Transit key metadata at initialization
+- Configure via `--vault-addr`, `--vault-token`, `--vault-key-name` CLI flags
