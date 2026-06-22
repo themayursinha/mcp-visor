@@ -68,7 +68,6 @@ type SummaryLogger struct {
 	byDir      map[MessageDirection]int
 	errors     int
 	bytesIn    int
-	bytesOut   int
 }
 
 func NewSummaryLogger() *SummaryLogger {

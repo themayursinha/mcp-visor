@@ -84,7 +84,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +97,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"calls": calls,
 	})
 }
@@ -109,7 +109,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	m := s.provider.Metrics()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m)
+	_ = json.NewEncoder(w).Encode(m)
 }
 
 func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +131,7 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(summary)
+	_ = json.NewEncoder(w).Encode(summary)
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +141,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(dashboardHTML))
+	_, _ = w.Write([]byte(dashboardHTML))
 }
 
 const dashboardHTML = `<!DOCTYPE html>

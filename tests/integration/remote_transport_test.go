@@ -48,7 +48,7 @@ func TestRemoteTransportHandshake(t *testing.T) {
 	t.Logf("mock remote server listening on %s", addr)
 
 	srv := &http.Server{Handler: mux}
-	go srv.Serve(listener)
+	go func() { _ = srv.Serve(listener) }()
 	t.Cleanup(func() { srv.Close() })
 
 	visor := buildVisor(t)

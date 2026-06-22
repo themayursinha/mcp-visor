@@ -78,7 +78,7 @@ func setupMockVault(t *testing.T, privKey ed25519.PrivateKey, pubKey ed25519.Pub
 	addr := fmt.Sprintf("http://%s", listener.Addr().String())
 
 	srv := &http.Server{Handler: mux}
-	go srv.Serve(listener)
+	go func() { _ = srv.Serve(listener) }()
 	t.Cleanup(func() { srv.Close() })
 
 	return addr
