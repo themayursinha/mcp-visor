@@ -128,6 +128,10 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 		}
 	}
 
+	if known && tool.ApprovalRequired {
+		return Decision{Action: ActionRequireApproval, Reason: fmt.Sprintf("tool '%s' requires approval", req.Name)}
+	}
+
 	return Decision{Action: ActionAllow, Reason: "allowed by policy"}
 }
 

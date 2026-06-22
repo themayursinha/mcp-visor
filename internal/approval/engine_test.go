@@ -88,8 +88,8 @@ func TestApprovalTimeout(t *testing.T) {
 	}
 
 	req := approval.Request{
-		ID:    "test-timeout",
-		Tool:  "slow_tool",
+		ID:     "test-timeout",
+		Tool:   "slow_tool",
 		Server: "test",
 	}
 
@@ -177,7 +177,7 @@ func TestApprovalFilesCleanedUp(t *testing.T) {
 	}
 }
 
-func TestApprovalDisabled(t *testing.T) {
+func TestApprovalDisabledFailsClosed(t *testing.T) {
 	eng := approval.MustEngine("", 1*time.Second)
 	if eng.IsEnabled() {
 		t.Error("engine should not be enabled with empty dir")
@@ -185,11 +185,11 @@ func TestApprovalDisabled(t *testing.T) {
 
 	req := approval.Request{ID: "test", Tool: "test", Server: "test"}
 	approved, err := eng.RequestApproval(req)
-	if err != nil {
-		t.Fatalf("RequestApproval: %v", err)
+	if err == nil {
+		t.Fatal("expected approval backend error")
 	}
-	if !approved {
-		t.Error("should auto-approve when disabled")
+	if approved {
+		t.Error("disabled approval backend must fail closed")
 	}
 }
 

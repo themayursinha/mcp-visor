@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/themayursinha/mcp-visor/internal/approval"
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -22,8 +21,17 @@ func (p *Proxy) RunRemote(ctx context.Context) error {
 		SSEPath: p.cfg.SSEPath,
 		Timeout: 30 * time.Second,
 	}
-	if p.cfg.InsecureTLS {
-		httpCfg.TLS = &transport.TLSConfig{InsecureSkip: true}
+	if p.cfg.InsecureTLS || p.cfg.RemoteCert != "" || p.cfg.RemoteKey != "" || p.cfg.RemoteCA != "" || p.cfg.RemoteServerName != "" {
+		httpCfg.TLS = &transport.TLSConfig{
+			CertFile:     p.cfg.RemoteCert,
+			KeyFile:      p.cfg.RemoteKey,
+			CAFile:       p.cfg.RemoteCA,
+			InsecureSkip: p.cfg.InsecureTLS,
+			ServerName:   p.cfg.RemoteServerName,
+		}
+		if p.cfg.InsecureTLS {
+			p.logger.Warn("remote TLS certificate verification is disabled")
+		}
 	}
 
 	remoteTransport, err := transport.NewHTTPTransport(httpCfg)
@@ -41,13 +49,25 @@ func (p *Proxy) RunRemote(ctx context.Context) error {
 		"sse_path", httpCfg.SSEPath,
 	)
 
-	p.audit.Log(audit.Event{
+	p.logAudit(audit.Event{
 		EventType: audit.EventSessionStarted,
 		SessionID: p.session.ID,
 		AgentID:   p.cfg.ClientID,
 		Server:    p.cfg.ServerName,
 		Message:   "session started (remote)",
 	})
+	defer func() {
+		p.logAudit(audit.Event{
+			EventType: audit.EventSessionEnded,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    p.cfg.ServerName,
+			Message:   "session ended (remote)",
+		})
+		_ = p.audit.Close()
+		p.closeEventSinks()
+		p.engine.Close()
+	}()
 
 	clientParser := mcp.NewParser(os.Stdin, os.Stdout)
 
@@ -88,13 +108,6 @@ func (p *Proxy) RunRemote(ctx context.Context) error {
 		}
 	}
 
-	p.audit.Log(audit.Event{
-		EventType: audit.EventSessionEnded,
-		SessionID: p.session.ID,
-		AgentID:   p.cfg.ClientID,
-		Server:    p.cfg.ServerName,
-		Message:   "session ended (remote)",
-	})
 	return nil
 }
 
@@ -196,20 +209,34 @@ func (p *Proxy) interceptAndModifyRemote(raw json.RawMessage, client *mcp.Parser
 
 	var callReq mcp.ToolsCallRequest
 	if err := json.Unmarshal(req.Params, &callReq); err != nil {
-		return raw, "forward"
+		resp := mcp.NewErrorResponse(req.ID, -32000, "invalid tools/call parameters")
+		_ = encodeAndForwardToClient(resp, client)
+		p.logDenied(serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerURL), "", nil, "invalid tools/call parameters", policy.RiskUnknown)
+		return raw, "denied"
 	}
 
 	serverName := p.cfg.ServerName
+	originalRaw := raw
 	argsMap := extractArgs(callReq.Arguments)
+	p.metrics.IncrementProcessed()
+
+	if decision := p.evaluateRuntimeLimits(callReq); decision.Action == policy.ActionDeny {
+		resp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
+		_ = encodeAndForwardToClient(resp, client)
+		p.metrics.IncrementDenied()
+		p.logDenied(serverName, callReq.Name, nil, decision.Reason, p.engine.GetRiskLevel(serverName, callReq.Name))
+		return raw, "denied"
+	}
 
 	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
 	if redactionResult.Redacted {
+		p.metrics.AddBytesRedacted(int64(len(raw)))
 		p.logger.Info("arguments redacted",
 			"tool", callReq.Name,
 			"fields", redactionResult.RedactedFields,
 			"session", p.session.ID,
 		)
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -231,7 +258,7 @@ func (p *Proxy) interceptAndModifyRemote(raw json.RawMessage, client *mcp.Parser
 		resp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
 		_ = encodeAndForwardToClient(resp, client)
 
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -250,22 +277,31 @@ func (p *Proxy) interceptAndModifyRemote(raw json.RawMessage, client *mcp.Parser
 
 	decision := p.engine.Evaluate(serverName, callReq)
 	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
+	var chainContext []string
 
 	if decision.Action != policy.ActionDeny {
-		chainResult := p.checkChain(serverName, callReq, redactedArgs, risk)
-		if chainResult == "denied" {
+		chainDecision, previousCalls := p.checkChain(serverName, callReq, redactedArgs, risk)
+		if chainDecision.Action == policy.ActionDeny {
+			p.metrics.IncrementDenied()
+			p.metrics.IncrementChains()
 			resp := mcp.NewErrorResponse(req.ID, -32000, "chain rule: tool sequence matches dangerous pattern")
 			_ = encodeAndForwardToClient(resp, client)
 			return raw, "denied"
+		}
+		if chainDecision.Action == policy.ActionRequireApproval {
+			p.metrics.IncrementChains()
+			decision = chainDecision
+			chainContext = previousCalls
 		}
 	}
 
 	switch decision.Action {
 	case policy.ActionDeny:
+		p.metrics.IncrementDenied()
 		resp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
 		_ = encodeAndForwardToClient(resp, client)
 
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -282,18 +318,35 @@ func (p *Proxy) interceptAndModifyRemote(raw json.RawMessage, client *mcp.Parser
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
-		approved := p.handleApproval(callReq.Name, serverName, redactedArgs, decision.Reason, risk)
-		if !approved {
-			resp := mcp.NewErrorResponse(req.ID, -32000, "execution denied: approval not granted")
+		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext)
+		if !outcome.Approved {
+			resp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason))
 			_ = encodeAndForwardToClient(resp, client)
 			return raw, "denied"
 		}
+		allowEvent := audit.Event{
+			EventType: audit.EventToolAllowed,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: redactedArgs,
+			Decision:  string(policy.ActionAllow),
+			Reason:    "approved by human operator",
+			RiskLevel: string(risk),
+		}
+		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
+		p.logAudit(allowEvent)
+		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
+		p.metrics.IncrementApproved()
 		return raw, "forward"
 
 	case policy.ActionAllow:
+		p.metrics.IncrementAllowed()
 		return raw, "forward"
 
 	default:
+		p.metrics.IncrementAllowed()
 		return raw, "forward"
 	}
 }
@@ -337,47 +390,4 @@ func encodeAndForwardToClient(resp mcp.Response, client *mcp.Parser) error {
 		return err
 	}
 	return client.EncodeRaw(data)
-}
-
-func (p *Proxy) handleApproval(toolName, serverName string, args map[string]any, reason string, risk policy.RiskLevel) bool {
-	approvalReq := approval.Request{
-		ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, toolName, p.session.ToolCallCount()),
-		Tool:      toolName,
-		Server:    serverName,
-		Arguments: args,
-		Reason:    reason,
-		RiskLevel: string(risk),
-		SessionID: p.session.ID,
-		AgentID:   p.cfg.ClientID,
-	}
-	p.logger.Warn("approval requested", "tool", toolName, "session", p.session.ID)
-	approved, err := p.approval.RequestApproval(approvalReq)
-	if err != nil || !approved {
-		p.audit.Log(audit.Event{
-			EventType: audit.EventToolDenied,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      toolName,
-			Arguments: args,
-			Decision:  string(policy.ActionDeny),
-			Reason:    fmt.Sprintf("approval denied: %v", err),
-			RiskLevel: string(risk),
-		})
-		p.logger.Warn("approval denied", "tool", toolName, "session", p.session.ID)
-		return false
-	}
-	p.audit.Log(audit.Event{
-		EventType: audit.EventToolAllowed,
-		SessionID: p.session.ID,
-		AgentID:   p.cfg.ClientID,
-		Server:    serverName,
-		Tool:      toolName,
-		Arguments: args,
-		Decision:  string(policy.ActionAllow),
-		Reason:    "approved by human operator",
-		RiskLevel: string(risk),
-	})
-	p.logger.Info("approval granted", "tool", toolName, "session", p.session.ID)
-	return true
 }

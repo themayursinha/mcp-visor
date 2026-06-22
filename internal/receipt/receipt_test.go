@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"testing"
 	"time"
+
+	"github.com/themayursinha/mcp-visor/internal/signer"
 )
 
 func TestGenerateKeyPair(t *testing.T) {
@@ -55,6 +57,31 @@ func TestReceiptSignAndVerify(t *testing.T) {
 
 	if err := r.Verify(kp.PublicKey); err != nil {
 		t.Fatalf("Verify: %v", err)
+	}
+}
+
+func TestReceiptSignWithGenericSigner(t *testing.T) {
+	s, err := signer.NewApprovalSigner()
+	if err != nil {
+		t.Fatalf("NewApprovalSigner: %v", err)
+	}
+	r, err := NewReceipt("exec-001", "sess-001", "agent-001", "server", "tool", "req", "args", "1.0", "policy", "chain", "reason", "high", "approver", "approve", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("NewReceipt: %v", err)
+	}
+	if err := r.SignWith(s); err != nil {
+		t.Fatalf("SignWith: %v", err)
+	}
+	if r.Signature == "" || r.Algorithm != "ed25519" || r.PublicKey == "" {
+		t.Fatalf("receipt missing signature metadata: %+v", r)
+	}
+	v := signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))
+	if err := r.VerifyWith(v); err != nil {
+		t.Fatalf("VerifyWith: %v", err)
+	}
+	r.RedactedArgs = "tampered"
+	if err := r.VerifyWith(v); err == nil {
+		t.Fatal("VerifyWith should fail after tampering")
 	}
 }
 

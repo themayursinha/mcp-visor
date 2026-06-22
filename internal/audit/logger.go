@@ -27,23 +27,29 @@ const (
 )
 
 type Event struct {
-	Timestamp      string         `json:"timestamp"`
-	EventType      EventType      `json:"event_type"`
-	SessionID      string         `json:"session_id"`
-	AgentID        string         `json:"agent_id"`
-	Server         string         `json:"server"`
-	Tool           string         `json:"tool,omitempty"`
-	Arguments      map[string]any `json:"arguments,omitempty"`
-	Decision       string         `json:"policy_decision"`
-	Reason         string         `json:"reason,omitempty"`
-	RiskLevel      string         `json:"risk_level,omitempty"`
-	ChainContext   []string       `json:"chain_context,omitempty"`
-	ResultPreview  string         `json:"result_preview,omitempty"`
-	IsError        bool           `json:"is_error,omitempty"`
-	Message        string         `json:"message,omitempty"`
-	Hash           string         `json:"hash,omitempty"`
-	PrevHash       string         `json:"prev_hash,omitempty"`
-	ChainIndex     uint64         `json:"chain_index,omitempty"`
+	Timestamp            string         `json:"timestamp"`
+	EventType            EventType      `json:"event_type"`
+	SessionID            string         `json:"session_id"`
+	AgentID              string         `json:"agent_id"`
+	Server               string         `json:"server"`
+	Tool                 string         `json:"tool,omitempty"`
+	Arguments            map[string]any `json:"arguments,omitempty"`
+	Decision             string         `json:"policy_decision"`
+	Reason               string         `json:"reason,omitempty"`
+	RiskLevel            string         `json:"risk_level,omitempty"`
+	ChainContext         []string       `json:"chain_context,omitempty"`
+	RequestHash          string         `json:"request_hash,omitempty"`
+	RedactedArgumentHash string         `json:"redacted_argument_hash,omitempty"`
+	PolicyHash           string         `json:"policy_hash,omitempty"`
+	ChainContextHash     string         `json:"chain_context_hash,omitempty"`
+	ApprovalReceiptHash  string         `json:"approval_receipt_hash,omitempty"`
+	ApprovalReceipt      map[string]any `json:"approval_receipt,omitempty"`
+	ResultPreview        string         `json:"result_preview,omitempty"`
+	IsError              bool           `json:"is_error,omitempty"`
+	Message              string         `json:"message,omitempty"`
+	Hash                 string         `json:"hash,omitempty"`
+	PrevHash             string         `json:"prev_hash,omitempty"`
+	ChainIndex           uint64         `json:"chain_index,omitempty"`
 }
 
 type Logger struct {
