@@ -757,8 +757,9 @@ func TestIsValidDay(t *testing.T) {
 			t.Errorf("isValidDay(%q) = false, want true", s)
 		}
 		// Also test case-insensitive variants
-		if !isValidDay(strings.Title(s)) {
-			t.Errorf("isValidDay(%q) = false, want true (case-insensitive)", strings.Title(s))
+		titleCase := strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+		if !isValidDay(titleCase) {
+			t.Errorf("isValidDay(%q) = false, want true (case-insensitive)", titleCase)
 		}
 	}
 	for _, s := range invalid {

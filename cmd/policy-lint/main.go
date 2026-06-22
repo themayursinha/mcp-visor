@@ -20,7 +20,7 @@ func main() {
 		lintCmd.PrintDefaults()
 	}
 
-	lintCmd.Parse(os.Args[2:])
+	_ = lintCmd.Parse(os.Args[2:])
 	args := lintCmd.Args()
 
 	if len(args) < 1 {

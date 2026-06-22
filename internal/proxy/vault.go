@@ -35,32 +35,3 @@ func (cfg Config) buildSigner() (signer.Signer, error) {
 	}
 	return s, nil
 }
-
-func (cfg Config) buildVerifier() (signer.Verifier, error) {
-	if cfg.Vault.Addr == "" {
-		return nil, nil
-	}
-
-	vc := vault.Config{
-		Addr:       cfg.Vault.Addr,
-		Token:      cfg.Vault.Token,
-		Namespace:  cfg.Vault.Namespace,
-		CACert:     cfg.Vault.CACert,
-		SkipVerify: cfg.Vault.SkipVerify,
-	}
-	client, err := vault.NewClient(vc)
-	if err != nil {
-		return nil, fmt.Errorf("vault client: %w", err)
-	}
-
-	keyName := cfg.Vault.KeyName
-	if keyName == "" {
-		keyName = "mcp-visor-approval"
-	}
-
-	v, err := vault.NewTransitVerifier(client, keyName)
-	if err != nil {
-		return nil, fmt.Errorf("vault transit verifier: %w", err)
-	}
-	return v, nil
-}

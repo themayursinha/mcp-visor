@@ -58,9 +58,9 @@ func TestDashboardAPIStatus(t *testing.T) {
 
 	srv := dashboard.NewServer(addr, &stubProvider{})
 
-	go srv.Start()
+	go func() { _ = srv.Start() }()
 	time.Sleep(50 * time.Millisecond)
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	resp, err := http.Get("http://" + addr + "/api/status")
 	if err != nil {
@@ -69,7 +69,9 @@ func TestDashboardAPIStatus(t *testing.T) {
 	defer resp.Body.Close()
 
 	var data map[string]any
-	json.NewDecoder(resp.Body).Decode(&data)
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatalf("decode /api/status: %v", err)
+	}
 
 	if data["session_count"] != float64(3) {
 		t.Errorf("expected 3 sessions, got %v", data["session_count"])
@@ -83,9 +85,9 @@ func TestDashboardAPIMetrics(t *testing.T) {
 
 	srv := dashboard.NewServer(addr, &stubProvider{})
 
-	go srv.Start()
+	go func() { _ = srv.Start() }()
 	time.Sleep(50 * time.Millisecond)
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	resp, err := http.Get("http://" + addr + "/api/metrics")
 	if err != nil {
@@ -94,7 +96,9 @@ func TestDashboardAPIMetrics(t *testing.T) {
 	defer resp.Body.Close()
 
 	var m dashboard.MetricsSnapshot
-	json.NewDecoder(resp.Body).Decode(&m)
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		t.Fatalf("decode /api/metrics: %v", err)
+	}
 
 	if m.MessagesProcessed != 100 {
 		t.Errorf("expected 100 processed, got %d", m.MessagesProcessed)
@@ -111,9 +115,9 @@ func TestDashboardAPICalls(t *testing.T) {
 
 	srv := dashboard.NewServer(addr, &stubProvider{})
 
-	go srv.Start()
+	go func() { _ = srv.Start() }()
 	time.Sleep(50 * time.Millisecond)
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	resp, err := http.Get("http://" + addr + "/api/calls")
 	if err != nil {
@@ -124,7 +128,9 @@ func TestDashboardAPICalls(t *testing.T) {
 	var data struct {
 		Calls []dashboard.CallInfo `json:"calls"`
 	}
-	json.NewDecoder(resp.Body).Decode(&data)
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatalf("decode /api/calls: %v", err)
+	}
 
 	if len(data.Calls) != 1 {
 		t.Errorf("expected 1 call, got %d", len(data.Calls))
@@ -138,9 +144,9 @@ func TestDashboardAPIPolicy(t *testing.T) {
 
 	srv := dashboard.NewServer(addr, &stubProvider{})
 
-	go srv.Start()
+	go func() { _ = srv.Start() }()
 	time.Sleep(50 * time.Millisecond)
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	resp, err := http.Get("http://" + addr + "/api/policy")
 	if err != nil {
@@ -149,7 +155,9 @@ func TestDashboardAPIPolicy(t *testing.T) {
 	defer resp.Body.Close()
 
 	var data map[string]any
-	json.NewDecoder(resp.Body).Decode(&data)
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatalf("decode /api/policy: %v", err)
+	}
 
 	if data["version"] != "1.0" {
 		t.Errorf("expected version 1.0, got %v", data["version"])
@@ -163,9 +171,9 @@ func TestDashboardHTML(t *testing.T) {
 
 	srv := dashboard.NewServer(addr, &stubProvider{})
 
-	go srv.Start()
+	go func() { _ = srv.Start() }()
 	time.Sleep(50 * time.Millisecond)
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	resp, err := http.Get("http://" + addr + "/")
 	if err != nil {

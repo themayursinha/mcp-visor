@@ -1118,13 +1118,6 @@ func (p *Proxy) SetLogLevel(level slog.Level) {
 	}))
 }
 
-func (p *Proxy) logTrace(direction trace.MessageDirection, method, jsonrpc string, id any, raw []byte, err error) {
-	if p.tracer == nil {
-		return
-	}
-	trace.LogEvent(p.tracer, direction, method, jsonrpc, id, raw, err)
-}
-
 func (p *Proxy) Tracer() trace.TraceLogger {
 	return p.tracer
 }
