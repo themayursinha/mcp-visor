@@ -20,7 +20,7 @@ func setupMockVault(t *testing.T, privKey ed25519.PrivateKey, pubKey ed25519.Pub
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/v1/sys/health", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"initialized": true, "sealed": false})
+		_ = json.NewEncoder(w).Encode(map[string]any{"initialized": true, "sealed": false})
 	})
 
 	mux.HandleFunc("/v1/transit/keys/test-key", func(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +33,7 @@ func setupMockVault(t *testing.T, privKey ed25519.PrivateKey, pubKey ed25519.Pub
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	mux.HandleFunc("/v1/transit/sign/test-key", func(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +48,7 @@ func setupMockVault(t *testing.T, privKey ed25519.PrivateKey, pubKey ed25519.Pub
 		resp := map[string]any{
 			"data": map[string]any{"signature": vaultSig},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	mux.HandleFunc("/v1/transit/verify/test-key", func(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +68,7 @@ func setupMockVault(t *testing.T, privKey ed25519.PrivateKey, pubKey ed25519.Pub
 		resp := map[string]any{
 			"data": map[string]any{"valid": valid},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
