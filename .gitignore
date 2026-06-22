@@ -3,3 +3,4 @@ audit-logs/
 coverage.out
 PLAN.md
 mcp-visor
+*.test
