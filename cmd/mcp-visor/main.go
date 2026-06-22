@@ -34,12 +34,17 @@ func main() {
 	serverName := serveCmd.String("server-name", "", "Logical server name used for policy matching (defaults to command path)")
 	serverArgs := &stringSlice{}
 	serveCmd.Var(serverArgs, "server-arg", "Argument for the MCP server command (repeatable)")
+	webhookURLs := &stringSlice{}
+	serveCmd.Var(webhookURLs, "webhook-url", "Webhook endpoint for audit/approval events (repeatable)")
+	siemTargets := &stringSlice{}
+	serveCmd.Var(siemTargets, "siem-target", "SIEM export target: file path, tcp:host:port, or udp:host:port (repeatable)")
 	sessionID := serveCmd.String("session-id", "", "Session identifier")
 	clientID := serveCmd.String("client-id", "", "Client identifier")
 	policyPath := serveCmd.String("policy", "", "Path to policy YAML file")
 	auditPath := serveCmd.String("audit-log", "", "Path to JSONL audit log file (default: stderr)")
 	approvalDir := serveCmd.String("approval-dir", "", "Directory for file-based approval workflow")
 	approvalCLI := serveCmd.Bool("approval-cli", false, "Use interactive CLI prompt for approval (stdin/stderr)")
+	approvalSigningKey := serveCmd.String("approval-signing-key", "", "Ed25519 private key PEM file for signing approval receipts (default: ephemeral key)")
 	demoMode := serveCmd.Bool("demo", false, "Start in demo mode with built-in mock server and permissive policy")
 	traceEnable := serveCmd.Bool("trace", false, "Enable MCP message tracing")
 	traceFormat := serveCmd.String("trace-format", "text", "Trace output format: text, jsonl, summary")
@@ -47,6 +52,12 @@ func main() {
 	serverURL := serveCmd.String("server-url", "", "Remote MCP server URL (enables HTTP+SSE transport, e.g. https://remote:8080)")
 	ssePath := serveCmd.String("sse-path", "", "SSE endpoint path (default /sse)")
 	insecureTLS := serveCmd.Bool("insecure-tls", false, "Skip TLS certificate verification for remote servers")
+	remoteCert := serveCmd.String("remote-cert", "", "Client certificate file for remote MCP mTLS")
+	remoteKey := serveCmd.String("remote-key", "", "Client private key file for remote MCP mTLS")
+	remoteCA := serveCmd.String("remote-ca", "", "CA certificate file for remote MCP TLS verification")
+	remoteServerName := serveCmd.String("remote-server-name", "", "Expected TLS server name for remote MCP server")
+	webhookHMACSecret := serveCmd.String("webhook-hmac-secret", "", "HMAC secret used to sign webhook payloads")
+	siemFormat := serveCmd.String("siem-format", "json", "SIEM export format: json, syslog-rfc5424, cef")
 	vaultAddr := serveCmd.String("vault-addr", "", "Vault server address (enables Vault Transit signing)")
 	vaultToken := serveCmd.String("vault-token", "", "Vault authentication token")
 	vaultKeyName := serveCmd.String("vault-key-name", "", "Vault Transit key name for approval signing")
@@ -152,20 +163,29 @@ func main() {
 		}
 
 		p := proxy.NewWithTracing(proxy.Config{
-			ServerCommand: *serverCmd,
-			ServerName:    *serverName,
-			ServerArgs:    *serverArgs,
-			ClientID:      *clientID,
-			SessionID:     *sessionID,
-			Policy:        pol,
-			Engine:        eng,
-			AuditLogPath:  *auditPath,
-			ApprovalDir:   *approvalDir,
-			ApprovalCLI:   *approvalCLI,
-			Tracing:       enabledTracing,
-			ServerURL:     *serverURL,
-			SSEPath:       *ssePath,
-			InsecureTLS:   *insecureTLS,
+			ServerCommand:      *serverCmd,
+			ServerName:         *serverName,
+			ServerArgs:         *serverArgs,
+			ClientID:           *clientID,
+			SessionID:          *sessionID,
+			Policy:             pol,
+			Engine:             eng,
+			AuditLogPath:       *auditPath,
+			ApprovalDir:        *approvalDir,
+			ApprovalCLI:        *approvalCLI,
+			ApprovalSigningKey: *approvalSigningKey,
+			Tracing:            enabledTracing,
+			ServerURL:          *serverURL,
+			SSEPath:            *ssePath,
+			InsecureTLS:        *insecureTLS,
+			RemoteCert:         *remoteCert,
+			RemoteKey:          *remoteKey,
+			RemoteCA:           *remoteCA,
+			RemoteServerName:   *remoteServerName,
+			WebhookURLs:        *webhookURLs,
+			WebhookHMACSecret:  *webhookHMACSecret,
+			SIEMTargets:        *siemTargets,
+			SIEMFormat:         *siemFormat,
 			Vault: proxy.VaultConfig{
 				Addr:       *vaultAddr,
 				Token:      *vaultToken,

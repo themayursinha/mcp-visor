@@ -251,10 +251,22 @@ Serve flags:
   -server-url string      Remote MCP server URL (enables HTTP+SSE transport)
   -sse-path string        SSE endpoint path (default: /sse)
   -insecure-tls           Skip TLS certificate verification for remote servers
+  -remote-cert string     Client certificate file for remote MCP mTLS
+  -remote-key string      Client private key file for remote MCP mTLS
+  -remote-ca string       CA certificate file for remote MCP TLS verification
+  -remote-server-name string
+                           Expected TLS server name for remote MCP server
   -policy string          Path to policy YAML file (default: built-in deny-all)
   -audit-log string       Path to JSONL audit log file (default: stderr)
+  -webhook-url value      Webhook endpoint for audit/approval events (repeatable)
+  -webhook-hmac-secret string
+                           HMAC secret used to sign webhook payloads
+  -siem-target value      SIEM export target: file path, tcp:host:port, or udp:host:port (repeatable)
+  -siem-format string     SIEM export format: json, syslog-rfc5424, cef (default: json)
   -approval-dir string    Directory for file-based approval workflow
   -approval-cli           Use interactive CLI prompt for approval
+  -approval-signing-key string
+                           Ed25519 private key PEM file for signing approval receipts (default: ephemeral key)
   -session-id string      Session identifier
   -client-id string       Client identifier
   -demo                   Start with built-in mock server and permissive policy
@@ -312,13 +324,13 @@ go run ./cmd/mcp-visor lint examples/policies/developer-medium.yaml
 - **Layered** — Redaction → Policy → Chain → Approval
 - **Observable** — Every decision logged with hash-chained integrity
 - **Minimal TCB** — Single Go binary, minimal dependencies
-- **Tamper-evident** — Signed decision receipts, chained audit hashes
+- **Tamper-evident** — Signed approval receipts, bound evidence hashes, chained audit hashes
 
 ## Limitations
 
-- Relies on host filesystem security for policy/audit file integrity (v2 adds hash-chaining)
+- Relies on host filesystem security for policy file integrity
 - Approval webhooks use HMAC; full mTLS between visor and control plane is optional
-- Session state is ephemeral (lost on restart); durable approval receipts survive restarts
+- Session state is ephemeral (lost on restart); signed approval receipts bind approved calls to request, policy, argument, and chain-context hashes
 - Single-agent, single-server deployment model
 - No web-based approval dashboard (n8n blueprint provides Slack/Teams path)
 

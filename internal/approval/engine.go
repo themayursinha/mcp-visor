@@ -65,7 +65,7 @@ func (e *Engine) RequestApproval(req Request) (bool, error) {
 	}
 
 	if !e.IsEnabled() {
-		return true, nil
+		return false, fmt.Errorf("approval backend is not configured")
 	}
 
 	if err := e.writeRequest(req); err != nil {

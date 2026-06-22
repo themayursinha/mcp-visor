@@ -1,6 +1,7 @@
 package receipt
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -28,6 +29,8 @@ type DecisionReceipt struct {
 	Expiry           int64  `json:"expiry"`
 	Nonce            string `json:"nonce"`
 	KeyID            string `json:"signature_key_id"`
+	Algorithm        string `json:"signature_algorithm,omitempty"`
+	PublicKey        string `json:"public_key,omitempty"`
 	Signature        string `json:"signature,omitempty"`
 }
 
@@ -35,6 +38,19 @@ type KeyPair struct {
 	PublicKey  ed25519.PublicKey
 	PrivateKey ed25519.PrivateKey
 	KeyID      string
+}
+
+type SigningKey interface {
+	Sign(data []byte) ([]byte, error)
+	PublicKey() crypto.PublicKey
+	KeyID() string
+	Algorithm() string
+}
+
+type VerifyingKey interface {
+	Verify(data []byte, signature []byte) error
+	PublicKey() crypto.PublicKey
+	KeyID() string
 }
 
 func GenerateKeyPair() (*KeyPair, error) {
@@ -89,10 +105,31 @@ func NewReceipt(executionID, sessionID, agentID, server, tool, originalRequest, 
 
 func (r *DecisionReceipt) Sign(key *KeyPair) error {
 	r.KeyID = key.KeyID
+	r.Algorithm = "ed25519"
+	r.PublicKey = hex.EncodeToString(key.PublicKey)
 	r.Signature = ""
 
 	payload := r.signingPayload()
 	sig := ed25519.Sign(key.PrivateKey, payload)
+	r.Signature = hex.EncodeToString(sig)
+	return nil
+}
+
+func (r *DecisionReceipt) SignWith(s SigningKey) error {
+	if s == nil {
+		return fmt.Errorf("signer is nil")
+	}
+	r.KeyID = s.KeyID()
+	r.Algorithm = s.Algorithm()
+	r.Signature = ""
+	if pub, ok := s.PublicKey().(ed25519.PublicKey); ok {
+		r.PublicKey = hex.EncodeToString(pub)
+	}
+
+	sig, err := s.Sign(r.signingPayload())
+	if err != nil {
+		return fmt.Errorf("sign receipt: %w", err)
+	}
 	r.Signature = hex.EncodeToString(sig)
 	return nil
 }
@@ -110,6 +147,20 @@ func (r *DecisionReceipt) Verify(pubKey ed25519.PublicKey) error {
 		return fmt.Errorf("signature verification failed")
 	}
 	return nil
+}
+
+func (r *DecisionReceipt) VerifyWith(v VerifyingKey) error {
+	if v == nil {
+		return fmt.Errorf("verifier is nil")
+	}
+	if r.Signature == "" {
+		return fmt.Errorf("receipt is not signed")
+	}
+	sig, err := hex.DecodeString(r.Signature)
+	if err != nil {
+		return fmt.Errorf("decode signature: %w", err)
+	}
+	return v.Verify(r.signingPayload(), sig)
 }
 
 func (r *DecisionReceipt) IsExpired() bool {

@@ -308,6 +308,11 @@ servers:
 	if !eng.EvaluateApproval("test-server", req) {
 		t.Error("slack_send should require approval")
 	}
+
+	decision := eng.Evaluate("test-server", req)
+	if decision.Action != policy.ActionRequireApproval {
+		t.Errorf("approval_required tool should return require_approval, got %s", decision.Action)
+	}
 }
 
 func TestRegistryLookups(t *testing.T) {

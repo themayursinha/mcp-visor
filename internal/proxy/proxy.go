@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,39 +17,56 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
-	"github.com/themayursinha/mcp-visor/internal/trace"
+	"github.com/themayursinha/mcp-visor/internal/receipt"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
+	"github.com/themayursinha/mcp-visor/internal/siem"
+	"github.com/themayursinha/mcp-visor/internal/signer"
+	"github.com/themayursinha/mcp-visor/internal/trace"
+	"github.com/themayursinha/mcp-visor/internal/webhook"
 )
 
 type Proxy struct {
-	cfg       Config
-	session   *Session
-	logger    *slog.Logger
-	engine    *policy.Engine
-	audit     *audit.Logger
-	redactor  *redaction.Engine
-	approval  *approval.Engine
-	tracer    trace.TraceLogger
-	tracing   TracingConfig
-	metrics   ProxyMetrics
+	cfg            Config
+	session        *Session
+	logger         *slog.Logger
+	engine         *policy.Engine
+	audit          *audit.Logger
+	redactor       *redaction.Engine
+	approval       *approval.Engine
+	tracer         trace.TraceLogger
+	tracing        TracingConfig
+	metrics        ProxyMetrics
+	webhook        *webhook.Emitter
+	siem           *siem.Exporter
+	approvalSigner signer.Signer
 }
 
 type Config struct {
-	ServerCommand string
-	ServerName    string
-	ServerArgs    []string
-	ClientID      string
-	SessionID     string
-	Policy        *policy.Policy
-	Engine        *policy.Engine
-	AuditLogPath  string
-	ApprovalDir   string
-	ApprovalCLI   bool
-	Tracing       TracingConfig
-	ServerURL     string
-	SSEPath       string
-	InsecureTLS   bool
-	Vault         VaultConfig
+	ServerCommand      string
+	ServerName         string
+	ServerArgs         []string
+	ClientID           string
+	SessionID          string
+	Policy             *policy.Policy
+	Engine             *policy.Engine
+	AuditLogPath       string
+	ApprovalDir        string
+	ApprovalCLI        bool
+	ApprovalSigningKey string
+	ApprovalSigner     signer.Signer
+	Tracing            TracingConfig
+	ServerURL          string
+	SSEPath            string
+	InsecureTLS        bool
+	RemoteCert         string
+	RemoteKey          string
+	RemoteCA           string
+	RemoteServerName   string
+	WebhookURLs        []string
+	WebhookHMACSecret  string
+	SIEMTargets        []string
+	SIEMFormat         string
+	Vault              VaultConfig
 }
 
 type VaultConfig struct {
@@ -57,6 +76,22 @@ type VaultConfig struct {
 	Namespace  string
 	CACert     string
 	SkipVerify bool
+}
+
+type approvalOutcome struct {
+	Approved bool
+	Reason   string
+	Receipt  *receipt.DecisionReceipt
+}
+
+type approvalEvidence struct {
+	RequestHash          string
+	RedactedArgumentHash string
+	PolicyHash           string
+	ChainContextHash     string
+	RedactedArgsJSON     string
+	PolicyJSON           string
+	ChainContextJSON     string
 }
 
 func New(cfg Config) *Proxy {
@@ -89,18 +124,24 @@ func New(cfg Config) *Proxy {
 	} else {
 		appr = approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
 	}
+	wh := cfg.buildWebhookEmitter()
+	siemExp := cfg.buildSIEMExporter()
+	approvalSigner := cfg.buildApprovalSigner()
 
 	return &Proxy{
-		cfg:      cfg,
-		session:  NewSession(cfg.SessionID, cfg.ClientID),
+		cfg:     cfg,
+		session: NewSession(cfg.SessionID, cfg.ClientID),
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
-		engine:   eng,
-		audit:    al,
-		redactor: red,
-		approval: appr,
-		tracing:  cfg.Tracing,
+		engine:         eng,
+		audit:          al,
+		redactor:       red,
+		approval:       appr,
+		tracing:        cfg.Tracing,
+		webhook:        wh,
+		siem:           siemExp,
+		approvalSigner: approvalSigner,
 	}
 }
 
@@ -134,18 +175,24 @@ func NewWithTracing(cfg Config) *Proxy {
 	} else {
 		appr = approval.MustEngine(cfg.ApprovalDir, time.Duration(p.Settings.ApprovalTimeoutSecs)*time.Second)
 	}
+	wh := cfg.buildWebhookEmitter()
+	siemExp := cfg.buildSIEMExporter()
+	approvalSigner := cfg.buildApprovalSigner()
 
 	proxy := &Proxy{
-		cfg:      cfg,
-		session:  NewSession(cfg.SessionID, cfg.ClientID),
+		cfg:     cfg,
+		session: NewSession(cfg.SessionID, cfg.ClientID),
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
-		engine:   eng,
-		audit:    al,
-		redactor: red,
-		approval: appr,
-		tracing:  cfg.Tracing,
+		engine:         eng,
+		audit:          al,
+		redactor:       red,
+		approval:       appr,
+		tracing:        cfg.Tracing,
+		webhook:        wh,
+		siem:           siemExp,
+		approvalSigner: approvalSigner,
 	}
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
@@ -176,7 +223,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 	}
 	defer func() {
 		_ = serverCmd.Wait()
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType: audit.EventSessionEnded,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -184,11 +231,12 @@ func (p *Proxy) Run(ctx context.Context) error {
 			Message:   "session ended",
 		})
 		_ = p.audit.Close()
+		p.closeEventSinks()
 		p.engine.Close()
 	}()
 	p.logger.Info("mcp server started", "command", p.cfg.ServerCommand)
 
-	p.audit.Log(audit.Event{
+	p.logAudit(audit.Event{
 		EventType: audit.EventSessionStarted,
 		SessionID: p.session.ID,
 		AgentID:   p.cfg.ClientID,
@@ -339,11 +387,24 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 
 	var callReq mcp.ToolsCallRequest
 	if err := json.Unmarshal(req.Params, &callReq); err != nil {
-		return raw, "forward"
+		errResp := mcp.NewErrorResponse(req.ID, -32000, "invalid tools/call parameters")
+		_ = client.EncodeResponse(errResp)
+		p.logDenied(serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerCommand), "", nil, "invalid tools/call parameters", policy.RiskUnknown)
+		return raw, "denied"
 	}
 
 	serverName := p.cfg.ServerName
+	originalRaw := raw
 	argsMap := extractArgs(callReq.Arguments)
+	p.metrics.IncrementProcessed()
+
+	if decision := p.evaluateRuntimeLimits(callReq); decision.Action == policy.ActionDeny {
+		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
+		_ = client.EncodeResponse(errResp)
+		p.metrics.IncrementDenied()
+		p.logDenied(serverName, callReq.Name, nil, decision.Reason, p.engine.GetRiskLevel(serverName, callReq.Name))
+		return raw, "denied"
+	}
 
 	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
 	if redactionResult.Redacted {
@@ -353,7 +414,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 			"fields", redactionResult.RedactedFields,
 			"session", p.session.ID,
 		)
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -375,7 +436,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
 		_ = client.EncodeResponse(errResp)
 
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -397,15 +458,21 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 
 	decision := p.engine.Evaluate(serverName, callReq)
 	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
+	var chainContext []string
 
 	if decision.Action != policy.ActionDeny {
-		chainResult := p.checkChain(serverName, callReq, redactedArgs, risk)
-		if chainResult == "denied" {
+		chainDecision, previousCalls := p.checkChain(serverName, callReq, redactedArgs, risk)
+		if chainDecision.Action == policy.ActionDeny {
 			p.metrics.IncrementDenied()
 			p.metrics.IncrementChains()
 			errResp := mcp.NewErrorResponse(req.ID, -32000, "chain rule: tool sequence matches dangerous pattern")
 			_ = client.EncodeResponse(errResp)
 			return raw, "denied"
+		}
+		if chainDecision.Action == policy.ActionRequireApproval {
+			p.metrics.IncrementChains()
+			decision = chainDecision
+			chainContext = previousCalls
 		}
 	}
 
@@ -415,7 +482,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
 		_ = client.EncodeResponse(errResp)
 
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -435,46 +502,14 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
-		approvalReq := approval.Request{
-			ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
-			Tool:      callReq.Name,
-			Server:    serverName,
-			Arguments: redactedArgs,
-			Reason:    decision.Reason,
-			RiskLevel: string(risk),
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-		}
-
-		p.logger.Warn("approval requested",
-			"tool", callReq.Name,
-			"id", approvalReq.ID,
-			"session", p.session.ID,
-		)
-
-		approved, err := p.approval.RequestApproval(approvalReq)
-		if err != nil || !approved {
-			p.audit.Log(audit.Event{
-				EventType: audit.EventToolDenied,
-				SessionID: p.session.ID,
-				AgentID:   p.cfg.ClientID,
-				Server:    serverName,
-				Tool:      callReq.Name,
-				Arguments: redactedArgs,
-				Decision:  string(policy.ActionDeny),
-				Reason:    fmt.Sprintf("approval denied: %v", err),
-				RiskLevel: string(risk),
-			})
-			p.logger.Warn("approval denied",
-				"tool", callReq.Name,
-				"session", p.session.ID,
-			)
-			errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("execution denied: approval not granted (%v)", err))
+		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext)
+		if !outcome.Approved {
+			errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason))
 			_ = client.EncodeResponse(errResp)
 			return raw, "denied"
 		}
 
-		p.audit.Log(audit.Event{
+		allowEvent := audit.Event{
 			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -484,14 +519,15 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 			Decision:  string(policy.ActionAllow),
 			Reason:    "approved by human operator",
 			RiskLevel: string(risk),
-		})
+		}
+		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
+		p.logAudit(allowEvent)
 
 		p.logger.Info("approval granted",
 			"tool", callReq.Name,
 			"session", p.session.ID,
 		)
 		p.metrics.IncrementApproved()
-		p.metrics.IncrementApprovals()
 		return raw, "forward"
 
 	case policy.ActionAllow:
@@ -504,7 +540,7 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 	}
 }
 
-func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, risk policy.RiskLevel) string {
+func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, risk policy.RiskLevel) (policy.Decision, []string) {
 	windowSize := p.engine.Policy().Settings.ChainWindowSize
 	if windowSize == 0 {
 		windowSize = 10
@@ -513,7 +549,7 @@ func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, reda
 	chainDecision := p.engine.EvaluateChain(serverName, callReq, previousCalls)
 
 	if chainDecision.Action == policy.ActionDeny {
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType:    audit.EventToolChainDetected,
 			SessionID:    p.session.ID,
 			AgentID:      p.cfg.ClientID,
@@ -532,11 +568,11 @@ func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, reda
 			"previous_calls", previousCalls,
 			"session", p.session.ID,
 		)
-		return "denied"
+		return chainDecision, previousCalls
 	}
 
 	if chainDecision.Action == policy.ActionRequireApproval {
-		p.audit.Log(audit.Event{
+		p.logAudit(audit.Event{
 			EventType:    audit.EventToolChainDetected,
 			SessionID:    p.session.ID,
 			AgentID:      p.cfg.ClientID,
@@ -555,9 +591,10 @@ func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, reda
 			"previous_calls", previousCalls,
 			"session", p.session.ID,
 		)
+		return chainDecision, previousCalls
 	}
 
-	return "ok"
+	return policy.Decision{Action: policy.ActionAllow, Reason: "no chain rule matched"}, nil
 }
 
 func (p *Proxy) relayServerToClient(ctx context.Context, server, client *mcp.Parser) error {
@@ -603,9 +640,13 @@ func (p *Proxy) redactServerResponse(raw json.RawMessage) json.RawMessage {
 	}
 
 	modified := false
+	maxOutput := p.engine.Policy().Settings.MaxOutputSizeBytes
 	for i, content := range result.Content {
 		if content.Text != "" {
 			redacted := p.redactor.RedactOutput(content.Text)
+			if maxOutput > 0 && len(redacted) > maxOutput {
+				redacted = redacted[:maxOutput] + fmt.Sprintf("\n[TRUNCATED: output exceeded %d bytes]", maxOutput)
+			}
 			if redacted != content.Text {
 				result.Content[i].Text = redacted
 				modified = true
@@ -708,7 +749,7 @@ func (p *Proxy) rewriteArgs(raw json.RawMessage, redactedArgs map[string]any) (j
 	}
 
 	var callReq struct {
-		Name      string         `json:"name"`
+		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments,omitempty"`
 	}
 	if err := json.Unmarshal(req.Params, &callReq); err != nil {
@@ -792,6 +833,283 @@ func (p *Proxy) initTracer(cfg TracingConfig) trace.TraceLogger {
 
 func (p *Proxy) Metrics() *ProxyMetrics {
 	return &p.metrics
+}
+
+func (p *Proxy) evaluateRuntimeLimits(callReq mcp.ToolsCallRequest) policy.Decision {
+	settings := p.engine.Policy().Settings
+
+	if settings.MaxArgumentSizeBytes > 0 && len(callReq.Arguments) > settings.MaxArgumentSizeBytes {
+		return policy.Decision{
+			Action: policy.ActionDeny,
+			Reason: fmt.Sprintf("argument size %d exceeds max %d bytes", len(callReq.Arguments), settings.MaxArgumentSizeBytes),
+		}
+	}
+
+	if settings.SessionMaxTools > 0 && p.session.ToolCallCount() >= settings.SessionMaxTools {
+		return policy.Decision{
+			Action: policy.ActionDeny,
+			Reason: fmt.Sprintf("session tool limit %d exceeded", settings.SessionMaxTools),
+		}
+	}
+
+	if settings.SessionTimeoutSecs > 0 && time.Since(p.session.CreatedAt) > time.Duration(settings.SessionTimeoutSecs)*time.Second {
+		return policy.Decision{
+			Action: policy.ActionDeny,
+			Reason: fmt.Sprintf("session timeout %d seconds exceeded", settings.SessionTimeoutSecs),
+		}
+	}
+
+	return policy.Decision{Action: policy.ActionAllow, Reason: "runtime limits passed"}
+}
+
+func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel) {
+	p.logAudit(audit.Event{
+		EventType: audit.EventToolDenied,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    serverName,
+		Tool:      toolName,
+		Arguments: args,
+		Decision:  string(policy.ActionDeny),
+		Reason:    reason,
+		RiskLevel: string(risk),
+	})
+}
+
+func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string) approvalOutcome {
+	approvalReq := approval.Request{
+		ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
+		Tool:      callReq.Name,
+		Server:    serverName,
+		Arguments: redactedArgs,
+		Reason:    reason,
+		RiskLevel: string(risk),
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+	}
+	evidence := p.buildApprovalEvidence(raw, redactedArgs, chainContext)
+
+	p.logger.Warn("approval requested",
+		"tool", callReq.Name,
+		"id", approvalReq.ID,
+		"session", p.session.ID,
+	)
+
+	p.metrics.IncrementApprovals()
+	p.logAudit(audit.Event{
+		EventType:            audit.EventToolApprovalRequired,
+		SessionID:            p.session.ID,
+		AgentID:              p.cfg.ClientID,
+		Server:               serverName,
+		Tool:                 callReq.Name,
+		Arguments:            redactedArgs,
+		Decision:             string(policy.ActionRequireApproval),
+		Reason:               reason,
+		RiskLevel:            string(risk),
+		ChainContext:         chainContext,
+		RequestHash:          evidence.RequestHash,
+		RedactedArgumentHash: evidence.RedactedArgumentHash,
+		PolicyHash:           evidence.PolicyHash,
+		ChainContextHash:     evidence.ChainContextHash,
+	})
+
+	approved, err := p.approval.RequestApproval(approvalReq)
+	if err != nil || !approved {
+		denyReason := fmt.Sprintf("approval denied: %v", err)
+		p.logAudit(audit.Event{
+			EventType:            audit.EventToolDenied,
+			SessionID:            p.session.ID,
+			AgentID:              p.cfg.ClientID,
+			Server:               serverName,
+			Tool:                 callReq.Name,
+			Arguments:            redactedArgs,
+			Decision:             string(policy.ActionDeny),
+			Reason:               denyReason,
+			RiskLevel:            string(risk),
+			ChainContext:         chainContext,
+			RequestHash:          evidence.RequestHash,
+			RedactedArgumentHash: evidence.RedactedArgumentHash,
+			PolicyHash:           evidence.PolicyHash,
+			ChainContextHash:     evidence.ChainContextHash,
+		})
+		p.logger.Warn("approval denied", "tool", callReq.Name, "session", p.session.ID)
+		return approvalOutcome{Approved: false, Reason: denyReason}
+	}
+
+	rec, err := receipt.NewReceipt(
+		approvalReq.ID,
+		p.session.ID,
+		p.cfg.ClientID,
+		serverName,
+		callReq.Name,
+		string(raw),
+		evidence.RedactedArgsJSON,
+		p.engine.Policy().Version,
+		evidence.PolicyJSON,
+		evidence.ChainContextJSON,
+		reason,
+		string(risk),
+		"human-operator",
+		"approve",
+		time.Duration(p.engine.Policy().Settings.ApprovalTimeoutSecs)*time.Second,
+	)
+	if err != nil {
+		errReason := fmt.Sprintf("approval receipt creation failed: %v", err)
+		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		return approvalOutcome{Approved: false, Reason: errReason}
+	}
+	if p.approvalSigner == nil {
+		errReason := "approval receipt signing failed: signer is not configured"
+		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		return approvalOutcome{Approved: false, Reason: errReason}
+	}
+	if err := rec.SignWith(p.approvalSigner); err != nil {
+		errReason := fmt.Sprintf("approval receipt signing failed: %v", err)
+		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		return approvalOutcome{Approved: false, Reason: errReason}
+	}
+
+	return approvalOutcome{Approved: true, Receipt: rec}
+}
+
+func (p *Proxy) buildApprovalEvidence(raw json.RawMessage, redactedArgs map[string]any, chainContext []string) approvalEvidence {
+	argsJSON := marshalEvidence(redactedArgs)
+	policyJSON := marshalEvidence(p.engine.Policy())
+	chainJSON := marshalEvidence(chainContext)
+	return approvalEvidence{
+		RequestHash:          sha256Hex(raw),
+		RedactedArgumentHash: sha256Hex([]byte(argsJSON)),
+		PolicyHash:           sha256Hex([]byte(policyJSON)),
+		ChainContextHash:     sha256Hex([]byte(chainJSON)),
+		RedactedArgsJSON:     argsJSON,
+		PolicyJSON:           policyJSON,
+		ChainContextJSON:     chainJSON,
+	}
+}
+
+func (p *Proxy) attachReceiptEvidence(event *audit.Event, rec *receipt.DecisionReceipt) {
+	if rec == nil {
+		return
+	}
+	event.RequestHash = rec.OriginalRequest
+	event.RedactedArgumentHash = rec.RedactedArgs
+	event.PolicyHash = rec.PolicyHash
+	event.ChainContextHash = rec.ChainContextHash
+	data, err := rec.Marshal()
+	if err != nil {
+		return
+	}
+	event.ApprovalReceiptHash = sha256Hex(data)
+	var recMap map[string]any
+	if err := json.Unmarshal(data, &recMap); err == nil {
+		event.ApprovalReceipt = recMap
+	}
+}
+
+func (p *Proxy) logAudit(event audit.Event) {
+	p.audit.Log(event)
+	if p.webhook != nil {
+		p.webhook.Emit(event)
+	}
+	if p.siem != nil {
+		if err := p.siem.Export(event); err != nil {
+			p.logger.Warn("siem export failed", "error", err)
+		}
+	}
+}
+
+func marshalEvidence(v any) string {
+	if v == nil {
+		return "null"
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(data)
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func (p *Proxy) closeEventSinks() {
+	if p.webhook != nil {
+		p.webhook.Close()
+	}
+	if p.siem != nil {
+		_ = p.siem.Close()
+	}
+}
+
+func (cfg Config) buildWebhookEmitter() *webhook.Emitter {
+	if len(cfg.WebhookURLs) == 0 {
+		return nil
+	}
+	return webhook.NewEmitter(webhook.Config{
+		URLs:       cfg.WebhookURLs,
+		HMACSecret: cfg.WebhookHMACSecret,
+	})
+}
+
+func (cfg Config) buildSIEMExporter() *siem.Exporter {
+	if len(cfg.SIEMTargets) == 0 {
+		return nil
+	}
+	format := siem.FormatJSON
+	switch cfg.SIEMFormat {
+	case string(siem.FormatSyslog5424):
+		format = siem.FormatSyslog5424
+	case string(siem.FormatCEF):
+		format = siem.FormatCEF
+	case "", string(siem.FormatJSON):
+		format = siem.FormatJSON
+	default:
+		fmt.Fprintf(os.Stderr, "siem exporter: unknown format %q, using json\n", cfg.SIEMFormat)
+	}
+	return siem.MustExporter(siem.Config{
+		Format:  format,
+		Targets: cfg.SIEMTargets,
+	})
+}
+
+func (cfg Config) buildApprovalSigner() signer.Signer {
+	if cfg.ApprovalSigner != nil {
+		return cfg.ApprovalSigner
+	}
+
+	if cfg.Vault.Addr != "" {
+		s, err := cfg.buildSigner()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "approval signer: %v\n", err)
+			return nil
+		}
+		return s
+	}
+
+	if cfg.ApprovalSigningKey != "" {
+		s, err := signer.LoadApprovalSigner(cfg.ApprovalSigningKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "approval signer: %v\n", err)
+			return nil
+		}
+		return s
+	}
+
+	s, err := signer.NewApprovalSigner()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "approval signer: %v\n", err)
+		return nil
+	}
+	return s
+}
+
+func serverNameOrDefault(serverName, fallback string) string {
+	if serverName != "" {
+		return serverName
+	}
+	return fallback
 }
 
 func (p *Proxy) SetLogLevel(level slog.Level) {
