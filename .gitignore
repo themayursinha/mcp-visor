@@ -1,3 +1,10 @@
+.env
+.env.*
+*.pem
+*.key
+secrets/
+credentials.json
+
 *.log
 audit-logs/
 coverage.out

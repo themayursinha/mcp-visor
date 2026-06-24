@@ -17,22 +17,33 @@ jobs:
       matrix:
         go-version: ["1.24"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.0.0
         with:
           go-version: ${{ matrix.go-version }}
       - run: go build ./...
       - run: go test ./... -count=1 -timeout 120s -coverprofile=coverage.out
 
+  vulncheck:
+    name: Vulnerability scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.0.0
+        with:
+          go-version: "1.24"
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.0.0
         with:
           go-version: "1.24"
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84  # v6.5.2
         with:
-          version: latest
+          version: v1.64.8
           args: --timeout=5m
