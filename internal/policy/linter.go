@@ -34,8 +34,8 @@ func Lint(p *Policy) LintResult {
 			Type:  ViolationTypeInfo,
 			Field: "name",
 		}
-		switch {
-		case srv.Name == "":
+		switch srv.Name {
+		case "":
 			lv.Message = "server name is empty"
 			lv.Severity = SeverityError
 			res.Violations = append(res.Violations, lv)
@@ -580,10 +580,10 @@ func (r *LintResult) ToJSON() ([]byte, error) {
 func (r *LintResult) ToText() string {
 	var sb strings.Builder
 	if r.Policy != "" {
-		sb.WriteString(fmt.Sprintf("Policy: %s\n", r.Policy))
+		fmt.Fprintf(&sb, "Policy: %s\n", r.Policy)
 	}
 	if r.FilePath != "" {
-		sb.WriteString(fmt.Sprintf("File: %s\n", r.FilePath))
+		fmt.Fprintf(&sb, "File: %s\n", r.FilePath)
 	}
 	if r.Summary.Total == 0 {
 		sb.WriteString("No issues found.\n")
@@ -591,11 +591,11 @@ func (r *LintResult) ToText() string {
 	}
 
 	if r.Summary.Errors > 0 {
-		sb.WriteString(fmt.Sprintf("ERRORS: %d  WARNINGS: %d  INFO: %d\n\n",
-			r.Summary.Errors, r.Summary.Warnings, r.Summary.Info))
+		fmt.Fprintf(&sb, "ERRORS: %d  WARNINGS: %d  INFO: %d\n\n",
+			r.Summary.Errors, r.Summary.Warnings, r.Summary.Info)
 	} else {
-		sb.WriteString(fmt.Sprintf("Warnings: %d  Info: %d\n\n",
-			r.Summary.Warnings, r.Summary.Info))
+		fmt.Fprintf(&sb, "Warnings: %d  Info: %d\n\n",
+			r.Summary.Warnings, r.Summary.Info)
 	}
 
 	for _, v := range r.Violations {
@@ -606,8 +606,8 @@ func (r *LintResult) ToText() string {
 		case SeverityWarning:
 			prefix = "[WARN]  "
 		}
-		sb.WriteString(fmt.Sprintf("%s%s\n", prefix, v.Message))
-		sb.WriteString(fmt.Sprintf("        path=%s  field=%s\n", v.Path, v.Field))
+		fmt.Fprintf(&sb, "%s%s\n", prefix, v.Message)
+		fmt.Fprintf(&sb, "        path=%s  field=%s\n", v.Path, v.Field)
 	}
 	return sb.String()
 }

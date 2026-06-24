@@ -348,7 +348,6 @@ func demoAuditLog(auditLog string) {
 type mcpContext struct {
 	w *bufio.Writer
 	r *bufio.Reader
-	id int
 }
 
 func (c *mcpContext) send(msg map[string]any) {
