@@ -92,16 +92,16 @@ func (s *SummaryLogger) Log(e *Event) {
 
 func (s *SummaryLogger) Report() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("messages: %d\n", s.messages))
-	b.WriteString(fmt.Sprintf("bytes: %d\n", s.bytesIn))
-	b.WriteString(fmt.Sprintf("errors: %d\n", s.errors))
+	fmt.Fprintf(&b, "messages: %d\n", s.messages)
+	fmt.Fprintf(&b, "bytes: %d\n", s.bytesIn)
+	fmt.Fprintf(&b, "errors: %d\n", s.errors)
 	b.WriteString("by direction:\n")
 	for dir, count := range s.byDir {
-		b.WriteString(fmt.Sprintf("  %s: %d\n", dir, count))
+		fmt.Fprintf(&b, "  %s: %d\n", dir, count)
 	}
 	b.WriteString("by method:\n")
 	for method, count := range s.byMethod {
-		b.WriteString(fmt.Sprintf("  %s: %d\n", method, count))
+		fmt.Fprintf(&b, "  %s: %d\n", method, count)
 	}
 	return b.String()
 }
