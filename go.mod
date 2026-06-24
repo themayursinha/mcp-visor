@@ -1,6 +1,6 @@
 module github.com/themayursinha/mcp-visor
 
-go 1.26.0
+go 1.26.4
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1
