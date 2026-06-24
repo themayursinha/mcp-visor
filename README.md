@@ -10,9 +10,11 @@ Runtime Policy Enforcement & Audit Control Plane for MCP Tool Execution
 
 ## Problem
 
-AI agents are connected to enterprise tools through MCP. They can read files, query databases, send Slack messages, execute shell commands, and modify cloud infrastructure. But AI agents are probabilistic systems vulnerable to prompt injection. Current MCP architecture has no enforcement point — if an agent calls a tool, it executes.
+Autonomous AI agents are increasingly granted execution authority over critical infrastructure via MCP. They can modify cloud states, execute raw shell commands, manipulate databases, and interact with systemic APIs. However, AI agents are non-deterministic, probabilistic engines highly vulnerable to adversarial coercion (prompt injection) and execution drift. 
 
-**MCP Visor** sits between the agent and the tools, enforcing deterministic policy **before** execution. It does not use an LLM to make decisions. Prompt injection cannot bypass it.
+Current MCP architecture operates with unbounded trust—if an agent hallucinates or is coerced into calling a destructive tool, it executes.
+
+**MCP Visor** is a fail-closed runtime containment primitive. It sits directly between the agent and the system interface, enforcing mathematically deterministic policy **before** payload execution. It does not use an LLM to make decisions. It cannot be bypassed via prompt injection.
 
 ## How It Works
 
