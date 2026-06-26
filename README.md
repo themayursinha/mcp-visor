@@ -10,9 +10,13 @@ Runtime Policy Enforcement & Audit Control Plane for MCP Tool Execution
 
 ## Problem
 
-AI agents are connected to enterprise tools through MCP. They can read files, query databases, send Slack messages, execute shell commands, and modify cloud infrastructure. But AI agents are probabilistic systems vulnerable to prompt injection. Current MCP architecture has no enforcement point — if an agent calls a tool, it executes.
+AI agents are being connected to production systems through MCP — filesystems, databases, Slack, GitHub, cloud APIs. **~492 MCP servers** have been found exposed on the internet with zero authentication. Tool poisoning — where a malicious MCP server hides instructions inside tool descriptions — is the #1 attack vector, documented by OWASP, NIST, and multiple academic papers.
 
-**MCP Visor** sits between the agent and the tools, enforcing deterministic policy **before** execution. It does not use an LLM to make decisions. Prompt injection cannot bypass it.
+Current MCP architecture has **no enforcement point.** If an agent calls a tool, it executes. Prompt-based guardrails are provably unreliable — the "Prompts Don't Protect" paper demonstrated 0% unauthorized invocation prevention.
+
+**MCP Visor** is the deterministic control plane that sits between the agent and the tools. It evaluates every `tools/call` against configurable policy **before execution reaches the server.** It does not use an LLM to make decisions. Prompt injection cannot bypass it.
+
+> "The model is persuadable. Policy enforcement shouldn't be."
 
 ## How It Works
 
@@ -32,23 +36,38 @@ Every `tools/call` is intercepted and evaluated:
 ## Quick Start
 
 ```bash
-git clone https://github.com/themayursinha/mcp-visor
-cd mcp-visor
+# Install
+go install github.com/themayursinha/mcp-visor/cmd/mcp-visor@latest
 
-# Start the proxy with a built-in demo server
-go run ./examples/demo-runner/
+# Run with a demo server (60 seconds to first enforcement)
+mcp-visor serve --demo
 
-# Or proxy a real MCP server with a policy file:
-go run ./cmd/mcp-visor serve \
-  -server ./my-mcp-server \
-  -policy examples/policies/developer-medium.yaml
-
-# With audit logging:
-go run ./cmd/mcp-visor serve \
-  -server ./my-mcp-server \
-  -policy examples/policies/developer-medium.yaml \
-  -audit-log audit.jsonl
+# Or proxy a real MCP server:
+mcp-visor serve -server ./my-mcp-server -policy policy.yaml
 ```
+
+## Why MCP Visor vs Alternatives
+
+| | MCP Visor | Runlayer | Microsoft Toolkit | Obot AI |
+|---|-----------|----------|-------------------|--------|
+| **Enforcement** | Deterministic (policy engine) | LLM-as-a-judge | Deterministic (policy engine) | LLM-based scanning |
+| **MCP-aware** | ✅ Protocol-native proxy | ✅ Gateway | ✅ Toolkit | ✅ |
+| **Self-hosted** | ✅ Single Go binary | ❌ SaaS only | ✅ TypeScript | ❌ SaaS |
+| **Open-source** | ✅ MIT | ❌ Proprietary | ✅ MIT | ❌ Proprietary |
+| **Chain detection** | ✅ Sliding window | ❌ | ✅ | ❌ |
+| **Secret redaction** | ✅ In/out | ✅ | ❌ | ❌ |
+| **SIEM export** | ✅ Syslog/CEF/JSON | ✅ | ❌ | ❌ |
+| **Vault/KMS signing** | ✅ HashiCorp Vault | ❌ | ❌ | ❌ |
+| **Webhook approvals** | ✅ Slack/Teams/n8n | ✅ | ✅ HITL quorum | ❌ |
+
+**MCP Visor's unique wedge:** It's the only open-source, deterministic, MCP-native enforcement proxy that ships as a single binary, supports Vault-backed cryptographic signing, and exports to enterprise SIEM — without requiring a SaaS subscription.
+
+## Who Is This For
+
+- **Security teams** hardening AI agent deployments — add an enforcement layer between agents and tools
+- **Platform engineers** running MCP infrastructure — audit, policy, and governance for tool access
+- **Compliance officers** needing agent audit trails — JSONL logs with hash-chained integrity + SIEM export
+- **MCP developers** who want to test their servers safely — proxy with deny-by-default, redact secrets
 
 ## Architecture
 
