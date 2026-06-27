@@ -13,9 +13,9 @@ import (
 
 type stubProvider struct{}
 
-func (s *stubProvider) SessionCount() int                             { return 3 }
-func (s *stubProvider) ToolCallCount() int                             { return 42 }
-func (s *stubProvider) Uptime() time.Duration                          { return 5 * time.Minute }
+func (s *stubProvider) SessionCount() int     { return 3 }
+func (s *stubProvider) ToolCallCount() int    { return 42 }
+func (s *stubProvider) Uptime() time.Duration { return 5 * time.Minute }
 func (s *stubProvider) RecentCalls(n int) []dashboard.CallInfo {
 	return []dashboard.CallInfo{
 		{
@@ -41,13 +41,13 @@ func (s *stubProvider) Metrics() dashboard.MetricsSnapshot {
 }
 func (s *stubProvider) Policy() *policy.Policy {
 	return &policy.Policy{
-		Version:        "1.0",
-		Description:    "test policy",
-		DefaultAction:  policy.ActionDeny,
-		Servers:        []policy.Server{{Name: "srv1", Allowed: true}},
-		ToolChains:     []policy.ChainRule{{Name: "exfil"}},
-		Identities:     []policy.Identity{{Name: "agent-1"}},
-		Redaction:      policy.RedactionConfig{OutputRedaction: true, Patterns: []policy.RedactionPattern{{Name: "test"}}},
+		Version:       "1.0",
+		Description:   "test policy",
+		DefaultAction: policy.ActionDeny,
+		Servers:       []policy.Server{{Name: "srv1", Allowed: true}},
+		ToolChains:    []policy.ChainRule{{Name: "exfil"}},
+		Identities:    []policy.Identity{{Name: "agent-1"}},
+		Redaction:     policy.RedactionConfig{OutputRedaction: true, Patterns: []policy.RedactionPattern{{Name: "test"}}},
 	}
 }
 

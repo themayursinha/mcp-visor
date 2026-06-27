@@ -17,10 +17,10 @@ const (
 type Event struct {
 	Direction MessageDirection `json:"direction"`
 	Method    string           `json:"method,omitempty"`
-	JSONRPC   string          `json:"jsonrpc,omitempty"`
-	ID        any             `json:"id,omitempty"`
-	Raw       string          `json:"raw,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	JSONRPC   string           `json:"jsonrpc,omitempty"`
+	ID        any              `json:"id,omitempty"`
+	Raw       string           `json:"raw,omitempty"`
+	Error     string           `json:"error,omitempty"`
 }
 
 func (e *Event) Summarize() string {
@@ -63,11 +63,11 @@ func (JSONLLogger) Log(e *Event) {
 }
 
 type SummaryLogger struct {
-	messages   int
-	byMethod   map[string]int
-	byDir      map[MessageDirection]int
-	errors     int
-	bytesIn    int
+	messages int
+	byMethod map[string]int
+	byDir    map[MessageDirection]int
+	errors   int
+	bytesIn  int
 }
 
 func NewSummaryLogger() *SummaryLogger {

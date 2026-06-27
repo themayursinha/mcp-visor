@@ -15,8 +15,8 @@ func TestEvent_Summarize(t *testing.T) {
 			name: "client to server method",
 			event: Event{
 				Direction: DirClientToServer,
-				Method:   "tools/call",
-				ID:       1,
+				Method:    "tools/call",
+				ID:        1,
 			},
 			expected: "C->S tools/call(id=1)",
 		},
@@ -24,8 +24,8 @@ func TestEvent_Summarize(t *testing.T) {
 			name: "server to client response",
 			event: Event{
 				Direction: DirServerToClient,
-				Method:   "tools/list",
-				ID:       5,
+				Method:    "tools/list",
+				ID:        5,
 			},
 			expected: "S->C tools/list(id=5)",
 		},
@@ -33,8 +33,8 @@ func TestEvent_Summarize(t *testing.T) {
 			name: "error response",
 			event: Event{
 				Direction: DirServerToClient,
-				Error:    "connection refused",
-				ID:       2,
+				Error:     "connection refused",
+				ID:        2,
 			},
 			expected: "S->C error(id=2): connection refused",
 		},
@@ -42,7 +42,7 @@ func TestEvent_Summarize(t *testing.T) {
 			name: "notification",
 			event: Event{
 				Direction: DirClientToServer,
-				Method:   "initialized",
+				Method:    "initialized",
 			},
 			expected: "C->S notification",
 		},
@@ -59,7 +59,7 @@ func TestEvent_Summarize(t *testing.T) {
 			name: "internal event",
 			event: Event{
 				Direction: DirInternal,
-				Method:   "decision",
+				Method:    "decision",
 			},
 			expected: "INT decision",
 		},
@@ -79,9 +79,9 @@ func TestTextLogger(t *testing.T) {
 	logger := TextLogger{}
 	event := &Event{
 		Direction: DirClientToServer,
-		Method:   "tools/call",
-		ID:       1,
-		Raw:      `{"jsonrpc":"2.0","method":"tools/call"}`,
+		Method:    "tools/call",
+		ID:        1,
+		Raw:       `{"jsonrpc":"2.0","method":"tools/call"}`,
 	}
 	logger.Log(event)
 }

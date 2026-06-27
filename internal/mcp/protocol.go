@@ -5,19 +5,19 @@ import "encoding/json"
 const (
 	JSONRPCVersion = "2.0"
 
-	MethodInitialize          = "initialize"
-	MethodInitialized         = "notifications/initialized"
-	MethodToolsList           = "tools/list"
-	MethodToolsCall           = "tools/call"
-	MethodResourcesList       = "resources/list"
-	MethodResourcesRead       = "resources/read"
-	MethodResourcesTemplates  = "resources/templates/list"
-	MethodPromptsList         = "prompts/list"
-	MethodPromptsGet          = "prompts/get"
-	MethodLoggingSetLevel     = "logging/setLevel"
+	MethodInitialize         = "initialize"
+	MethodInitialized        = "notifications/initialized"
+	MethodToolsList          = "tools/list"
+	MethodToolsCall          = "tools/call"
+	MethodResourcesList      = "resources/list"
+	MethodResourcesRead      = "resources/read"
+	MethodResourcesTemplates = "resources/templates/list"
+	MethodPromptsList        = "prompts/list"
+	MethodPromptsGet         = "prompts/get"
+	MethodLoggingSetLevel    = "logging/setLevel"
 	MethodPing               = "ping"
-	MethodCancelled           = "notifications/cancelled"
-	MethodRootsList           = "roots/list"
+	MethodCancelled          = "notifications/cancelled"
+	MethodRootsList          = "roots/list"
 
 	ErrCodeParseError     = -32700
 	ErrCodeInvalidRequest = -32600
@@ -53,14 +53,14 @@ type Error struct {
 }
 
 type InitializeRequest struct {
-	ProtocolVersion string        `json:"protocolVersion"`
-	Capabilities    Capabilities  `json:"capabilities"`
+	ProtocolVersion string         `json:"protocolVersion"`
+	Capabilities    Capabilities   `json:"capabilities"`
 	ClientInfo      Implementation `json:"clientInfo"`
 }
 
 type InitializeResult struct {
-	ProtocolVersion string        `json:"protocolVersion"`
-	Capabilities    Capabilities  `json:"capabilities"`
+	ProtocolVersion string         `json:"protocolVersion"`
+	Capabilities    Capabilities   `json:"capabilities"`
 	ServerInfo      Implementation `json:"serverInfo"`
 	Instructions    string         `json:"instructions,omitempty"`
 }
@@ -94,7 +94,7 @@ type ToolsListRequest struct{}
 
 type ToolsListResult struct {
 	Tools      []Tool `json:"tools"`
-	NextCursor string  `json:"nextCursor,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type Tool struct {

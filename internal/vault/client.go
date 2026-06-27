@@ -210,7 +210,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (map[
 
 	var envelope struct {
 		Data   map[string]any `json:"data"`
-		Errors []string        `json:"errors"`
+		Errors []string       `json:"errors"`
 	}
 	if err := json.Unmarshal(respBody, &envelope); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)

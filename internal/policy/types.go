@@ -20,15 +20,15 @@ const (
 )
 
 type Policy struct {
-	Version        string          `yaml:"version"`
-	Description    string          `yaml:"description"`
-	DefaultAction  Action          `yaml:"default_action"`
-	Settings       Settings        `yaml:"settings"`
-	Servers        []Server        `yaml:"servers"`
-	ToolChains     []ChainRule     `yaml:"tool_chains"`
-	Identities     []Identity      `yaml:"identities"`
+	Version          string            `yaml:"version"`
+	Description      string            `yaml:"description"`
+	DefaultAction    Action            `yaml:"default_action"`
+	Settings         Settings          `yaml:"settings"`
+	Servers          []Server          `yaml:"servers"`
+	ToolChains       []ChainRule       `yaml:"tool_chains"`
+	Identities       []Identity        `yaml:"identities"`
 	TimeRestrictions []TimeRestriction `yaml:"time_restrictions"`
-	Redaction      RedactionConfig `yaml:"redaction"`
+	Redaction        RedactionConfig   `yaml:"redaction"`
 }
 
 type Settings struct {
@@ -42,35 +42,35 @@ type Settings struct {
 }
 
 type Server struct {
-	Name                string           `yaml:"name"`
-	Transport           string           `yaml:"transport"`
-	Allowed             bool             `yaml:"allowed"`
-	AllowedDestinations []string         `yaml:"allowed_destinations"`
-	DeniedDestinations  []string         `yaml:"denied_destinations"`
-	Tools               []ToolRule       `yaml:"tools"`
+	Name                string     `yaml:"name"`
+	Transport           string     `yaml:"transport"`
+	Allowed             bool       `yaml:"allowed"`
+	AllowedDestinations []string   `yaml:"allowed_destinations"`
+	DeniedDestinations  []string   `yaml:"denied_destinations"`
+	Tools               []ToolRule `yaml:"tools"`
 }
 
 type ToolRule struct {
-	Name             string      `yaml:"name"`
-	Allowed          bool        `yaml:"allowed"`
-	Risk             RiskLevel   `yaml:"risk"`
-	ApprovalRequired bool        `yaml:"approval_required"`
-	Rules            []ArgRule   `yaml:"rules"`
+	Name             string    `yaml:"name"`
+	Allowed          bool      `yaml:"allowed"`
+	Risk             RiskLevel `yaml:"risk"`
+	ApprovalRequired bool      `yaml:"approval_required"`
+	Rules            []ArgRule `yaml:"rules"`
 }
 
 type ArgRule struct {
-	Type             string   `yaml:"type"`
-	Patterns         []string `yaml:"patterns"`
-	Keywords         []string `yaml:"keywords"`
-	Bytes            int      `yaml:"bytes"`
-	Rows             int      `yaml:"rows"`
-	Count            int      `yaml:"count"`
-	Domains          []string `yaml:"domains"`
-	Repos            []string `yaml:"repos"`
-	Days             []string `yaml:"days"`
-	Start            string   `yaml:"start"`
-	End              string   `yaml:"end"`
-	Timezone         string   `yaml:"timezone"`
+	Type     string   `yaml:"type"`
+	Patterns []string `yaml:"patterns"`
+	Keywords []string `yaml:"keywords"`
+	Bytes    int      `yaml:"bytes"`
+	Rows     int      `yaml:"rows"`
+	Count    int      `yaml:"count"`
+	Domains  []string `yaml:"domains"`
+	Repos    []string `yaml:"repos"`
+	Days     []string `yaml:"days"`
+	Start    string   `yaml:"start"`
+	End      string   `yaml:"end"`
+	Timezone string   `yaml:"timezone"`
 }
 
 type ChainRule struct {
@@ -88,20 +88,20 @@ type ChainMatch struct {
 }
 
 type Identity struct {
-	Name          string   `yaml:"name"`
-	Description   string   `yaml:"description"`
+	Name           string   `yaml:"name"`
+	Description    string   `yaml:"description"`
 	AllowedServers []string `yaml:"allowed_servers"`
-	AllowedTools  []string `yaml:"allowed_tools"`
+	AllowedTools   []string `yaml:"allowed_tools"`
 }
 
 type TimeRestriction struct {
-	Name          string   `yaml:"name"`
-	Description   string   `yaml:"description"`
-	Servers       []string `yaml:"servers"`
-	Tools         []string `yaml:"tools"`
+	Name          string       `yaml:"name"`
+	Description   string       `yaml:"description"`
+	Servers       []string     `yaml:"servers"`
+	Tools         []string     `yaml:"tools"`
 	AllowedHours  []TimeWindow `yaml:"allowed_hours"`
-	DeniedDays    []string `yaml:"denied_days"`
-	OutsideAction Action   `yaml:"outside_action"`
+	DeniedDays    []string     `yaml:"denied_days"`
+	OutsideAction Action       `yaml:"outside_action"`
 }
 
 type TimeWindow struct {
@@ -112,10 +112,10 @@ type TimeWindow struct {
 }
 
 type RedactionConfig struct {
-	Patterns       []RedactionPattern `yaml:"patterns"`
-	OutputRedaction bool              `yaml:"output_redaction"`
-	OutputPatterns []RedactionPattern `yaml:"output_patterns"`
-	SensitiveFiles []string           `yaml:"sensitive_files"`
+	Patterns        []RedactionPattern `yaml:"patterns"`
+	OutputRedaction bool               `yaml:"output_redaction"`
+	OutputPatterns  []RedactionPattern `yaml:"output_patterns"`
+	SensitiveFiles  []string           `yaml:"sensitive_files"`
 }
 
 type RedactionPattern struct {

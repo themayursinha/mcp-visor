@@ -17,12 +17,12 @@ func Lint(p *Policy) LintResult {
 	knownRuleTypes := map[string]bool{
 		"deny_path": true, "allow_path": true,
 		"deny_command_pattern_composite": true,
-		"deny_command_pattern": true, "allow_command_pattern": true,
+		"deny_command_pattern":           true, "allow_command_pattern": true,
 		"deny_command_keyword": true,
-		"deny_query_pattern": true, "allow_query_pattern": true,
+		"deny_query_pattern":   true, "allow_query_pattern": true,
 		"deny_recipient_domain": true, "allow_recipient_domain": true,
-		"allowed_repos": true,
-		"max_file_size": true,
+		"allowed_repos":   true,
+		"max_file_size":   true,
 		"max_result_rows": true, "max_export_rows": true,
 		"require_approval_always": true,
 	}
@@ -126,7 +126,7 @@ func Lint(p *Policy) LintResult {
 				res.Violations = append(res.Violations, LintViolation{
 					Path: path, Type: ViolationTypeError, Field: "name",
 					Severity: SeverityError,
-					Message: fmt.Sprintf("duplicate identity name: %s", id.Name),
+					Message:  fmt.Sprintf("duplicate identity name: %s", id.Name),
 				})
 			}
 			seenIdentities[id.Name] = true
@@ -193,14 +193,14 @@ func Lint(p *Policy) LintResult {
 				res.Violations = append(res.Violations, LintViolation{
 					Path: fmt.Sprintf("%s.start", wp), Type: ViolationTypeError, Field: "start",
 					Severity: SeverityError,
-					Message: fmt.Sprintf("invalid time format '%s' (expected HH:MM)", win.Start),
+					Message:  fmt.Sprintf("invalid time format '%s' (expected HH:MM)", win.Start),
 				})
 			}
 			if !isValidTimeFormat(win.End) {
 				res.Violations = append(res.Violations, LintViolation{
 					Path: fmt.Sprintf("%s.end", wp), Type: ViolationTypeError, Field: "end",
 					Severity: SeverityError,
-					Message: fmt.Sprintf("invalid time format '%s' (expected HH:MM)", win.End),
+					Message:  fmt.Sprintf("invalid time format '%s' (expected HH:MM)", win.End),
 				})
 			}
 
@@ -209,7 +209,7 @@ func Lint(p *Policy) LintResult {
 					res.Violations = append(res.Violations, LintViolation{
 						Path: fmt.Sprintf("%s.timezone", wp), Type: ViolationTypeError, Field: "timezone",
 						Severity: SeverityError,
-						Message: fmt.Sprintf("invalid IANA timezone '%s': %v", win.Timezone, err),
+						Message:  fmt.Sprintf("invalid IANA timezone '%s': %v", win.Timezone, err),
 					})
 				}
 			}
@@ -239,7 +239,7 @@ func Lint(p *Policy) LintResult {
 			res.Violations = append(res.Violations, LintViolation{
 				Path: fmt.Sprintf("%s.outside_action", path), Type: ViolationTypeError, Field: "outside_action",
 				Severity: SeverityError,
-				Message: fmt.Sprintf("invalid outside_action '%s'", tr.OutsideAction),
+				Message:  fmt.Sprintf("invalid outside_action '%s'", tr.OutsideAction),
 			})
 		}
 	}
@@ -303,7 +303,7 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 		res.Violations = append(res.Violations, LintViolation{
 			Path: path, Type: ViolationTypeWarning, Field: "type",
 			Severity: SeverityWarning,
-			Message: fmt.Sprintf("unknown rule type '%s' (will never match)", rule.Type),
+			Message:  fmt.Sprintf("unknown rule type '%s' (will never match)", rule.Type),
 		})
 	}
 
@@ -312,11 +312,11 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 			res.Violations = append(res.Violations, LintViolation{
 				Path: path, Type: ViolationTypeWarning, Field: "patterns",
 				Severity: SeverityWarning,
-				Message: fmt.Sprintf("rule type '%s' has no patterns", rule.Type),
+				Message:  fmt.Sprintf("rule type '%s' has no patterns", rule.Type),
 			})
 		}
 		for pi, pat := range rule.Patterns {
- pp := fmt.Sprintf("%s.patterns[%d]", path, pi)
+			pp := fmt.Sprintf("%s.patterns[%d]", path, pi)
 			res.checkGlob(path, pp, pat, "path pattern")
 		}
 	}
@@ -327,11 +327,11 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 			res.Violations = append(res.Violations, LintViolation{
 				Path: path, Type: ViolationTypeWarning, Field: "patterns",
 				Severity: SeverityWarning,
-				Message: fmt.Sprintf("rule type '%s' has no patterns", rule.Type),
+				Message:  fmt.Sprintf("rule type '%s' has no patterns", rule.Type),
 			})
 		}
 		for pi := range rule.Patterns {
- pp := fmt.Sprintf("%s.patterns[%d]", path, pi)
+			pp := fmt.Sprintf("%s.patterns[%d]", path, pi)
 			res.checkRegex(pp, rule.Patterns[pi], "pattern")
 		}
 	}
@@ -341,7 +341,7 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 			res.Violations = append(res.Violations, LintViolation{
 				Path: path, Type: ViolationTypeWarning, Field: "keywords",
 				Severity: SeverityWarning,
-				Message: "'deny_command_keyword' rule has no keywords",
+				Message:  "'deny_command_keyword' rule has no keywords",
 			})
 		}
 	}
@@ -351,7 +351,7 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 			res.Violations = append(res.Violations, LintViolation{
 				Path: path, Type: ViolationTypeWarning, Field: "domains",
 				Severity: SeverityWarning,
-				Message: fmt.Sprintf("rule type '%s' has no domains", rule.Type),
+				Message:  fmt.Sprintf("rule type '%s' has no domains", rule.Type),
 			})
 		}
 	}
@@ -361,7 +361,7 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 			res.Violations = append(res.Violations, LintViolation{
 				Path: path, Type: ViolationTypeWarning, Field: "repos",
 				Severity: SeverityWarning,
-				Message: "'allowed_repos' rule has no repos",
+				Message:  "'allowed_repos' rule has no repos",
 			})
 		}
 	}
@@ -370,7 +370,7 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 		res.Violations = append(res.Violations, LintViolation{
 			Path: path, Type: ViolationTypeError, Field: "bytes",
 			Severity: SeverityError,
-			Message: "'max_file_size' rule requires bytes > 0",
+			Message:  "'max_file_size' rule requires bytes > 0",
 		})
 	}
 
@@ -378,7 +378,7 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 		res.Violations = append(res.Violations, LintViolation{
 			Path: path, Type: ViolationTypeError, Field: "rows",
 			Severity: SeverityError,
-			Message: fmt.Sprintf("'%s' rule requires rows > 0", rule.Type),
+			Message:  fmt.Sprintf("'%s' rule requires rows > 0", rule.Type),
 		})
 	}
 }
@@ -392,7 +392,7 @@ func (res *LintResult) checkRegex(path, pattern, field string) {
 		res.Violations = append(res.Violations, LintViolation{
 			Path: path, Type: ViolationTypeError, Field: field,
 			Severity: SeverityError,
-			Message: fmt.Sprintf("invalid regex '%s': %v", pattern, err),
+			Message:  fmt.Sprintf("invalid regex '%s': %v", pattern, err),
 		})
 	}
 }
@@ -511,11 +511,11 @@ type LintResult struct {
 }
 
 type LintViolation struct {
-	Path     string          `json:"path"`
-	Type     ViolationType   `json:"type"`
-	Severity Severity        `json:"severity"`
-	Field    string          `json:"field,omitempty"`
-	Message  string          `json:"message"`
+	Path     string        `json:"path"`
+	Type     ViolationType `json:"type"`
+	Severity Severity      `json:"severity"`
+	Field    string        `json:"field,omitempty"`
+	Message  string        `json:"message"`
 }
 
 type ViolationType string
@@ -548,29 +548,29 @@ func ParseTimeFormat(format string) (time.Time, error) {
 }
 
 const (
-	FieldType           = "type"
-	FieldPatterns       = "patterns"
-	FieldBytes          = "bytes"
-	FieldRows           = "rows"
-	FieldKeywords       = "keywords"
-	FieldDomains        = "domains"
-	FieldRepos          = "repos"
-	FieldTimezone       = "timezone"
-	FieldStart          = "start"
-	FieldEnd            = "end"
-	FieldDays           = "days"
-	FieldDeniedDays     = "denied_days"
-	FieldOutsideAction  = "outside_action"
-	FieldAction         = "action"
-	FieldName           = "name"
-	FieldAllowedServers = "allowed_servers"
-	FieldAllowedTools   = "allowed_tools"
-	FieldMaxArgs        = "max_argument_size_bytes"
-	FieldMaxOutput      = "max_output_size_bytes"
+	FieldType            = "type"
+	FieldPatterns        = "patterns"
+	FieldBytes           = "bytes"
+	FieldRows            = "rows"
+	FieldKeywords        = "keywords"
+	FieldDomains         = "domains"
+	FieldRepos           = "repos"
+	FieldTimezone        = "timezone"
+	FieldStart           = "start"
+	FieldEnd             = "end"
+	FieldDays            = "days"
+	FieldDeniedDays      = "denied_days"
+	FieldOutsideAction   = "outside_action"
+	FieldAction          = "action"
+	FieldName            = "name"
+	FieldAllowedServers  = "allowed_servers"
+	FieldAllowedTools    = "allowed_tools"
+	FieldMaxArgs         = "max_argument_size_bytes"
+	FieldMaxOutput       = "max_output_size_bytes"
 	FieldSessionMaxTools = "session_max_tools"
 	FieldApprovalTimeout = "approval_timeout_seconds"
 	FieldChainWindowSize = "chain_window_size"
-	FieldSensitiveFiles = "sensitive_files"
+	FieldSensitiveFiles  = "sensitive_files"
 )
 
 func (r *LintResult) ToJSON() ([]byte, error) {

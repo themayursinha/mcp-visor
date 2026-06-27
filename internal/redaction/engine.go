@@ -22,8 +22,8 @@ type compiledPattern struct {
 }
 
 type Result struct {
-	Redacted        bool
-	RedactedFields  []string
+	Redacted       bool
+	RedactedFields []string
 }
 
 func NewEngine(redactCfg policy.RedactionConfig) *Engine {
