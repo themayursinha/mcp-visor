@@ -358,8 +358,8 @@ go run ./cmd/mcp-visor lint examples/policies/developer-medium.yaml
 - [x] v1.0: MCP proxy, policy engine, audit logging, chain detection, redaction, approval
 - [x] v1.1: Identity-based policies, time-based restrictions, CLI approval, policy hot-reload
 - [x] v2.0: Signed decision receipts, webhook approvals, hash-chained audit logs, mTLS, SIEM export, HTTP/SSE transport, durable retry approval, n8n control-plane blueprint
-- [ ] v3.0: Sandboxed tool execution (WASI), eBPF syscall telemetry, Vault/KMS-backed approval signing
-- [ ] v4.0: Deeper host-level enforcement, formal policy verification
+- [ ] v3.0: Sandboxed tool execution (WASI), eBPF syscall telemetry, web-based policy dashboard, OPA/Rego policy support
+- [ ] v4.0: Deeper host-level enforcement, formal policy verification, multi-agent policy federation
 
 ## Security Model
 
