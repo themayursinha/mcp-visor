@@ -1,10 +1,35 @@
-# MCP Visor
+```
+___  ________ ______   _   _ _____ _____  ___________ 
+|  \/  /  __ \| ___ \ | | | |_   _/  ___||  _  | ___ \
+| .  . | /  \/| |_/ / | | | | | | \ `--. | | | | |_/ /
+| |\/| | |    |  __/  | | | | | |  `--. \| | | |    / 
+| |  | | \__/\| |     \ \_/ /_| |_/\__/ /\ \_/ / |\ \ 
+\_|  |_/\____/\_|      \___/ \___/\____/  \___/\_| \_|
+```
 
 Runtime Policy Enforcement & Audit Control Plane for MCP Tool Execution
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/themayursinha/mcp-visor/actions/workflows/ci.yml/badge.svg)](https://github.com/themayursinha/mcp-visor/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/themayursinha/mcp-visor)](https://goreportcard.com/report/github.com/themayursinha/mcp-visor)
+[![Release](https://img.shields.io/github/v/release/themayursinha/mcp-visor?color=34d399)](https://github.com/themayursinha/mcp-visor/releases)
+
+> *"The model is persuadable. Policy enforcement shouldn't be."*
+
+---
+
+## Quick Stats
+
+| Metric | Value |
+|--------|-------|
+| **Policy evaluation** | 587 ns |
+| **Chain detection** | 2.9 µs |
+| **Redaction** | 1.8 µs |
+| **JSON-RPC decode** | 1 µs |
+| **Binary size** | ~7 MB |
+| **Dependencies** | 2 (fsnotify + yaml.v3) |
+| **Test coverage** | 15 packages, all passing |
 
 ---
 
