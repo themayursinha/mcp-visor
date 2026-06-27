@@ -1,0 +1,20 @@
+$ go test ./... -count=1 -timeout 120s
+?   	github.com/themayursinha/mcp-visor/cmd/mcp-visor	[no test files]
+?   	github.com/themayursinha/mcp-visor/cmd/policy-lint	[no test files]
+?   	github.com/themayursinha/mcp-visor/examples/demo-mcp-server	[no test files]
+?   	github.com/themayursinha/mcp-visor/examples/demo-runner	[no test files]
+ok  	github.com/themayursinha/mcp-visor/internal/approval	2.558s
+ok  	github.com/themayursinha/mcp-visor/internal/audit	3.279s
+ok  	github.com/themayursinha/mcp-visor/internal/dashboard	0.256s
+ok  	github.com/themayursinha/mcp-visor/internal/mcp	0.002s
+ok  	github.com/themayursinha/mcp-visor/internal/policy	0.011s
+ok  	github.com/themayursinha/mcp-visor/internal/proxy	0.636s
+ok  	github.com/themayursinha/mcp-visor/internal/receipt	0.027s
+ok  	github.com/themayursinha/mcp-visor/internal/redaction	0.026s
+ok  	github.com/themayursinha/mcp-visor/internal/siem	0.026s
+ok  	github.com/themayursinha/mcp-visor/internal/signer	0.026s
+ok  	github.com/themayursinha/mcp-visor/internal/trace	0.026s
+ok  	github.com/themayursinha/mcp-visor/internal/transport	0.028s
+ok  	github.com/themayursinha/mcp-visor/internal/vault	0.032s
+ok  	github.com/themayursinha/mcp-visor/internal/webhook	1.733s
+ok  	github.com/themayursinha/mcp-visor/tests/integration	6.182s
