@@ -97,9 +97,9 @@ func TestLintValidPolicy(t *testing.T) {
 				Allowed: true,
 				Tools: []ToolRule{
 					{
-						Name:     "file_read",
-						Allowed:  true,
-						Risk:     RiskMedium,
+						Name:    "file_read",
+						Allowed: true,
+						Risk:    RiskMedium,
 						Rules: []ArgRule{
 							{Type: "deny_path", Patterns: []string{"**/.env", "**/*.pem"}},
 						},
@@ -124,17 +124,17 @@ func TestLintValidPolicy(t *testing.T) {
 		},
 		ToolChains: []ChainRule{
 			{
-				Name: "prevent_exfil",
+				Name:    "prevent_exfil",
 				Sources: []ChainMatch{{Server: "*", ToolPattern: "file_read"}},
 				Sinks:   []ChainMatch{{Server: "*", ToolPattern: "http_post"}},
-				Action:   ActionDeny,
+				Action:  ActionDeny,
 			},
 		},
 		Identities: []Identity{
 			{
 				Name:           "dev-agent",
 				AllowedServers: []string{"filesystem"},
-				AllowedTools:  []string{"filesystem/file_read"},
+				AllowedTools:   []string{"filesystem/file_read"},
 			},
 		},
 		TimeRestrictions: []TimeRestriction{
@@ -172,7 +172,7 @@ func TestLintInvalidRegex(t *testing.T) {
 				Allowed: true,
 				Tools: []ToolRule{
 					{
-						Name:  "shell_exec",
+						Name: "shell_exec",
 						Rules: []ArgRule{
 							{Type: "deny_command_pattern", Patterns: []string{"[invalid(regex"}},
 						},
@@ -269,7 +269,7 @@ func TestLintInvalidTimezone(t *testing.T) {
 			{
 				Name:    "test",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "test"}},
+				Tools:   []ToolRule{{Name: "test"}},
 			},
 		},
 		TimeRestrictions: []TimeRestriction{
@@ -304,7 +304,7 @@ func TestLintInvalidTimeFormat(t *testing.T) {
 			{
 				Name:    "test",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "test"}},
+				Tools:   []ToolRule{{Name: "test"}},
 			},
 		},
 		TimeRestrictions: []TimeRestriction{
@@ -339,7 +339,7 @@ func TestLintInvalidDayName(t *testing.T) {
 			{
 				Name:    "test",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "test"}},
+				Tools:   []ToolRule{{Name: "test"}},
 			},
 		},
 		TimeRestrictions: []TimeRestriction{
@@ -375,13 +375,13 @@ func TestLintInvalidIdentityToolFormat(t *testing.T) {
 			{
 				Name:    "filesystem",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "file_read"}},
+				Tools:   []ToolRule{{Name: "file_read"}},
 			},
 		},
 		Identities: []Identity{
 			{
-				Name:          "bad-identity",
-				AllowedTools:  []string{"no_slash_at_all"},
+				Name:           "bad-identity",
+				AllowedTools:   []string{"no_slash_at_all"},
 				AllowedServers: []string{"filesystem"},
 			},
 		},
@@ -408,13 +408,13 @@ func TestLintIdentityReferencesUnknownTool(t *testing.T) {
 			{
 				Name:    "filesystem",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "file_read"}},
+				Tools:   []ToolRule{{Name: "file_read"}},
 			},
 		},
 		Identities: []Identity{
 			{
-				Name:          "bad-identity",
-				AllowedTools:  []string{"filesystem/nonexistent_tool"},
+				Name:           "bad-identity",
+				AllowedTools:   []string{"filesystem/nonexistent_tool"},
 				AllowedServers: []string{"filesystem"},
 			},
 		},
@@ -441,7 +441,7 @@ func TestLintDuplicateIdentityName(t *testing.T) {
 			{
 				Name:    "test",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "test"}},
+				Tools:   []ToolRule{{Name: "test"}},
 			},
 		},
 		Identities: []Identity{
@@ -537,13 +537,13 @@ func TestLintInvalidChainAction(t *testing.T) {
 			{
 				Name:    "test",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "test"}},
+				Tools:   []ToolRule{{Name: "test"}},
 			},
 		},
 		ToolChains: []ChainRule{
 			{
-				Name:   "bad_action_rule",
-				Action: Action("invalid_action"),
+				Name:    "bad_action_rule",
+				Action:  Action("invalid_action"),
 				Sources: []ChainMatch{{Server: "*", ToolPattern: "file_read"}},
 				Sinks:   []ChainMatch{{Server: "*", ToolPattern: "http_post"}},
 			},
@@ -571,12 +571,12 @@ func TestLintInvalidToolPattern(t *testing.T) {
 			{
 				Name:    "test",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "test"}},
+				Tools:   []ToolRule{{Name: "test"}},
 			},
 		},
 		ToolChains: []ChainRule{
 			{
-				Name: "bad_pattern",
+				Name:    "bad_pattern",
 				Sources: []ChainMatch{{Server: "*", ToolPattern: "[invalid_regex("}},
 				Sinks:   []ChainMatch{{Server: "*", ToolPattern: "http_post"}},
 				Action:  ActionDeny,
@@ -611,7 +611,7 @@ func TestLintNegativeSettings(t *testing.T) {
 			{
 				Name:    "test",
 				Allowed: true,
-				Tools: []ToolRule{{Name: "test"}},
+				Tools:   []ToolRule{{Name: "test"}},
 			},
 		},
 	}
@@ -941,9 +941,9 @@ func BenchmarkLintPolicy(b *testing.B) {
 				Allowed: true,
 				Tools: []ToolRule{
 					{
-						Name:  "file_read",
+						Name:    "file_read",
 						Allowed: true,
-						Risk:  RiskMedium,
+						Risk:    RiskMedium,
 						Rules: []ArgRule{
 							{Type: "deny_path", Patterns: []string{"**/.env", "**/*.pem", "**/.ssh/**"}},
 							{Type: "allow_path", Patterns: []string{"/home/**", "/tmp/**"}},
@@ -951,19 +951,19 @@ func BenchmarkLintPolicy(b *testing.B) {
 						},
 					},
 					{
-						Name:  "file_write",
+						Name:    "file_write",
 						Allowed: true,
-						Risk:  RiskHigh,
+						Risk:    RiskHigh,
 						Rules: []ArgRule{
 							{Type: "deny_path", Patterns: []string{"/etc/**", "/usr/**", "/bin/**"}},
 							{Type: "allow_path", Patterns: []string{"/home/**", "/tmp/**"}},
 						},
 					},
 					{
-						Name:              "file_delete",
-						Allowed:           true,
-						Risk:              RiskCritical,
-						ApprovalRequired:  true,
+						Name:             "file_delete",
+						Allowed:          true,
+						Risk:             RiskCritical,
+						ApprovalRequired: true,
 					},
 				},
 			},
@@ -972,9 +972,9 @@ func BenchmarkLintPolicy(b *testing.B) {
 				Allowed: true,
 				Tools: []ToolRule{
 					{
-						Name:  "shell_exec",
+						Name:    "shell_exec",
 						Allowed: true,
-						Risk:  RiskCritical,
+						Risk:    RiskCritical,
 						Rules: []ArgRule{
 							{Type: "deny_command_pattern", Patterns: []string{"rm\\s+-rf\\s+/", "curl.*\\|.*(bash|sh)"}},
 							{Type: "allow_command_pattern", Patterns: []string{"^ls\\s", "^cat\\s", "^echo\\s"}},
@@ -995,13 +995,13 @@ func BenchmarkLintPolicy(b *testing.B) {
 		},
 		ToolChains: []ChainRule{
 			{
-				Name: "prevent_exfil",
+				Name:    "prevent_exfil",
 				Sources: []ChainMatch{{Server: "*", ToolPattern: "file_read"}},
 				Sinks:   []ChainMatch{{Server: "*", ToolPattern: "(http_post|slack_send)"}},
 				Action:  ActionDeny,
 			},
 			{
-				Name: "read_then_destroy",
+				Name:    "read_then_destroy",
 				Sources: []ChainMatch{{Server: "*", ToolPattern: ".*_read"}},
 				Sinks:   []ChainMatch{{Server: "*", ToolPattern: ".*_delete"}},
 				Action:  ActionRequireApproval,

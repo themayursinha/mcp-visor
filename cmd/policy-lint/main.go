@@ -99,7 +99,7 @@ func printText(result *policy.LintResult) {
 		order := map[policy.Severity]int{
 			policy.SeverityError:   0,
 			policy.SeverityWarning: 1,
-			policy.SeverityInfo:   2,
+			policy.SeverityInfo:    2,
 		}
 		if order[result.Violations[i].Severity] != order[result.Violations[j].Severity] {
 			return order[result.Violations[i].Severity] < order[result.Violations[j].Severity]

@@ -6,9 +6,9 @@ import (
 )
 
 type Registry struct {
-	policy   *Policy
+	policy    *Policy
 	serverMap map[string]*Server
-	toolMap  map[string]*ToolRule
+	toolMap   map[string]*ToolRule
 }
 
 func NewRegistry(p *Policy) *Registry {

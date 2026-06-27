@@ -29,10 +29,10 @@ type ProxyMetrics struct {
 	ChainDetections   int64
 }
 
-func (m *ProxyMetrics) IncrementProcessed() { m.MessagesProcessed++ }
-func (m *ProxyMetrics) IncrementDenied()    { m.MessagesDenied++ }
-func (m *ProxyMetrics) IncrementAllowed()   { m.MessagesAllowed++ }
-func (m *ProxyMetrics) IncrementApproved()  { m.MessagesApproved++ }
+func (m *ProxyMetrics) IncrementProcessed()      { m.MessagesProcessed++ }
+func (m *ProxyMetrics) IncrementDenied()         { m.MessagesDenied++ }
+func (m *ProxyMetrics) IncrementAllowed()        { m.MessagesAllowed++ }
+func (m *ProxyMetrics) IncrementApproved()       { m.MessagesApproved++ }
 func (m *ProxyMetrics) AddBytesRedacted(n int64) { m.BytesRedacted += n }
-func (m *ProxyMetrics) IncrementApprovals() { m.ApprovalRequests++ }
-func (m *ProxyMetrics) IncrementChains()   { m.ChainDetections++ }
+func (m *ProxyMetrics) IncrementApprovals()      { m.ApprovalRequests++ }
+func (m *ProxyMetrics) IncrementChains()         { m.ChainDetections++ }

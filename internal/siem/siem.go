@@ -69,10 +69,10 @@ func (w *fileWriter) Close() error {
 }
 
 type Config struct {
-	Format    Format
-	Targets   []string
-	Hostname  string
-	AppName   string
+	Format   Format
+	Targets  []string
+	Hostname string
+	AppName  string
 }
 
 func DefaultConfig() Config {

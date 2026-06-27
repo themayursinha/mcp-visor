@@ -25,9 +25,9 @@ type Verifier interface {
 }
 
 type ApprovalSigner struct {
-	privKey  ed25519.PrivateKey
-	pubKey   ed25519.PublicKey
-	keyID    string
+	privKey ed25519.PrivateKey
+	pubKey  ed25519.PublicKey
+	keyID   string
 }
 
 func NewApprovalSigner() (*ApprovalSigner, error) {

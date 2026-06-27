@@ -38,10 +38,10 @@ type MetricsSnapshot struct {
 }
 
 type Server struct {
-	addr       string
-	http       *http.Server
-	provider   MetaProvider
-	mu         sync.RWMutex
+	addr     string
+	http     *http.Server
+	provider MetaProvider
+	mu       sync.RWMutex
 }
 
 func NewServer(addr string, provider MetaProvider) *Server {
@@ -118,13 +118,13 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 
 	pol := s.provider.Policy()
 	summary := map[string]any{
-		"version":        pol.Version,
-		"description":    pol.Description,
-		"default_action": pol.DefaultAction,
-		"servers":        len(pol.Servers),
-		"chain_rules":    len(pol.ToolChains),
-		"identities":     len(pol.Identities),
-		"time_restrictions": len(pol.TimeRestrictions),
+		"version":            pol.Version,
+		"description":        pol.Description,
+		"default_action":     pol.DefaultAction,
+		"servers":            len(pol.Servers),
+		"chain_rules":        len(pol.ToolChains),
+		"identities":         len(pol.Identities),
+		"time_restrictions":  len(pol.TimeRestrictions),
 		"redaction_patterns": len(pol.Redaction.Patterns),
 		"output_redaction":   pol.Redaction.OutputRedaction,
 		"sensitive_files":    len(pol.Redaction.SensitiveFiles),

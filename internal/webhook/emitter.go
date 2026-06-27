@@ -22,17 +22,17 @@ type Emitter struct {
 }
 
 type EventPayload struct {
-	Timestamp  string         `json:"timestamp"`
-	EventType  string         `json:"event_type"`
-	SessionID  string         `json:"session_id"`
-	AgentID    string         `json:"agent_id"`
-	Server     string         `json:"server"`
-	Tool       string         `json:"tool,omitempty"`
-	Arguments  map[string]any `json:"arguments,omitempty"`
-	Decision   string         `json:"policy_decision"`
-	Reason     string         `json:"reason,omitempty"`
-	RiskLevel  string         `json:"risk_level,omitempty"`
-	Message    string         `json:"message,omitempty"`
+	Timestamp string         `json:"timestamp"`
+	EventType string         `json:"event_type"`
+	SessionID string         `json:"session_id"`
+	AgentID   string         `json:"agent_id"`
+	Server    string         `json:"server"`
+	Tool      string         `json:"tool,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	Decision  string         `json:"policy_decision"`
+	Reason    string         `json:"reason,omitempty"`
+	RiskLevel string         `json:"risk_level,omitempty"`
+	Message   string         `json:"message,omitempty"`
 }
 
 type Config struct {
@@ -97,17 +97,17 @@ func (e *Emitter) Emit(event audit.Event) {
 
 func (e *Emitter) EmitDirect(event audit.Event) error {
 	payload := EventPayload{
-		Timestamp:  event.Timestamp,
-		EventType:  string(event.EventType),
-		SessionID:  event.SessionID,
-		AgentID:    event.AgentID,
-		Server:     event.Server,
-		Tool:       event.Tool,
-		Arguments:  event.Arguments,
-		Decision:   event.Decision,
-		Reason:     event.Reason,
-		RiskLevel:  event.RiskLevel,
-		Message:    event.Message,
+		Timestamp: event.Timestamp,
+		EventType: string(event.EventType),
+		SessionID: event.SessionID,
+		AgentID:   event.AgentID,
+		Server:    event.Server,
+		Tool:      event.Tool,
+		Arguments: event.Arguments,
+		Decision:  event.Decision,
+		Reason:    event.Reason,
+		RiskLevel: event.RiskLevel,
+		Message:   event.Message,
 	}
 
 	return e.deliver(payload)

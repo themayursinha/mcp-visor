@@ -86,7 +86,6 @@ func TestMockTransport(t *testing.T) {
 	}
 }
 
-
 func NewPipePair() (*channelReader, *channelWriter) {
 	ch := make(chan byte, 4096)
 	return &channelReader{ch: ch}, &channelWriter{ch: ch}

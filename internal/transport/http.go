@@ -26,19 +26,19 @@ type HTTPTransport struct {
 }
 
 type HTTPConfig struct {
-	BaseURL     string
-	SSEPath     string
-	Timeout     time.Duration
-	TLS         *TLSConfig
-	Headers     map[string]string
+	BaseURL string
+	SSEPath string
+	Timeout time.Duration
+	TLS     *TLSConfig
+	Headers map[string]string
 }
 
 type TLSConfig struct {
-	CertFile       string
-	KeyFile        string
-	CAFile         string
-	InsecureSkip   bool
-	ServerName     string
+	CertFile     string
+	KeyFile      string
+	CAFile       string
+	InsecureSkip bool
+	ServerName   string
 }
 
 func NewHTTPTransport(cfg HTTPConfig) (*HTTPTransport, error) {

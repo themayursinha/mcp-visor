@@ -12,26 +12,26 @@ import (
 )
 
 type DurableEngine struct {
-	engine    *Engine
-	stateDir  string
-	pubKey    []byte
-	mu        sync.RWMutex
-	pending   map[string]*durableRequest
-	receipts  map[string]*receipt.DecisionReceipt
+	engine   *Engine
+	stateDir string
+	pubKey   []byte
+	mu       sync.RWMutex
+	pending  map[string]*durableRequest
+	receipts map[string]*receipt.DecisionReceipt
 }
 
 type durableRequest struct {
-	ID         string    `json:"id"`
-	Tool       string    `json:"tool"`
-	Server     string    `json:"server"`
-	Args       map[string]any `json:"arguments"`
-	Reason     string    `json:"reason"`
-	RiskLevel  string    `json:"risk_level"`
-	SessionID  string    `json:"session_id"`
-	AgentID    string    `json:"agent_id"`
-	CreatedAt  time.Time `json:"created_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	RequestHash string   `json:"request_hash"`
+	ID          string         `json:"id"`
+	Tool        string         `json:"tool"`
+	Server      string         `json:"server"`
+	Args        map[string]any `json:"arguments"`
+	Reason      string         `json:"reason"`
+	RiskLevel   string         `json:"risk_level"`
+	SessionID   string         `json:"session_id"`
+	AgentID     string         `json:"agent_id"`
+	CreatedAt   time.Time      `json:"created_at"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	RequestHash string         `json:"request_hash"`
 }
 
 func NewDurableEngine(engine *Engine, stateDir string, pubKey []byte) (*DurableEngine, error) {
@@ -124,17 +124,17 @@ func (de *DurableEngine) RequestApproval(req Request) (*DurableDecision, error) 
 	execID := fmt.Sprintf("exec-%d-%s", time.Now().UnixNano(), req.ID)
 
 	dr := &durableRequest{
-		ID:           execID,
-		Tool:         req.Tool,
-		Server:       req.Server,
-		Args:         req.Arguments,
-		Reason:       req.Reason,
-		RiskLevel:    req.RiskLevel,
-		SessionID:    req.SessionID,
-		AgentID:      req.AgentID,
-		CreatedAt:    time.Now(),
-		ExpiresAt:    time.Now().Add(1 * time.Hour),
-		RequestHash:  rHash,
+		ID:          execID,
+		Tool:        req.Tool,
+		Server:      req.Server,
+		Args:        req.Arguments,
+		Reason:      req.Reason,
+		RiskLevel:   req.RiskLevel,
+		SessionID:   req.SessionID,
+		AgentID:     req.AgentID,
+		CreatedAt:   time.Now(),
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+		RequestHash: rHash,
 	}
 
 	de.mu.Lock()
@@ -146,10 +146,10 @@ func (de *DurableEngine) RequestApproval(req Request) (*DurableDecision, error) 
 	}
 
 	return &DurableDecision{
-		Approved:     false,
+		Approved:         false,
 		RequiresApproval: true,
-		ExecutionID: execID,
-		Request:     dr,
+		ExecutionID:      execID,
+		Request:          dr,
 	}, nil
 }
 
@@ -319,12 +319,12 @@ func (de *DurableEngine) Close() error {
 }
 
 type DurableDecision struct {
-	Approved          bool
-	RequiresApproval  bool
-	Reason            string
-	ExecutionID       string
-	Request           *durableRequest
-	Receipt           *receipt.DecisionReceipt
+	Approved         bool
+	RequiresApproval bool
+	Reason           string
+	ExecutionID      string
+	Request          *durableRequest
+	Receipt          *receipt.DecisionReceipt
 }
 
 func hashRequest(server, tool, sessionID string) string {
