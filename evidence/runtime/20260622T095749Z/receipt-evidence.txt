@@ -1,0 +1,11 @@
+$ go test ./internal/receipt -count=1 -v -run Test\(ReceiptSignWithGenericSigner\|ReceiptVerifyFailsWithModifiedPayload\|ReceiptExpiry\|NonceUniqueness\)
+=== RUN   TestReceiptSignWithGenericSigner
+--- PASS: TestReceiptSignWithGenericSigner (0.00s)
+=== RUN   TestReceiptVerifyFailsWithModifiedPayload
+--- PASS: TestReceiptVerifyFailsWithModifiedPayload (0.00s)
+=== RUN   TestReceiptExpiry
+--- PASS: TestReceiptExpiry (0.00s)
+=== RUN   TestNonceUniqueness
+--- PASS: TestNonceUniqueness (0.00s)
+PASS
+ok  	github.com/themayursinha/mcp-visor/internal/receipt	0.004s
