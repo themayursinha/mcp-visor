@@ -267,6 +267,12 @@ See [examples/policies/](examples/policies/) for more examples.
 - Ed25519 signing: 12.9 us, verification: 28.4 us
 - `make bench` target for one-command benchmark run
 
+### Observability export (v1.2)
+- Prometheus `/metrics` from live `ProxyMetrics` (`--metrics-addr`)
+- OTLP gRPC traces + tool-call metrics (`--otel-endpoint`); pairs with Grafana LGTM / Tempo / Mimir
+- Span model: `mcp.tools/call` with `policy.decision`, `tool.name`, `session.id` (no argument payloads)
+- Local lab: [`examples/otel-lgtm`](examples/otel-lgtm/README.md)
+
 ## Comparison with mcp-llm-security-evaluator
 
 | | mcp-llm-security-evaluator | mcp-visor |
@@ -323,6 +329,13 @@ Serve flags:
   -vault-namespace string Vault namespace (Enterprise)
   -vault-ca-cert string   Vault CA certificate file
   -vault-skip-verify      Skip Vault TLS verification
+  -metrics-addr string    Prometheus /metrics listen address (e.g. 127.0.0.1:9091)
+  -otel-endpoint string   OTLP gRPC endpoint (e.g. localhost:4317)
+  -otel-insecure          Insecure OTLP gRPC (default true, for local LGTM)
+  -otel-service-name string
+                          OpenTelemetry service.name (default mcp-visor)
+  -otel-trace-sample float
+                          Trace sampling ratio 0..1 when OTLP enabled (default 1)
 
 Lint flags:
   -json                   Output in JSON format
