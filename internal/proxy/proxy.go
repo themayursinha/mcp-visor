@@ -16,6 +16,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/approval"
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
+	"github.com/themayursinha/mcp-visor/internal/observability"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
@@ -39,6 +40,7 @@ type Proxy struct {
 	webhook        *webhook.Emitter
 	siem           *siem.Exporter
 	approvalSigner signer.Signer
+	obs            *observability.Runtime
 }
 
 type Config struct {
@@ -67,6 +69,7 @@ type Config struct {
 	SIEMTargets        []string
 	SIEMFormat         string
 	Vault              VaultConfig
+	Observability      observability.Config
 }
 
 type VaultConfig struct {
@@ -199,6 +202,9 @@ func NewWithTracing(cfg Config) *Proxy {
 }
 
 func (p *Proxy) Run(ctx context.Context) error {
+	if err := p.initObservability(); err != nil {
+		return fmt.Errorf("observability: %w", err)
+	}
 	if p.cfg.ServerURL != "" {
 		return p.RunRemote(ctx)
 	}
@@ -393,151 +399,12 @@ func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (jso
 		return raw, "denied"
 	}
 
-	serverName := p.cfg.ServerName
+	respond := func(id any, message string) {
+		errResp := mcp.NewErrorResponse(id, -32000, message)
+		_ = client.EncodeResponse(errResp)
+	}
 	originalRaw := raw
-	argsMap := extractArgs(callReq.Arguments)
-	p.metrics.IncrementProcessed()
-
-	if decision := p.evaluateRuntimeLimits(callReq); decision.Action == policy.ActionDeny {
-		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
-		_ = client.EncodeResponse(errResp)
-		p.metrics.IncrementDenied()
-		p.logDenied(serverName, callReq.Name, nil, decision.Reason, p.engine.GetRiskLevel(serverName, callReq.Name))
-		return raw, "denied"
-	}
-
-	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
-	if redactionResult.Redacted {
-		p.metrics.AddBytesRedacted(int64(len(raw)))
-		p.logger.Info("arguments redacted",
-			"tool", callReq.Name,
-			"fields", redactionResult.RedactedFields,
-			"session", p.session.ID,
-		)
-		p.logAudit(audit.Event{
-			EventType: audit.EventToolAllowed,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  "redact_then_allow",
-			Reason:    fmt.Sprintf("redacted fields: %v", redactionResult.RedactedFields),
-			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
-		})
-		rewritten, err := p.rewriteArgs(raw, redactedArgs)
-		if err == nil {
-			raw = rewritten
-		}
-	}
-
-	sensitivePath := p.extractPath(callReq)
-	if sensitivePath != "" && p.redactor.IsSensitiveFile(sensitivePath) {
-		errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
-		_ = client.EncodeResponse(errResp)
-
-		p.logAudit(audit.Event{
-			EventType: audit.EventToolDenied,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  string(policy.ActionDeny),
-			Reason:    fmt.Sprintf("sensitive file: %s", sensitivePath),
-			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
-		})
-
-		p.logger.Warn("sensitive file denied",
-			"tool", callReq.Name,
-			"path", sensitivePath,
-			"session", p.session.ID,
-		)
-		return raw, "denied"
-	}
-
-	decision := p.engine.Evaluate(serverName, callReq)
-	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
-	var chainContext []string
-
-	if decision.Action != policy.ActionDeny {
-		chainDecision, previousCalls := p.checkChain(serverName, callReq, redactedArgs, risk)
-		if chainDecision.Action == policy.ActionDeny {
-			p.metrics.IncrementDenied()
-			p.metrics.IncrementChains()
-			errResp := mcp.NewErrorResponse(req.ID, -32000, "chain rule: tool sequence matches dangerous pattern")
-			_ = client.EncodeResponse(errResp)
-			return raw, "denied"
-		}
-		if chainDecision.Action == policy.ActionRequireApproval {
-			p.metrics.IncrementChains()
-			decision = chainDecision
-			chainContext = previousCalls
-		}
-	}
-
-	switch decision.Action {
-	case policy.ActionDeny:
-		p.metrics.IncrementDenied()
-		errResp := mcp.NewErrorResponse(req.ID, -32000, decision.Reason)
-		_ = client.EncodeResponse(errResp)
-
-		p.logAudit(audit.Event{
-			EventType: audit.EventToolDenied,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  string(decision.Action),
-			Reason:    decision.Reason,
-			RiskLevel: string(risk),
-		})
-
-		p.logger.Warn("policy denied",
-			"tool", callReq.Name,
-			"reason", decision.Reason,
-			"session", p.session.ID,
-		)
-		return raw, "denied"
-
-	case policy.ActionRequireApproval:
-		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext)
-		if !outcome.Approved {
-			errResp := mcp.NewErrorResponse(req.ID, -32000, fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason))
-			_ = client.EncodeResponse(errResp)
-			return raw, "denied"
-		}
-
-		allowEvent := audit.Event{
-			EventType: audit.EventToolAllowed,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  string(policy.ActionAllow),
-			Reason:    "approved by human operator",
-			RiskLevel: string(risk),
-		}
-		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
-		p.logAudit(allowEvent)
-
-		p.logger.Info("approval granted",
-			"tool", callReq.Name,
-			"session", p.session.ID,
-		)
-		p.metrics.IncrementApproved()
-		return raw, "forward"
-
-	case policy.ActionAllow:
-		p.metrics.IncrementAllowed()
-		return raw, "forward"
-
-	default:
-		p.metrics.IncrementAllowed()
-		return raw, "forward"
-	}
+	return p.processToolsCall(req, callReq, raw, originalRaw, p.cfg.ServerName, respond)
 }
 
 func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, risk policy.RiskLevel) (policy.Decision, []string) {
@@ -1035,6 +902,7 @@ func sha256Hex(data []byte) string {
 }
 
 func (p *Proxy) closeEventSinks() {
+	p.shutdownObservability()
 	if p.webhook != nil {
 		p.webhook.Close()
 	}

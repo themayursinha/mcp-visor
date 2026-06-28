@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/themayursinha/mcp-visor/internal/dashboard"
+	"github.com/themayursinha/mcp-visor/internal/observability"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/proxy"
 )
@@ -66,6 +67,11 @@ func main() {
 	vaultSkipVerify := serveCmd.Bool("vault-skip-verify", false, "Skip Vault TLS verification")
 	dashEnabled := serveCmd.Bool("dashboard", false, "Enable web dashboard")
 	dashboardAddr := serveCmd.String("dashboard-addr", "127.0.0.1:9090", "Dashboard listen address")
+	metricsAddr := serveCmd.String("metrics-addr", "", "Prometheus /metrics listen address (e.g. 127.0.0.1:9091); empty disables")
+	otelEndpoint := serveCmd.String("otel-endpoint", "", "OTLP gRPC endpoint for traces/metrics (e.g. localhost:4317); empty disables")
+	otelInsecure := serveCmd.Bool("otel-insecure", true, "Use insecure gRPC for OTLP (typical for local LGTM)")
+	otelService := serveCmd.String("otel-service-name", "mcp-visor", "OpenTelemetry service.name")
+	otelTraceSample := serveCmd.Float64("otel-trace-sample", 1.0, "Trace sampling ratio 0..1 when OTLP is enabled")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -193,6 +199,13 @@ func main() {
 				Namespace:  *vaultNamespace,
 				CACert:     *vaultCACert,
 				SkipVerify: *vaultSkipVerify,
+			},
+			Observability: observability.Config{
+				MetricsListenAddr: *metricsAddr,
+				OTLPEndpoint:      *otelEndpoint,
+				OTLPInsecure:      *otelInsecure,
+				ServiceName:       *otelService,
+				TraceSampleRatio:  *otelTraceSample,
 			},
 		})
 

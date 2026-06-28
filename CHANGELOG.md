@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Observability export (OTel / Prometheus)
+
+- Optional Prometheus scrape endpoint (`--metrics-addr`, `/metrics`)
+- Optional OTLP gRPC export for traces and per-tool-call metrics (`--otel-endpoint`, `--otel-service-name`, `--otel-trace-sample`, `--otel-insecure`)
+- Spans on `mcp.tools/call` with policy attributes only (no tool arguments)
+- Shared `processToolsCall` path for stdio and remote transports
+- Example lab: `examples/otel-lgtm`
+
 ## v1.1.0 (2026-05-27)
 
 ### Policy Linting
