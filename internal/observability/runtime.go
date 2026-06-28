@@ -70,10 +70,10 @@ type Runtime struct {
 	cfg     Config
 	metrics MetricsProvider
 
-	httpServer *http.Server
+	httpServer  *http.Server
 	metricsAddr string // actual listen address (after :0 bind)
-	otel       *otelPipeline
-	mu         sync.Mutex
+	otel        *otelPipeline
+	mu          sync.Mutex
 }
 
 // New builds a runtime; call Start before serving traffic.
