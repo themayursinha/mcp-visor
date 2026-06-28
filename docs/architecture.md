@@ -332,6 +332,16 @@ MCP message-level tracing captures every message flowing through the proxy for d
 
 Configure via `--trace` and `--trace-format` CLI flags. Tracing granularity can be tuned to capture handshake messages, policy decisions, redaction events, and chain detections independently. `ProxyMetrics` provides 8 counters (messages processed, denied, allowed, approved, bytes redacted, etc.) for observability.
 
+## Observability export (Prometheus / OTLP)
+
+Production telemetry is **exported**, not rendered inside visor:
+
+- **Prometheus** (`--metrics-addr`): scrape `/metrics` for `ProxyMetrics` counters.
+- **OTLP gRPC** (`--otel-endpoint`): per `tools/call` spans (`mcp.tools/call`) with `policy.decision`, `tool.name`, `session.id`, and risk — **no tool argument payloads**.
+- Export failures are non-blocking; enforcement stays on the hot path.
+
+See `examples/otel-lgtm` for a Grafana LGTM local stack.
+
 ## Vault Transit Integration
 
 HashiCorp Vault Transit secrets engine provides cryptographic signing without exposing private keys to the visor:
