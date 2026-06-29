@@ -1,15 +1,57 @@
+# Secrets and credentials
 .env
 .env.*
 *.pem
 *.key
+*.p12
+*.pfx
 secrets/
 credentials.json
+*.htpasswd
 
-*.log
-audit-logs/
-coverage.out
+# Private notes and drafts
 PLAN.md
 NOTES.md
 DRAFT.md
+PRIVATE.md
+INTERNAL.md
+
+# Build artifacts
 mcp-visor
 *.test
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+coverage.out
+coverage.html
+*.prof
+
+# Logs and audit
+*.log
+audit-logs/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+
+# Python venv (examples)
+.venv/
+__pycache__/
+*.pyc
+
+# Node (opencode)
+node_modules/
+package-lock.json
