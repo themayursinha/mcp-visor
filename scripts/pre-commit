@@ -1,10 +1,49 @@
 #!/bin/bash
-# Pre-commit hook: block commits with known vulnerabilities or vet failures.
+# Pre-commit hook: block sensitive files, then check for vulnerabilities.
 # Install: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 set -euo pipefail
 
 export PATH="$HOME/.local/go/bin:$HOME/go/bin:/usr/local/go/bin:/usr/local/bin:$PATH"
 
+# --- Guard: block sensitive files from being committed ---
+BLOCKED_PATTERNS=(
+  'PLAN.md'
+  'NOTES.md'
+  'DRAFT.md'
+  'PRIVATE.md'
+  'INTERNAL.md'
+  '.env'
+  '.env.'
+  '*.pem'
+  '*.key'
+  '*.p12'
+  '*.pfx'
+  'credentials.json'
+  '*.htpasswd'
+  '.DS_Store'
+  'Thumbs.db'
+)
+
+staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+for file in $staged; do
+  basename=$(basename "$file")
+  for pattern in "${BLOCKED_PATTERNS[@]}"; do
+    if [[ "$basename" == $pattern ]]; then
+      echo "BLOCKED: '$file' matches sensitive pattern '$pattern'"
+      echo "If this is a false positive, use: git add -f <file> (not recommended for secrets)"
+      exit 1
+    fi
+  done
+  # Check file content for private keys
+  if git show ":$file" 2>/dev/null | grep -qE 'BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY'; then
+    echo "BLOCKED: '$file' contains a private key"
+    exit 1
+  fi
+done
+
+echo "==> Sensitive file guard: passed"
+
+# --- go vet ---
 echo "==> go vet ./..."
 go vet ./... || { echo "FAIL: go vet found issues. Fix them before committing."; exit 1; }
 
