@@ -17,6 +17,14 @@ Runtime Policy Enforcement & Audit Control Plane for MCP Tool Execution
 
 > *"The model is persuadable. Policy enforcement shouldn't be."*
 
+**Research & writing**
+
+| | Link |
+|---|------|
+| **Paper** | [MCP Visor: Deterministic Runtime Enforcement for Governing Tool-Using AI Agents](https://www.researchgate.net/publication/407908047_MCP_Visor_Deterministic_Runtime_Enforcement_for_Governing_Tool-Using_AI_Agents) (ResearchGate) |
+| **Blog** | [Runtime policy enforcement for AI agents](https://themayursinha.com/architecture/2026/05/25/mcp-visor-runtime-policy-enforcement-for-ai-agents/) · [Spec engineering](https://themayursinha.com/architecture/2026/06/27/spec-engineering-the-missing-layer-in-ai-agent-security/) · [Three trust paths](https://themayursinha.com/architecture/2026/06/15/three-trust-paths-for-governing-ai-agent-architectures/) · [MCP supply-chain risk](https://themayursinha.com/architecture/2026/05/06/mcp-security-the-new-supply-chain-risk-for-ai-agents/) |
+| **Author** | [themayursinha.com](https://themayursinha.com) |
+
 ---
 
 ## Quick Stats
