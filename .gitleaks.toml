@@ -1,0 +1,12 @@
+title = "mcp-visor gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake secret fixtures used by redaction tests and benchmarks"
+paths = [
+  '''internal/audit/logger_bench_test\.go''',
+  '''internal/redaction/engine_test\.go''',
+  '''internal/redaction/engine_bench_test\.go''',
+]
