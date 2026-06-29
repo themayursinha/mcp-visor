@@ -2,13 +2,31 @@
 
 ## Unreleased
 
-### Observability export (OTel / Prometheus)
+## v2.0.1 (2026-06-30)
 
-- Optional Prometheus scrape endpoint (`--metrics-addr`, `/metrics`)
-- Optional OTLP gRPC export for traces and per-tool-call metrics (`--otel-endpoint`, `--otel-service-name`, `--otel-trace-sample`, `--otel-insecure`)
-- Spans on `mcp.tools/call` with policy attributes only (no tool arguments)
+### Added
+
+- Prometheus scrape endpoint (`--metrics-addr`, `/metrics`)
+- OTLP gRPC export for traces and per-tool-call metrics (`--otel-endpoint`, `--otel-service-name`, `--otel-trace-sample`, `--otel-insecure`)
+- OpenTelemetry spans on `mcp.tools/call` with policy attributes only (no tool arguments)
 - Shared `processToolsCall` path for stdio and remote transports
 - Example lab: `examples/otel-lgtm`
+- Runtime evidence bundle under `evidence/runtime/` for paper evaluation reproducibility
+
+### Fixed
+
+- Release workflow: GoReleaser action version `v2.7.6` (404) replaced with `~> v2` ([#21](https://github.com/themayursinha/mcp-visor/pull/21))
+- OpenTelemetry SDK bumped to v1.40.0 (GO-2026-4394)
+- CI `govulncheck` bumped to v1.5.0 (panic on Go 1.26.4)
+- Supply-chain workflow govulncheck version alignment
+- Gitleaks allowlist for redaction test fixtures (no real secrets)
+
+### Changed
+
+- README: research and blog links, roadmap clarity, public positioning sections
+- `.gitignore` hardened (secrets, private notes, build artifacts, OS junk)
+- Pre-commit hook blocks sensitive filenames and private keys before commit
+- Removed tracked `dist/` binaries, `.DS_Store`, and stray `v2` file from the repo
 
 ## v1.1.0 (2026-05-27)
 
