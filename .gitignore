@@ -9,5 +9,7 @@ credentials.json
 audit-logs/
 coverage.out
 PLAN.md
+NOTES.md
+DRAFT.md
 mcp-visor
 *.test
