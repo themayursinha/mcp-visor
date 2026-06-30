@@ -17,6 +17,8 @@ Runtime Policy Enforcement & Audit Control Plane for MCP Tool Execution
 
 > *"The model is persuadable. Policy enforcement shouldn't be."*
 
+**Core product:** deterministic MCP `tools/call` enforcement (YAML policy, default-deny, redaction, chains, audit). **Advanced** integrations (Vault, SIEM, OTLP, dashboard, remote transport) are optional—see [docs/complexity-budget.md](docs/complexity-budget.md).
+
 **Research & writing**
 
 | | Link |
@@ -24,6 +26,40 @@ Runtime Policy Enforcement & Audit Control Plane for MCP Tool Execution
 | **Paper** | [MCP Visor: Deterministic Runtime Enforcement for Governing Tool-Using AI Agents](https://www.researchgate.net/publication/407908047_MCP_Visor_Deterministic_Runtime_Enforcement_for_Governing_Tool-Using_AI_Agents)|
 | **Blog** | [Runtime policy enforcement for AI agents](https://themayursinha.com/architecture/2026/05/25/mcp-visor-runtime-policy-enforcement-for-ai-agents/) · [Spec engineering](https://themayursinha.com/architecture/2026/06/27/spec-engineering-the-missing-layer-in-ai-agent-security/) · [Three trust paths](https://themayursinha.com/architecture/2026/06/15/three-trust-paths-for-governing-ai-agent-architectures/) · [MCP supply-chain risk](https://themayursinha.com/architecture/2026/05/06/mcp-security-the-new-supply-chain-risk-for-ai-agents/) |
 
+
+---
+
+## Start here (60 seconds)
+
+See enforcement without wiring a real MCP server:
+
+```bash
+# Install
+go install github.com/themayursinha/mcp-visor/cmd/mcp-visor@latest
+
+# Run built-in mock server + permissive demo policy
+mcp-visor serve --demo
+```
+
+Pre-built binaries: [Releases](https://github.com/themayursinha/mcp-visor/releases).
+
+Then point your agent at the visor instead of the raw server:
+
+```text
+AI Agent → mcp-visor serve -server <your-mcp-server> -policy policy.yaml → MCP server
+```
+
+Validate policy before deploy:
+
+```bash
+mcp-visor lint examples/policies/developer-medium.yaml
+```
+
+Harness check (contributors / AI-assisted changes):
+
+```bash
+.hermes/harness/check.sh
+```
 
 ---
 
@@ -66,19 +102,6 @@ Every `tools/call` is intercepted and evaluated:
 5. **Approve** — Hold high-risk calls for human confirmation
 6. **Log** — Record every decision in a redacted, structured audit trail
 
-## Quick Start
-
-```bash
-# Install
-go install github.com/themayursinha/mcp-visor/cmd/mcp-visor@latest
-
-# Run with a demo server (60 seconds to first enforcement)
-mcp-visor serve --demo
-
-# Or download a pre-built binary from the releases page:
-# https://github.com/themayursinha/mcp-visor/releases
-```
-
 ## Why MCP Visor vs Alternatives
 
 | | MCP Visor | Runlayer | Microsoft Toolkit | Obot AI |
@@ -103,6 +126,8 @@ mcp-visor serve --demo
 - **MCP developers** who want to test their servers safely — proxy with deny-by-default, redact secrets
 
 ## Architecture
+
+Core path: **redaction → policy → chain → approval → audit** over stdio MCP. Vault, webhooks, SIEM, and trace are **advanced** (optional flags). See [docs/complexity-budget.md](docs/complexity-budget.md).
 
 ```
 ┌──────────────┐     ┌────────────────────────────────────────────────┐     ┌──────────────┐
@@ -186,9 +211,11 @@ tool_chains:
 
 See [examples/policies/](examples/policies/) for more examples.
 
-## Features
+## Core capabilities
 
-### Policy Enforcement
+Everything below is on the default enforcement path (no Vault/SIEM/OTLP required).
+
+### Policy enforcement
 - Tool allowlist/denylist with default-deny
 - 16 argument rule types: deny_path, allow_path, deny_command_pattern, allow_command_pattern, deny_command_keyword, deny_command_pattern_composite, deny_query_pattern, allow_query_pattern, allowed_repos, deny_recipient_domain, allow_recipient_domain, max_file_size, max_result_rows, max_export_rows, require_approval_always
 - Risk classification (critical/high/medium/low)
@@ -215,13 +242,23 @@ See [examples/policies/](examples/policies/) for more examples.
 - Redacts outputs before returning to client
 - Blocks access to sensitive files (.env, .ssh, credentials, .pem, .key)
 
-### Approval Workflow
+### Approval workflow
 - File-based: write `req-<id>.json`, approver creates `req-<id>.ok` to approve
 - CLI-based: interactive yes/no prompt on terminal
 - Configurable timeout with fail-closed default
 - Full audit trail for approval decisions
 
-### Durable Approval (v2)
+### Audit logging
+- JSONL format with redacted data
+- 8 event types: tool_call_allowed, tool_call_denied, tool_call_chain_detected, tool_call_approval_required, session_started, session_ended, policy_loaded, policy_reloaded
+- Hash-chained entries (SHA-256) for tamper evidence
+- O_SYNC writes for durability
+
+## Advanced & enterprise integrations
+
+Optional flags and examples—same binary, not required for core enforcement.
+
+### Durable approval (v2)
 - Signed Decision Receipts with ed25519 signatures
 - Execution IDs with nonce and expiry for replay protection
 - Durable retry: persist pending approvals, agent retries with signed receipt
@@ -232,13 +269,7 @@ See [examples/policies/](examples/policies/) for more examples.
 - HMAC-SHA256 signatures for payload authenticity
 - Configurable retry with exponential backoff
 
-### Audit Logging
-- JSONL format with redacted data
-- 8 event types: tool_call_allowed, tool_call_denied, tool_call_chain_detected, tool_call_approval_required, session_started, session_ended, policy_loaded, policy_reloaded
-- Hash-chained entries (SHA-256) for tamper evidence
-- O_SYNC writes for durability
-
-### SIEM Export (v2)
+### SIEM export (v2)
 - RFC 5424 syslog format
 - JSON envelope format for Splunk/Elastic
 - CEF (Common Event Format)
@@ -302,10 +333,22 @@ mcp-visor serve [flags]
 mcp-visor lint [flags] <policy-file>
 mcp-visor version
 
-Serve flags:
+Core serve flags:
   -server string          MCP server command to proxy (local stdio)
   -server-name string     Logical server name for policy matching
   -server-arg value       Argument for the MCP server command (repeatable)
+  -policy string          Path to policy YAML file (default: built-in deny-all)
+  -audit-log string       Path to JSONL audit log file (default: stderr)
+  -approval-dir string    Directory for file-based approval workflow
+  -approval-cli           Use interactive CLI prompt for approval
+  -approval-signing-key string
+                           Ed25519 private key PEM file for signing approval receipts (default: ephemeral key)
+  -session-id string      Session identifier
+  -client-id string       Client identifier
+  -demo                   Start with built-in mock server and permissive policy
+  -log-level string       Log level: debug, info, warn, error (default: info)
+
+Advanced serve flags (remote, control plane, observability):
   -server-url string      Remote MCP server URL (enables HTTP+SSE transport)
   -sse-path string        SSE endpoint path (default: /sse)
   -insecure-tls           Skip TLS certificate verification for remote servers
@@ -314,23 +357,13 @@ Serve flags:
   -remote-ca string       CA certificate file for remote MCP TLS verification
   -remote-server-name string
                            Expected TLS server name for remote MCP server
-  -policy string          Path to policy YAML file (default: built-in deny-all)
-  -audit-log string       Path to JSONL audit log file (default: stderr)
   -webhook-url value      Webhook endpoint for audit/approval events (repeatable)
   -webhook-hmac-secret string
                            HMAC secret used to sign webhook payloads
   -siem-target value      SIEM export target: file path, tcp:host:port, or udp:host:port (repeatable)
   -siem-format string     SIEM export format: json, syslog-rfc5424, cef (default: json)
-  -approval-dir string    Directory for file-based approval workflow
-  -approval-cli           Use interactive CLI prompt for approval
-  -approval-signing-key string
-                           Ed25519 private key PEM file for signing approval receipts (default: ephemeral key)
-  -session-id string      Session identifier
-  -client-id string       Client identifier
-  -demo                   Start with built-in mock server and permissive policy
   -trace                  Enable MCP message tracing
   -trace-format string    Trace output format: text, jsonl, summary (default: text)
-  -log-level string       Log level: debug, info, warn, error (default: info)
   -vault-addr string      Vault server address for Transit signing
   -vault-token string     Vault authentication token
   -vault-key-name string  Vault Transit key name (default: mcp-visor-approval)
@@ -360,6 +393,9 @@ go build ./cmd/mcp-visor/
 
 # Test
 go test ./...
+
+# Harness (fmt + vet + test + evidence manifest)
+.hermes/harness/check.sh
 
 # Benchmark
 make bench
@@ -401,7 +437,7 @@ go run ./cmd/mcp-visor lint examples/policies/developer-medium.yaml
 
 ## Contributing
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Areas needing work: web-based approval dashboard, Vault/KMS live integration, additional MCP server integrations, WASI sandboxing.
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/complexity-budget.md](docs/complexity-budget.md). Run `.hermes/harness/check.sh` before PRs. Areas needing work: harness invariants for new rule types, Vault/KMS live integration docs, additional MCP server examples.
 
 ## License
 

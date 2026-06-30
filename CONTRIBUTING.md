@@ -21,8 +21,14 @@ make fmt       # Format code
 ## Before Submitting a PR
 
 ```bash
-make test && make vet
+.hermes/harness/check.sh
 ```
+
+That runs `make fmt`, `make vet`, and `make test`, and writes a local evidence manifest under `evidence/harness/` (gitignored).
+
+## Complexity budget
+
+Do not add features without reading [docs/complexity-budget.md](docs/complexity-budget.md). New work must strengthen core enforcement, demo/adoption, bypass reduction, or harness coverage. Advanced integrations (Vault, SIEM, OTLP, dashboard, remote transport) stay **flag-gated** and documented as optional.
 
 ## Code Organization
 
@@ -44,7 +50,15 @@ examples/
   malicious-prompts/   Documented prompt injection scenarios
 ```
 
+## Harness
+
+- Contract: `.hermes/harness/project-contract.md`
+- Invariants → tests: `.hermes/harness/invariants.md`
+- Runner: `.hermes/harness/check.sh`
+
 ## Adding Features
+
+Pass the complexity budget gate in `docs/complexity-budget.md` first.
 
 - New policy rule types go in `internal/policy/engine.go` (`evaluateRule`)
 - New audit event types go in `internal/audit/logger.go`

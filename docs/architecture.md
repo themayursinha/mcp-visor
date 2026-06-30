@@ -2,6 +2,8 @@
 
 Runtime architecture and component design for the MCP Visor policy enforcement proxy.
 
+**Product tiers:** Core vs Advanced vs Experimental are defined in [complexity-budget.md](complexity-budget.md). The diagram below includes optional enterprise components (Vault, SIEM, webhooks); the **60-second demo path** uses stdio proxy, policy, redaction, chain detection, and audit only.
+
 ## Component Diagram
 
 ```
