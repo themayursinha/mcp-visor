@@ -98,3 +98,11 @@ Evidence manifests are written under `evidence/harness/` (gitignored).
 
 - [Architecture](architecture.md) — decision pipeline and components
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — PR gate + harness
+
+## Adjacent open source (watchlist)
+
+| Project | Relationship to MCP Visor |
+|---------|---------------------------|
+| [OxDeAI](https://github.com/oxdeai/oxdeai) | Same thesis (deterministic authz before execution) at **framework PEP + AuthorizationV1**, not MCP wire proxy. Useful for harness vectors and Agent RASP patterns. Internal wiki: OxDeAI peer note (Obsidian `oxdeai-execution-authorization`). |
+
+Review quarterly: MCP adapter from OxDeAI, or material adoption shift.
