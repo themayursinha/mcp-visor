@@ -65,9 +65,9 @@ No new feature unless it strengthens at least one of:
 
 If a proposal fails all four, it does not ship in Core and should not expand CLI surface without explicit maintainer intent.
 
-## Feature sprawl (inventory)
+## Feature inventory
 
-Same binary, tiered documentation. Sprawl risk = **cognitive load**, not line count.
+Same binary, tiered documentation.
 
 | Area | Tier | On critical demo path? |
 |------|------|-------------------------|
@@ -98,11 +98,3 @@ Evidence manifests are written under `evidence/harness/` (gitignored).
 
 - [Architecture](architecture.md) — decision pipeline and components
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — PR gate + harness
-
-## Adjacent open source (watchlist)
-
-| Project | Relationship to MCP Visor |
-|---------|---------------------------|
-| [OxDeAI](https://github.com/oxdeai/oxdeai) | Same thesis (deterministic authz before execution) at **framework PEP + AuthorizationV1**, not MCP wire proxy. Useful for harness vectors and Agent RASP patterns. Internal wiki: OxDeAI peer note (Obsidian `oxdeai-execution-authorization`). |
-
-Review quarterly: MCP adapter from OxDeAI, or material adoption shift.
