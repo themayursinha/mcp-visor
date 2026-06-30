@@ -364,6 +364,8 @@ Advanced serve flags (remote, control plane, observability):
   -siem-format string     SIEM export format: json, syslog-rfc5424, cef (default: json)
   -trace                  Enable MCP message tracing
   -trace-format string    Trace output format: text, jsonl, summary (default: text)
+  -dashboard              Enable web dashboard
+  -dashboard-addr string  Dashboard listen address (default: 127.0.0.1:9090)
   -vault-addr string      Vault server address for Transit signing
   -vault-token string     Vault authentication token
   -vault-key-name string  Vault Transit key name (default: mcp-visor-approval)

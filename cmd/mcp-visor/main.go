@@ -158,8 +158,6 @@ func main() {
 			logLevelOpt = slog.LevelInfo
 		}
 
-		_ = logLevelOpt // TODO: apply to proxy
-
 		var enabledTracing proxy.TracingConfig
 		if *traceEnable {
 			enabledTracing = proxy.TracingConfig{
@@ -209,6 +207,7 @@ func main() {
 			},
 		})
 
+		p.SetLogLevel(logLevelOpt)
 		if *dashEnabled {
 			ds := dashboard.NewServer(*dashboardAddr, p.DashboardProvider())
 			go func() {
