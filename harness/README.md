@@ -4,7 +4,7 @@ Minimal **harness engineering** for this repo: contract, invariants, and one scr
 
 ```bash
 # From repository root
-.hermes/harness/check.sh
+harness/check.sh
 ```
 
 ## Contents

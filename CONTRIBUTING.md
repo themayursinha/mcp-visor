@@ -21,7 +21,7 @@ make fmt       # Format code
 ## Before Submitting a PR
 
 ```bash
-.hermes/harness/check.sh
+harness/check.sh
 ```
 
 That runs `make fmt`, `make vet`, and `make test`, and writes a local evidence manifest under `evidence/harness/` (gitignored).
@@ -52,9 +52,9 @@ examples/
 
 ## Harness
 
-- Contract: `.hermes/harness/project-contract.md`
-- Invariants → tests: `.hermes/harness/invariants.md`
-- Runner: `.hermes/harness/check.sh`
+- Contract: `harness/project-contract.md`
+- Invariants → tests: `harness/invariants.md`
+- Runner: `harness/check.sh`
 
 ## Adding Features
 

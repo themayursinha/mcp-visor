@@ -2,7 +2,7 @@
 # MCP Visor harness — run from repository root.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 export PATH="${PATH:-}"
@@ -50,7 +50,7 @@ cat >"$EVID_DIR/manifest.md" <<EOF
 - **Commands:** \`make fmt\`, \`make vet\`, \`make test\`
 - **Log:** \`check.log\` (same directory)
 
-## Invariants (see \`.hermes/harness/invariants.md\`)
+## Invariants (see `harness/invariants.md`)
 
 Covered by integration tests in this run:
 

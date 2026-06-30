@@ -86,10 +86,10 @@ Same binary, tiered documentation.
 
 ## Harness
 
-Executable verification lives in [`.hermes/harness/`](../.hermes/harness/README.md). Run before considering doc or enforcement changes “done”:
+Executable verification lives in [`harness/`](../harness/README.md). Run before considering doc or enforcement changes "done":
 
 ```bash
-.hermes/harness/check.sh
+harness/check.sh
 ```
 
 Evidence manifests are written under `evidence/harness/` (gitignored).

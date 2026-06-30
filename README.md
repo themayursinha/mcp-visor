@@ -58,7 +58,7 @@ mcp-visor lint examples/policies/developer-medium.yaml
 Harness check (contributors / AI-assisted changes):
 
 ```bash
-.hermes/harness/check.sh
+harness/check.sh
 ```
 
 ---
@@ -397,7 +397,7 @@ go build ./cmd/mcp-visor/
 go test ./...
 
 # Harness (fmt + vet + test + evidence manifest)
-.hermes/harness/check.sh
+harness/check.sh
 
 # Benchmark
 make bench
@@ -439,7 +439,7 @@ go run ./cmd/mcp-visor lint examples/policies/developer-medium.yaml
 
 ## Contributing
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/complexity-budget.md](docs/complexity-budget.md). Run `.hermes/harness/check.sh` before PRs. Areas needing work: harness invariants for new rule types, Vault/KMS live integration docs, additional MCP server examples.
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/complexity-budget.md](docs/complexity-budget.md). Run `harness/check.sh` before PRs. Areas needing work: harness invariants for new rule types, Vault/KMS live integration docs, additional MCP server examples.
 
 ## License
 

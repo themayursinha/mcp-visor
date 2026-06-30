@@ -21,4 +21,4 @@ Each invariant maps to automated checks in `check.sh` (via `go test`) or manual 
 
 1. Add a row here with a test name or lint rule.
 2. Add or extend integration test under `tests/integration/`.
-3. Run `.hermes/harness/check.sh` and attach evidence manifest.
+3. Run `harness/check.sh` and attach evidence manifest.
