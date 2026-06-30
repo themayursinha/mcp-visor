@@ -50,7 +50,7 @@ cat >"$EVID_DIR/manifest.md" <<EOF
 - **Commands:** \`make fmt\`, \`make vet\`, \`make test\`
 - **Log:** \`check.log\` (same directory)
 
-## Invariants (see `harness/invariants.md`)
+## Invariants (see \`harness/invariants.md\`)
 
 Covered by integration tests in this run:
 
