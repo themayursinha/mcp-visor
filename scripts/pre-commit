@@ -43,6 +43,9 @@ done
 
 echo "==> Sensitive file guard: passed"
 
+echo "==> Sensitive content scan"
+bash scripts/check-sensitive-content
+
 # --- go vet ---
 echo "==> go vet ./..."
 go vet ./... || { echo "FAIL: go vet found issues. Fix them before committing."; exit 1; }

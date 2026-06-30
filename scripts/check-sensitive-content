@@ -1,0 +1,29 @@
+#!/bin/bash
+# Fail if repository-tracked files contain local/internal paths or private runtime artifacts.
+set -euo pipefail
+
+fail=0
+
+# Runtime evidence often contains local filesystem paths and paper/private working context.
+tracked_evidence=$(git ls-files 'evidence/**' 2>/dev/null || true)
+if [[ -n "$tracked_evidence" ]]; then
+  echo "BLOCKED: evidence/ contains tracked files. Keep runtime evidence local/private." >&2
+  echo "$tracked_evidence" >&2
+  fail=1
+fi
+
+# Internal/local path markers must never be committed to the public repo.
+# Exclude this checker itself so the denylist definitions do not self-match.
+if git grep -n -I -E '(/home/mayur|/datadisk|/Users/[^/[:space:]]+|C:\\Users\\|[Ss]tellaris)' -- . ':(exclude)scripts/check-sensitive-content' >/tmp/mcp-visor-sensitive-hits.txt 2>/dev/null; then
+  echo "BLOCKED: tracked files contain local/internal path markers:" >&2
+  cat /tmp/mcp-visor-sensitive-hits.txt >&2
+  fail=1
+fi
+rm -f /tmp/mcp-visor-sensitive-hits.txt
+
+if [[ "$fail" -ne 0 ]]; then
+  echo "Sensitive content guard failed." >&2
+  exit 1
+fi
+
+echo "Sensitive content scan: clean"

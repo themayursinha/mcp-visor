@@ -25,10 +25,11 @@ dist/
 *.so
 *.dylib
 
-# Test artifacts
+# Test and local evidence artifacts
 coverage.out
 coverage.html
 *.prof
+evidence/
 
 # Logs and audit
 *.log
