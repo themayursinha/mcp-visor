@@ -19,6 +19,8 @@ servers:           # Server and tool definitions
 tool_chains:       # Chain detection rules
   - sources: ...
     sinks: ...
+taints:            # Session state markers set by source tool calls
+egress_controls:   # Stateful sink controls after taint
 identities:        # Per-agent identity policies (optional)
 redaction:         # Sensitive data detection patterns
 time_restrictions: # Time-of-day access controls (optional)
@@ -34,6 +36,8 @@ time_restrictions: # Time-of-day access controls (optional)
 | `settings` | object | No | Global settings (defaults applied if omitted). |
 | `servers` | array | Yes | List of MCP server configurations and their tool rules. |
 | `tool_chains` | array | No | Chain detection rules for dangerous tool sequences. |
+| `taints` | array | No | Session state markers set when source tools access sensitive data. |
+| `egress_controls` | array | No | Stateful sink controls triggered by existing session taints. |
 | `identities` | array | No | Per-agent identity-based access control. |
 | `time_restrictions` | array | No | Time-of-day or day-of-week access restrictions. |
 | `redaction` | object | No | Sensitive data detection and redaction configuration. |
@@ -292,6 +296,41 @@ Chain detection is configurable. No chain rules fire unless defined in policy. C
 | `env_read` | `browser_navigate` | Secrets leaked via browser |
 | `*_read` | `*_delete` | Read-then-destroy pattern |
 
+## Session Taints and Egress Controls
+
+Taints let policy remember what the agent has already touched in this session. Egress controls then change later authorization decisions based on that state.
+
+```yaml
+taints:
+  - name: "sensitive_file_accessed"
+    description: "Session has accessed sensitive workspace data"
+    source_tools: ["file_read"]
+    source_patterns:
+      - "**/customer-secrets/**"
+      - "**/secrets/**"
+
+egress_controls:
+  - name: "block_sensitive_egress"
+    description: "Block outbound sends after sensitive access"
+    when_tainted: "sensitive_file_accessed"
+    sink_tools: ["http_post", "slack_send_message"]
+    action: deny
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `taints[].name` | string | Yes | Taint identifier stored on the session. |
+| `taints[].source_servers` | array | No | Source server names or `"*"`. Omit to match any server. |
+| `taints[].source_tools` | array | Yes | Source tool names/patterns that can mark the session. |
+| `taints[].source_patterns` | array | No | Glob patterns matched against string argument values. |
+| `egress_controls[].name` | string | Yes | Control identifier, included in audit events. |
+| `egress_controls[].when_tainted` | string | Yes | Taint that must already exist on the session. |
+| `egress_controls[].sink_servers` | array | No | Sink server names/patterns. Omit to match any server. |
+| `egress_controls[].sink_tools` | array | Yes | Sink tool names/patterns to gate. |
+| `egress_controls[].action` | string | Yes | `"deny"` or `"require_approval"`. |
+
+Audit events for taint-triggered denials include `session_taints`, `taint_source`, `taint_reason`, and `policy_rule`.
+
 ## Identity-Based Access
 
 Restrict tool access per agent identity. Only tools/servers listed in the identity's allowlists are permitted.
@@ -443,9 +482,10 @@ Policy checks are applied in a fixed order:
 4. Server allowed? (deny if explicitly `allowed: false`)
 5. Tool allowed? (deny if explicitly `allowed: false`)
 6. Argument validation rules (in order: deny rules first, then allow rules)
-7. Chain detection (check recent call history)
-8. Approval check (hold if `approval_required: true`)
-9. Allow (forward to server)
+7. Existing session taints checked against egress controls
+8. Chain detection (check recent call history)
+9. Approval check (hold if `approval_required: true`)
+10. Allow (forward to server); matching source tools can mark session taints for later calls
 
 The first non-allow decision terminates evaluation. For example, if a tool is denied by argument validation, chain detection is never checked.
 
@@ -546,6 +586,7 @@ The repository includes example policies demonstrating different postures:
 | Strict Deny | `examples/policies/strict-deny.yaml` | deny | Deny everything by default. |
 | Developer Medium | `examples/policies/developer-medium.yaml` | deny | Allow reads, deny writes, approve network. |
 | Demo Policy | `examples/policies/demo-policy.yaml` | deny | Permissive demo configuration. |
+| Session Taint Egress | `examples/policies/session-taint-egress.yaml` | deny | Sensitive read marks session; later egress is blocked. |
 
 ## Error Handling
 

@@ -89,6 +89,16 @@ tool_chains:
         tool_pattern: "(http_post|slack_send_message)"
     action: deny
     within_calls: 3
+
+taints:
+  - name: "sensitive_file_accessed"
+    source_tools: ["file_read"]
+    source_patterns: ["**/customer-secrets/**"]
+egress_controls:
+  - name: "block_sensitive_egress"
+    when_tainted: "sensitive_file_accessed"
+    sink_tools: ["http_post", "slack_send_message"]
+    action: deny
 ```
 
 More: [examples/policies/](examples/policies/)
@@ -102,6 +112,7 @@ More: [examples/policies/](examples/policies/)
 - Secret redaction (API keys, tokens, JWTs, private keys) in arguments and outputs
 - Sensitive file blocking (`.env`, `.ssh`, credentials, `.pem`)
 - Tool chain detection (e.g. read → exfiltrate)
+- Session taints and egress controls (sensitive read → later send blocked)
 - Human approval gates for high-risk calls
 - Hash-chained JSONL audit log
 - Policy hot-reload

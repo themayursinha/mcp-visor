@@ -73,6 +73,22 @@ tool_chains:
         tool_pattern: "(http_post|slack_send_message)"
     action: deny
     within_calls: 3
+taints:
+  - name: "sensitive_file_accessed"
+    description: "Session has accessed customer secrets or sensitive workspace data"
+    source_tools:
+      - "file_read"
+    source_patterns:
+      - "**/customer-secrets/**"
+      - "**/secrets/**"
+egress_controls:
+  - name: "block_sensitive_egress"
+    description: "Block egress after sensitive data access"
+    when_tainted: "sensitive_file_accessed"
+    sink_tools:
+      - "http_post"
+      - "slack_send_message"
+    action: deny
 redaction:
   output_redaction: true
   sensitive_files:
@@ -151,8 +167,8 @@ func main() {
 			line := scanner.Text()
 			if strings.Contains(line, "proxy ready") || strings.Contains(line, "policy denied") ||
 				strings.Contains(line, "chain denied") || strings.Contains(line, "approval") ||
-				strings.Contains(line, "arguments redacted") || strings.Contains(line, "output redacted") ||
-				strings.Contains(line, "sensitive file") {
+				strings.Contains(line, "session tainted") || strings.Contains(line, "arguments redacted") ||
+				strings.Contains(line, "output redacted") || strings.Contains(line, "sensitive file") {
 				fmt.Printf("  [visor] %s\n", line)
 			}
 		}
@@ -203,16 +219,19 @@ func demoNormalRead(ctx *mcpContext) {
 
 func demoChainDenied(ctx *mcpContext) {
 	fmt.Println()
-	fmt.Println("── Chain detection (DENIED) ──")
-	fmt.Println("   Agent reads sensitive data, then tries to exfiltrate")
+	fmt.Println("── Session taint → egress control (DENIED) ──")
+	fmt.Println("   Agent reads customer secrets, then tries to exfiltrate")
 
 	ctx.send(map[string]any{
 		"jsonrpc": "2.0", "id": 200, "method": "tools/call",
-		"params": map[string]any{"name": "file_read", "arguments": map[string]any{"path": "/tmp/data.csv"}},
+		"params": map[string]any{"name": "file_read", "arguments": map[string]any{"path": "/home/user/customer-secrets/tokens.csv"}},
 	})
 	resp := ctx.recv()
 	if resp["error"] == nil {
-		fmt.Printf("   ✓ file_read allowed: %s\n", extractText(resp))
+		fmt.Printf("   ✓ file_read allowed; session is now tainted: %s\n", extractText(resp))
+	} else {
+		err := resp["error"].(map[string]any)
+		fmt.Printf("   ✗ unexpected source denial: %v\n", err["message"])
 	}
 
 	ctx.send(map[string]any{
@@ -222,7 +241,7 @@ func demoChainDenied(ctx *mcpContext) {
 	resp = ctx.recv()
 	if resp["error"] != nil {
 		err := resp["error"].(map[string]any)
-		fmt.Printf("   ✗ CHAIN BLOCKED: %v\n", err["message"])
+		fmt.Printf("   ✗ EGRESS BLOCKED: %v\n", err["message"])
 	} else {
 		fmt.Println("   (unexpectedly allowed)")
 	}

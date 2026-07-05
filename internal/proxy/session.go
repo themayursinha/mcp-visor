@@ -16,11 +16,22 @@ type ToolCallRecord struct {
 	Result     string
 }
 
+type SessionTaint struct {
+	Name         string
+	SourceServer string
+	SourceTool   string
+	SourceValue  string
+	PolicyRule   string
+	Reason       string
+	CreatedAt    time.Time
+}
+
 type Session struct {
 	ID        string
 	ClientID  string
 	CreatedAt time.Time
 	ToolCalls []ToolCallRecord
+	Taints    map[string]SessionTaint
 	mu        sync.RWMutex
 }
 
@@ -30,6 +41,7 @@ func NewSession(id, clientID string) *Session {
 		ClientID:  clientID,
 		CreatedAt: time.Now(),
 		ToolCalls: make([]ToolCallRecord, 0),
+		Taints:    make(map[string]SessionTaint),
 	}
 }
 
@@ -44,6 +56,59 @@ func (s *Session) RecordToolCall(serverName string, req mcp.ToolsCallRequest, re
 		Arguments:  rawToMap(req.Arguments),
 		Result:     result,
 	})
+}
+
+func (s *Session) AddTaint(taint SessionTaint) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if taint.Name == "" {
+		return false
+	}
+	if taint.CreatedAt.IsZero() {
+		taint.CreatedAt = time.Now()
+	}
+	if _, exists := s.Taints[taint.Name]; exists {
+		return false
+	}
+	s.Taints[taint.Name] = taint
+	return true
+}
+
+func (s *Session) HasTaint(name string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.Taints[name]
+	return ok
+}
+
+func (s *Session) GetTaint(name string) (SessionTaint, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	taint, ok := s.Taints[name]
+	return taint, ok
+}
+
+func (s *Session) TaintsSnapshot() []SessionTaint {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]SessionTaint, 0, len(s.Taints))
+	for _, taint := range s.Taints {
+		out = append(out, taint)
+	}
+	return out
+}
+
+func (s *Session) TaintNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]string, 0, len(s.Taints))
+	for name := range s.Taints {
+		out = append(out, name)
+	}
+	return out
 }
 
 func (s *Session) RecentCalls(n int) []ToolCallRecord {
