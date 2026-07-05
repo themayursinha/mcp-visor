@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## v2.1.0 (2026-07-05)
+
+### Added
+
+- Session taints for sensitive source tool access.
+- Egress controls that deny or approval-gate sink tools after a session is tainted.
+- Audit metadata for taint-triggered decisions, including session taints, taint source, taint reason, policy rule, sink, and decision.
+- Example policy for session-taint egress control: `examples/policies/session-taint-egress.yaml`.
+- Demo-runner scenario for sensitive read → session taint → egress denial.
+- Policy documentation for `taints[]` and `egress_controls[]`.
+
+### Changed
+
+- README positioning now includes session-aware egress controls as a core action-boundary capability.
+- Policy evaluation order documents stateful egress enforcement after tool-chain detection.
+
 ## v2.0.1 (2026-06-30)
 
 ### Added
