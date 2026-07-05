@@ -1,0 +1,44 @@
+version: "1.0"
+description: "Session-taint egress control demo: sensitive source read changes later authorization decisions"
+default_action: deny
+settings:
+  chain_window_size: 5
+  approval_timeout_seconds: 10
+servers:
+  - name: "workspace"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        rules:
+          - type: allow_path
+            patterns:
+              - "/home/**"
+              - "/tmp/**"
+              - "/workspace/**"
+      - name: "http_post"
+        allowed: true
+        risk: high
+      - name: "slack_send_message"
+        allowed: true
+        risk: high
+
+taints:
+  - name: "sensitive_file_accessed"
+    description: "Session has accessed customer secrets or sensitive workspace data"
+    source_tools:
+      - "file_read"
+    source_patterns:
+      - "**/customer-secrets/**"
+      - "**/secrets/**"
+      - "**/*.env"
+
+egress_controls:
+  - name: "block_sensitive_egress"
+    description: "Do not allow egress after this session has touched sensitive data"
+    when_tainted: "sensitive_file_accessed"
+    sink_tools:
+      - "http_post"
+      - "slack_send_message"
+    action: deny

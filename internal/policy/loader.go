@@ -123,6 +123,30 @@ func (p *Policy) Validate() error {
 		}
 	}
 
+	for i, taint := range p.Taints {
+		if taint.Name == "" {
+			return fmt.Errorf("taint rule at index %d: name is required", i)
+		}
+		if len(taint.SourceTools) == 0 {
+			return fmt.Errorf("taint rule %s: at least one source tool is required", taint.Name)
+		}
+	}
+
+	for i, control := range p.EgressControls {
+		if control.Name == "" {
+			return fmt.Errorf("egress control at index %d: name is required", i)
+		}
+		if control.WhenTainted == "" {
+			return fmt.Errorf("egress control %s: when_tainted is required", control.Name)
+		}
+		if len(control.SinkTools) == 0 {
+			return fmt.Errorf("egress control %s: at least one sink tool is required", control.Name)
+		}
+		if control.Action != ActionDeny && control.Action != ActionRequireApproval {
+			return fmt.Errorf("egress control %s: action must be 'deny' or 'require_approval', got '%s'", control.Name, control.Action)
+		}
+	}
+
 	return nil
 }
 

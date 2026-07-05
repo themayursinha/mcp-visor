@@ -20,15 +20,17 @@ const (
 )
 
 type Policy struct {
-	Version          string            `yaml:"version"`
-	Description      string            `yaml:"description"`
-	DefaultAction    Action            `yaml:"default_action"`
-	Settings         Settings          `yaml:"settings"`
-	Servers          []Server          `yaml:"servers"`
-	ToolChains       []ChainRule       `yaml:"tool_chains"`
-	Identities       []Identity        `yaml:"identities"`
-	TimeRestrictions []TimeRestriction `yaml:"time_restrictions"`
-	Redaction        RedactionConfig   `yaml:"redaction"`
+	Version          string              `yaml:"version"`
+	Description      string              `yaml:"description"`
+	DefaultAction    Action              `yaml:"default_action"`
+	Settings         Settings            `yaml:"settings"`
+	Servers          []Server            `yaml:"servers"`
+	ToolChains       []ChainRule         `yaml:"tool_chains"`
+	Taints           []TaintRule         `yaml:"taints"`
+	EgressControls   []EgressControlRule `yaml:"egress_controls"`
+	Identities       []Identity          `yaml:"identities"`
+	TimeRestrictions []TimeRestriction   `yaml:"time_restrictions"`
+	Redaction        RedactionConfig     `yaml:"redaction"`
 }
 
 type Settings struct {
@@ -85,6 +87,24 @@ type ChainRule struct {
 type ChainMatch struct {
 	Server      string `yaml:"server"`
 	ToolPattern string `yaml:"tool_pattern"`
+}
+
+type TaintRule struct {
+	Name           string   `yaml:"name"`
+	Description    string   `yaml:"description"`
+	SourceServers  []string `yaml:"source_servers"`
+	SourceTools    []string `yaml:"source_tools"`
+	SourcePatterns []string `yaml:"source_patterns"`
+}
+
+type EgressControlRule struct {
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	WhenTainted string   `yaml:"when_tainted"`
+	SinkServers []string `yaml:"sink_servers"`
+	SinkTools   []string `yaml:"sink_tools"`
+	Action      Action   `yaml:"action"`
+	Reason      string   `yaml:"reason"`
 }
 
 type Identity struct {

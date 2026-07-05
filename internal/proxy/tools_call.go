@@ -88,6 +88,16 @@ func (p *Proxy) processToolsCall(
 	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
 	var chainContext []string
 	chainTriggered := false
+	var egressContext egressTaintDecision
+	egressTriggered := false
+
+	if decision.Action != policy.ActionDeny {
+		if egressDecision, matched := p.evaluateEgressControls(serverName, callReq); matched {
+			egressTriggered = true
+			egressContext = egressDecision
+			decision = egressDecision.decision
+		}
+	}
 
 	if decision.Action != policy.ActionDeny {
 		chainDecision, previousCalls := p.checkChain(serverName, callReq, redactedArgs, risk)
@@ -111,7 +121,7 @@ func (p *Proxy) processToolsCall(
 		p.metrics.IncrementDenied()
 		respond(req.ID, decision.Reason)
 
-		p.logAudit(audit.Event{
+		deniedEvent := audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -121,7 +131,14 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(decision.Action),
 			Reason:    decision.Reason,
 			RiskLevel: string(risk),
-		})
+		}
+		if egressTriggered {
+			deniedEvent.SessionTaints = p.session.TaintNames()
+			deniedEvent.TaintSource = egressContext.taint.SourceServer + ":" + egressContext.taint.SourceTool
+			deniedEvent.TaintReason = egressContext.taint.Reason
+			deniedEvent.PolicyRule = egressContext.control.Name
+		}
+		p.logAudit(deniedEvent)
 		p.logger.Warn("policy denied",
 			"tool", callReq.Name,
 			"reason", decision.Reason,
@@ -153,6 +170,7 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		p.logAudit(allowEvent)
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
 		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
 		p.metrics.IncrementApproved()
 		p.observeToolCall("approved", "approved by human operator", serverName, callReq.Name, string(risk), chainTriggered, started)
@@ -160,11 +178,13 @@ func (p *Proxy) processToolsCall(
 
 	case policy.ActionAllow:
 		p.metrics.IncrementAllowed()
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
 		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	default:
 		p.metrics.IncrementAllowed()
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
 		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 	}

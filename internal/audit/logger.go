@@ -20,6 +20,7 @@ const (
 	EventToolDenied           EventType = "tool_call_denied"
 	EventToolApprovalRequired EventType = "tool_call_approval_required"
 	EventToolChainDetected    EventType = "tool_call_chain_detected"
+	EventSessionTainted       EventType = "session_tainted"
 	EventSessionStarted       EventType = "session_started"
 	EventSessionEnded         EventType = "session_ended"
 	EventPolicyLoaded         EventType = "policy_loaded"
@@ -37,6 +38,10 @@ type Event struct {
 	Decision             string         `json:"policy_decision"`
 	Reason               string         `json:"reason,omitempty"`
 	RiskLevel            string         `json:"risk_level,omitempty"`
+	SessionTaints        []string       `json:"session_taints,omitempty"`
+	TaintSource          string         `json:"taint_source,omitempty"`
+	TaintReason          string         `json:"taint_reason,omitempty"`
+	PolicyRule           string         `json:"policy_rule,omitempty"`
 	ChainContext         []string       `json:"chain_context,omitempty"`
 	RequestHash          string         `json:"request_hash,omitempty"`
 	RedactedArgumentHash string         `json:"redacted_argument_hash,omitempty"`
