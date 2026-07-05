@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-## v2.1.0 (2026-07-05)
+## v1.2.0 (2026-07-05)
+
+> Note: This release contains the session-taint egress-control feature from `v2.1.0`, but stays on the `v1.x` line so `go install github.com/themayursinha/mcp-visor/cmd/mcp-visor@v1.2.0` works without a `/v2` module path migration.
 
 ### Added
 
