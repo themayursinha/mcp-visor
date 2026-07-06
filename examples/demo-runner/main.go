@@ -101,7 +101,7 @@ func main() {
 	stderr, err := visorCmd.StderrPipe()
 	must(err, "open visor stderr")
 	must(visorCmd.Start(), "start visor")
-	defer visorCmd.Process.Kill()
+	defer func() { _ = visorCmd.Process.Kill() }()
 
 	go printImportantVisorLogs(stderr)
 
