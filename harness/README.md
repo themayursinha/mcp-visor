@@ -13,6 +13,7 @@ harness/check.sh
 |------|------|
 | `project-contract.md` | Purpose and non-negotiables |
 | `invariants.md` | Security properties → tests |
+| `loop.md` | AI-assisted development loop: trigger, cycle, stop conditions, approval gates |
 | `check.sh` | fmt, vet, full test suite, evidence manifest |
 
 ## Evidence
