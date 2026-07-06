@@ -51,7 +51,7 @@ mcp-visor lint examples/policies/session-taint-egress.yaml
 mcp-visor serve -server <your-mcp-server> -policy policy.yaml
 ```
 
-Scripted source walkthrough: `go run ./examples/demo-runner`
+Two-minute action-boundary demo: `go run ./examples/demo-runner` · [walkthrough](docs/action-boundary-demo.md)
 
 ## What it protects against
 

