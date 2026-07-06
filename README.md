@@ -2,10 +2,12 @@
 
 **Deterministic authorization for MCP tool calls.**
 
-MCP Visor is a self-hosted policy enforcement proxy for AI agents. It sits between an agent and MCP servers, evaluates every `tools/call` before execution, and enforces allow, deny, approval, redaction, chain, and session-taint rules without an LLM in the decision path.
+MCP Visor is a self-hosted policy enforcement proxy for AI agents. It sits between an agent and MCP servers, evaluates every `tools/call` before execution, and enforces allow, deny, approval, redaction, chain, and session-taint rules without an LLM in the decision path. It is not prompt filtering, output moderation, or system-prompt hardening.
 
 > **MCP Visor is not a model guardrail. It is an action boundary.**
 > Models can request actions. MCP Visor decides whether those actions are allowed.
+
+Model guardrails try to shape what the model says or thinks inside the context window. MCP Visor controls what the agent is allowed to do after a tool call is requested. System prompts can describe intended behavior; MCP Visor enforces policy outside the model.
 
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -49,11 +51,7 @@ mcp-visor lint examples/policies/session-taint-egress.yaml
 mcp-visor serve -server <your-mcp-server> -policy policy.yaml
 ```
 
-For a scripted walkthrough from source:
-
-```bash
-go run ./examples/demo-runner
-```
+Scripted source walkthrough: `go run ./examples/demo-runner`
 
 ## What it protects against
 
