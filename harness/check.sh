@@ -52,13 +52,15 @@ cat >"$EVID_DIR/manifest.md" <<EOF
 
 ## Invariants (see \`harness/invariants.md\`)
 
-Covered by integration tests in this run:
+Covered by tests in this run:
 
 - H1 default deny — \`TestUnknownToolDenied\`
 - H2 sensitive paths — \`TestSensitiveFileAccessDenied\`
 - H3 read→send chain — chain_detection tests
 - H5 audit redaction — \`TestAuditLogRedaction\`
 - H6 proxy path — proxy_integration tests
+- H9–H10 authorized source taint / pre-relay egress deny — \`internal/proxy/session_taint_test.go\`
+- H11 audit hash chain — \`TestAuditLogHashChain\`
 
 ## Result
 

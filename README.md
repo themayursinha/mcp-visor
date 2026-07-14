@@ -2,7 +2,7 @@
 
 **Deterministic authorization for MCP tool calls.**
 
-MCP Visor is a self-hosted policy enforcement proxy for AI agents. It sits between an agent and MCP servers, evaluates every `tools/call` before execution, and enforces allow, deny, approval, redaction, chain, and session-taint rules without an LLM in the decision path. It is not prompt filtering, output moderation, or system-prompt hardening.
+MCP Visor is a self-hosted policy enforcement proxy for AI agents. It evaluates valid JSON-RPC `tools/call` requests that include an `id` before relay and applies allow, deny, approval, redaction, chain, and session-taint rules without an LLM. `tools/call` notifications and malformed envelopes are a documented enforcement gap.
 
 > **MCP Visor is not a model guardrail. It is an action boundary.**
 > Models can request actions. MCP Visor decides whether those actions are allowed.
@@ -28,7 +28,7 @@ MCP Visor adds that boundary at the MCP `tools/call` layer:
 AI agent → MCP Visor → policy decision → MCP server
 ```
 
-Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. Audit logs record what happened and why.
+Valid `tools/call` requests with IDs are evaluated before relay. Notifications without IDs currently bypass interception, so clients and servers must not treat notification-form tool calls as executable until that gap is fixed.
 
 ## Install
 
@@ -44,8 +44,9 @@ Pre-built binaries and checksums are available on the [Releases](https://github.
 # Run the built-in demo proxy
 mcp-visor serve --demo
 
-# Validate a policy before using it
-mcp-visor lint examples/policies/session-taint-egress.yaml
+# Supplemental lint. Do not combine --strict with --no-warnings.
+# This is not yet a complete fail-closed policy gate; see the threat model.
+mcp-visor lint --strict examples/policies/session-taint-egress.yaml
 
 # Proxy a real MCP server through a policy boundary
 mcp-visor serve -server <your-mcp-server> -policy policy.yaml
@@ -56,7 +57,7 @@ Two-minute action-boundary demo: `go run ./examples/demo-runner` · [walkthrough
 ## What it protects against
 
 - Secret reads followed by outbound exfiltration
-- Access to `.env`, SSH keys, kubeconfigs, credentials, and private keys
+- Access to configured sensitive paths such as `/project/.env`, SSH keys, kubeconfigs, credentials, and key files; basename-only and policy-`uri` gaps are documented in the threat model
 - Unsafe shell commands and command-injection patterns
 - Unknown or newly introduced tools under default-deny policy
 - High-risk actions without human approval
@@ -136,21 +137,21 @@ More policies: [`examples/policies/`](examples/policies/) · Schema reference: [
 |------------|---------|
 | Default-deny policy | Unknown servers and tools fail closed |
 | Argument rules | Restrict paths, commands, queries, recipients, sizes, and repos |
-| Secret redaction | Remove API keys, tokens, JWTs, and private keys from arguments and outputs |
+| Pattern redaction | Replace configured matches in arguments and textual `Content[].Text` output; this is not full structured-payload or complete private-key sanitization |
 | Tool-chain detection | Block dangerous sequences such as read → exfiltrate |
 | Session taints | Change later authorization decisions after sensitive context is touched |
 | Human approval | Gate critical tools before execution |
-| Audit log | Hash-chained JSONL evidence for every decision |
+| Audit log | Selected security and session events, hash-linked within one healthy logger lifetime |
 | Policy linting | Validate YAML policy before deployment |
 
-Advanced capabilities include signed decision receipts, Vault Transit signing, HTTP+SSE remote transport with mTLS, webhooks, SIEM export, Prometheus metrics, OTLP tracing, and a local web dashboard. See [`docs/complexity-budget.md`](docs/complexity-budget.md) for feature tiering.
+Advanced capabilities include signed decision receipts, Vault Transit signing, webhooks, and experimental remote transport, SIEM, metrics/OTLP, and local dashboard surfaces. The `--trace` formatters are not yet connected to runtime message paths. See [`docs/complexity-budget.md`](docs/complexity-budget.md) and [`docs/threat-model.md`](docs/threat-model.md).
 
 ## Security model
 
 - **Deterministic:** no LLM in the allow/deny path
 - **Fail closed:** unknown tools are denied by default
-- **Layered:** redaction → policy → chain detection → session taints → approval → audit
-- **Observable:** decisions are recorded in hash-chained JSONL audit logs
+- **Layered:** redaction → policy → taint-aware egress → chain detection → approval → post-allow taint marking
+- **Observable:** selected security events are recorded in JSONL; this is not yet a complete per-call ledger or a chain that survives sink failure/reopen
 - **Self-hosted:** single Go binary; no SaaS dependency required
 - **Operator-controlled:** optional telemetry exports to your Prometheus, OTLP, webhook, or SIEM stack
 
@@ -158,7 +159,7 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, H
 
 ```text
 mcp-visor serve [flags]    Run the proxy
-mcp-visor lint <policy>    Validate a policy file
+mcp-visor lint [--strict] <policy>  Supplemental policy validation; not a complete fail-closed gate
 mcp-visor version          Print version
 ```
 
@@ -184,9 +185,9 @@ make bench                     # benchmarks
 ## Roadmap
 
 - [x] v1.0: Proxy, policy engine, redaction, approval, audit, chain detection
-- [x] v1.1: Identity/time policies, hot-reload, CLI approval, remote transport
+- [x] v1.1: Identity/time policies, partial engine hot-reload, CLI approval, experimental remote transport
 - [x] v1.2: Session taints and egress controls
-- [ ] v1.3: Polished demo flows and stronger policy receipts
+- [ ] v1.3: Documentation truth, security verification, interoperability evidence, and release hardening
 - [ ] Future: sandboxing, richer telemetry, optional policy engines
 
 ## Contributing

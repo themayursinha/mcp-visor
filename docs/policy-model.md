@@ -30,11 +30,11 @@ time_restrictions: # Time-of-day access controls (optional)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `version` | string | Yes | Schema version. Must be `"1.0"`. |
+| `version` | string | No | Defaults to `"1.0"`. Other non-empty values are accepted; supported-version compatibility is not enforced. |
 | `description` | string | No | Human-readable description of the policy. |
-| `default_action` | string | Yes | `"deny"` or `"allow"`. What happens when no rule matches. |
+| `default_action` | string | No | Defaults to `"deny"`; may be `"deny"` or `"allow"`. |
 | `settings` | object | No | Global settings (defaults applied if omitted). |
-| `servers` | array | Yes | List of MCP server configurations and their tool rules. |
+| `servers` | array | No | Defaults to an empty list; no configured server/tool rules then exist. |
 | `tool_chains` | array | No | Chain detection rules for dangerous tool sequences. |
 | `taints` | array | No | Session state markers set when source tools access sensitive data. |
 | `egress_controls` | array | No | Stateful sink controls triggered by existing session taints. |
@@ -47,7 +47,7 @@ time_restrictions: # Time-of-day access controls (optional)
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_argument_size_bytes` | int | 1048576 | Max tool call argument size (1 MB). Larger calls rejected. |
-| `max_output_size_bytes` | int | 10485760 | Max tool output size (10 MB). Larger responses truncated. |
+| `max_output_size_bytes` | int | 10485760 | Truncation threshold for each textual `Content[].Text`; a marker is appended after truncation, so final text can exceed the threshold. Not an aggregate/structured/error limit. |
 | `session_max_tools` | int | 100 | Max tool calls per session. New calls denied after limit. |
 | `session_timeout_seconds` | int | 3600 | Session timeout (1 hour). |
 | `approval_timeout_seconds` | int | 300 | Approval timeout (5 minutes). Deny after timeout. |
@@ -63,8 +63,8 @@ Each server entry defines an MCP server and its tools:
 | `name` | string | Yes | Server identifier matching the MCP command. |
 | `transport` | string | No | `"stdio"` (local child process) or `"http"` (remote HTTP+SSE). |
 | `allowed` | bool | Yes | Whether this server is allowed (`true`/`false`). |
-| `allowed_destinations` | array | No | Allowed network destinations (hosts/domains). |
-| `denied_destinations` | array | No | Blocked network destinations. |
+| `allowed_destinations` | array | No | Declared in the schema but not evaluated by the current engine. Do not rely on it for network control. |
+| `denied_destinations` | array | No | Declared in the schema but not evaluated by the current engine. Do not rely on it for network control. |
 | `tools` | array | Yes | Tool-specific rules for this server. |
 
 ### Tool Rules
@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-11 rule types are supported. Each rule has a `type` field and type-specific parameters.
+The engine enforces 14 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -103,7 +103,7 @@ rules:
       - "/tmp/mcp-safe/**"
 ```
 
-Matched against argument keys: `path`, `file`, `file_path`, `uri`.
+Policy path rules match argument keys `path`, `file`, and `file_path`. The separate built-in sensitive-file check also inspects `uri`.
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -431,7 +431,7 @@ redaction:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `patterns` | array | No | Regex patterns for redacting tool call arguments. |
-| `output_redaction` | bool | No | Enable redaction of tool outputs before returning to client. |
+| `output_redaction` | bool | No | Declared in policy but not consulted by the current redaction engine. Configured input and output patterns are applied to outputs regardless of this value. |
 | `output_patterns` | array | No | Regex patterns for redacting tool outputs. |
 | `sensitive_files` | array | No | Glob patterns for files that should be completely blocked. |
 
@@ -457,37 +457,38 @@ These patterns are built into the redaction engine and active by default:
 | Private key | `-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----` |
 | DB connection string | `mongodb://`, `postgresql://`, `mysql://`, `redis://`, `jdbc://` with credentials |
 | Internal IP | `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x` |
-| Email address | Standard email regex |
+
 
 ## Decision Model
 
-Every tool call evaluation produces one of four decisions:
+Every valid JSON-RPC `tools/call` request with an `id` reaches a terminal `allow`, `deny`, or `require_approval` decision. Notification-form calls and malformed envelopes currently bypass this path. `redact_then_allow` is also used as an input-redaction audit label before the terminal policy decision:
 
 | Decision | Meaning |
 |----------|---------|
 | `allow` | Tool call is permitted. Forwarded to server immediately. |
 | `deny` | Tool call is blocked. Error returned to client. |
 | `require_approval` | Tool call is held. Proceeds only on human approval. |
-| `redact_then_allow` | Sensitive data stripped from arguments, then forwarded. |
+| `redact_then_allow` | Sensitive data was stripped from the forwarded payload. This is not terminal; later checks can still deny the call. |
 
 Decisions include a `reason` field explaining _why_ the decision was made for auditability.
 
 ## Evaluation Order
 
-Policy checks are applied in a fixed order:
+The proxy applies checks in this order:
 
-1. Redaction — secrets stripped from arguments
-2. Server known? (deny if not, under default-deny)
-3. Tool known? (deny if not, under default-deny)
-4. Server allowed? (deny if explicitly `allowed: false`)
-5. Tool allowed? (deny if explicitly `allowed: false`)
-6. Argument validation rules (in order: deny rules first, then allow rules)
-7. Existing session taints checked against egress controls
-8. Chain detection (check recent call history)
-9. Approval check (hold if `approval_required: true`)
-10. Allow (forward to server); matching source tools can mark session taints for later calls
+1. Runtime limits — argument size, session call count, and session timeout
+2. Argument redaction — secrets are removed from the payload prepared for relay
+3. Built-in sensitive-path block
+4. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload.
+5. Existing session taints checked against egress controls
+6. Chain detection against recent calls authorized for relay
+7. Approval check
+8. Post-allow taint marking for matching source tools
+9. Relay to the MCP server
 
-The first non-allow decision terminates evaluation. For example, if a tool is denied by argument validation, chain detection is never checked.
+Session history is appended after authorization but before the transport write. It therefore represents calls authorized for relay, including a call whose transport write later fails.
+
+The first terminal deny stops relay. Input-redaction audit is currently emitted before the final decision, so a redacted request that is later denied can produce both an allow-labelled redaction event and a deny event; this ordering is tracked for security hardening.
 
 ## Complete Example
 
@@ -592,7 +593,7 @@ The repository includes example policies demonstrating different postures:
 
 - **Invalid YAML**: Policy file fails to parse → rejected with line/column error
 - **Schema validation failure**: Missing required fields, wrong types → rejected with field-level error
-- **Invalid regex**: Pattern compilation failure → rejected with regex parse error
-- **Unknown rule type**: Skips unrecognized rule type (succeeds, rule ignored)
+- **Invalid regex**: the loader does not compile all rule, chain, or redaction regexes. `mcp-visor lint --strict` catches several cases, but `serve` does not run lint automatically. Invalid deny/chain regexes can behave as no match, and invalid redaction regexes are skipped.
+- **Unknown rule type**: loader succeeds and the engine ignores the rule.
 
-All policy loading errors prevent the proxy from starting. No partial or degraded policy state.
+Invalid YAML and schema-validation errors prevent startup. Lint remains supplemental: plain lint can succeed with warnings; `--strict --no-warnings` can suppress warning failures; and `deny_command_pattern_composite` is recognized without enforcement, so even strict lint is not a complete fail-closed gate.

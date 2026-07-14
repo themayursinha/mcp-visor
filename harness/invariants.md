@@ -12,10 +12,13 @@ Each invariant maps to automated checks in `check.sh` (via `go test`) or manual 
 | H6 | Proxy handshake + tools/call path works | `TestProxyIntegrationHandshake`, `TestProxyIntegrationToolsCall` — `tests/integration/proxy_integration_test.go` |
 | H7 | Policy lint catches invalid YAML/rules | `go test ./internal/policy/...` (linter package) |
 | H8 | No LLM in policy engine | Code review + `internal/policy/engine.go` has no LLM client imports |
+| H9 | An authorized sensitive-source request taints the session | `TestSessionTaintEgressDenyBlocksSinkAfterSensitiveSource` — `internal/proxy/session_taint_test.go` |
+| H10 | A tainted egress request is denied with audit metadata before relay | Same test + `TestSessionTaintEgressAllowsSinkBeforeTaint` — `internal/proxy/session_taint_test.go` |
+| H11 | Audit hash linkage for healthy writes within one logger lifetime | `TestAuditLogHashChain` — `internal/audit/logger_test.go` |
 
 **Prompt-injection immunity** is architectural: decisions do not parse natural language from tool descriptions in an LLM. Regression: policy engine tests + integration deny paths; document scenarios in `examples/malicious-prompts/`.
 
-**Malformed policy fail-closed:** loader/linter tests in `internal/policy`; `mcp-visor lint` must error on invalid files before `serve`.
+**Policy-validation limitation:** loader rejects YAML/schema errors. `lint --strict` fails reported warnings, but `deny_command_pattern_composite` is recognized without enforcement and `--no-warnings` can neutralize strict warning failures. It is not yet a complete deployment gate.
 
 ## Adding an invariant
 

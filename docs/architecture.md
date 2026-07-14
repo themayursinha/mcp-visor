@@ -24,7 +24,7 @@ Runtime architecture and component design for the MCP Visor policy enforcement p
 │                                ▼                              │
 │  ┌───────────────────────────────────────────────┐           │
 │  │              interceptor Layer                 │           │
-│  │  Parses every tools/call, extracts:           │           │
+│  │  Parses valid request tools/call with ID:     │           │
 │  │  - Tool name, server name, arguments          │           │
 │  │  - Session/agent identity                     │           │
 │  │  - Call sequence context                      │           │
@@ -85,14 +85,14 @@ internal/
     vault.go                    Vault signer/verifier construction
   policy/                      Policy engine
     types.go                    Policy struct definitions
-    loader.go                   YAML policy file loader with hot-reload
+    loader.go                   YAML policy file loader
     validator.go                Policy argument validation
     engine.go                   Policy evaluation pipeline + chain detection
     registry.go                 In-memory tool/server registry
     linter.go                   Static policy validation CLI
-    watcher.go                  fsnotify-based policy hot-reload watcher
+    watcher.go                  fsnotify engine/registry reload; proxy-derived settings remain static
   audit/                       Structured audit logging
-    logger.go                   JSONL logger with O_SYNC, hash-chaining, 8 event types
+    logger.go                   JSONL logger with O_SYNC and healthy-sink, logger-lifetime hash linking
   redaction/                   Sensitive data redaction
     engine.go                   Configurable regex-based secret scanning
   approval/                    Human approval workflow
@@ -126,65 +126,62 @@ tests/
 
 ## Decision Pipeline
 
-Every intercepted `tools/call` passes through this ordered pipeline:
+Valid JSON-RPC `tools/call` requests with an `id` are handled in `internal/proxy/tools_call.go` (shared by stdio and remote transports). Notification-form calls and malformed request envelopes currently bypass interception and can be relayed. [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the enforced request path:
 
 ```
 intercepted tools/call
         │
         ▼
  ┌──────────────────┐
- │ Redaction first  │──▶ Strip secrets from arguments before evaluation
+ │ Runtime limits   │──▶ DENY if argument/session caps are exceeded
  └──────┬───────────┘
         ▼
  ┌──────────────────┐
- │ Known tool?      │──No──▶ DENY (unknown tool)
+ │ Argument         │──▶ Rewrite forwarded args when secrets match redaction patterns
+ │ redaction        │
  └──────┬───────────┘
-   Yes  │
         ▼
  ┌──────────────────┐
- │ Tool denylisted? │──Yes──▶ DENY (explicit deny)
- └──────┬───────────┘
-   No   │
-        ▼
- ┌──────────────────┐
- │ Not in allowlist?│──Yes──▶ DENY (not allowlisted, if default-deny)
+ │ Sensitive path   │──Yes──▶ DENY (built-in sensitive file patterns)
+ │ block            │
  └──────┬───────────┘
    No   │
         ▼
  ┌──────────────────┐
- │ Arguments pass   │──No──▶ DENY (argument validation failed)
- │ validation?      │
+ │ Policy evaluate  │──▶ DENY / REQUIRE_APPROVAL / ALLOW (tool + argument rules)
+ │ (YAML engine)    │
  └──────┬───────────┘
-   Yes  │
         ▼
  ┌──────────────────┐
- │ Dangerous chain  │──Yes──▶ DENY (chain detected)
- │ detected?        │
+ │ Egress controls  │──Match──▶ DENY or REQUIRE_APPROVAL when session taint + sink tool
+ │ (session taints) │
  └──────┬───────────┘
-   No   │
         ▼
  ┌──────────────────┐
- │ Sensitive data   │──Yes──▶ Redact, then continue
- │ in args?         │
+ │ Chain detection  │──Match──▶ DENY or REQUIRE_APPROVAL (recent forwarded calls)
+ │ (session history)│
  └──────┬───────────┘
-   No   │
         ▼
  ┌──────────────────┐
- │ Requires         │──Yes──▶ REQUIRE_APPROVAL
- │ approval?        │
+ │ Final decision   │──DENY / REQUIRE_APPROVAL / ALLOW
  └──────┬───────────┘
-   No   │
-        ▼
-     ALLOW
-        │
+   Allow│
         ▼
  ┌──────────────────┐
- │ Sensitive data   │──Yes──▶ Redact output before returning to client
- │ in output?       │
+ │ Post-allow taint │──▶ Matching `taints[]` rules mark session; emit `session_tainted`
+ │ marking          │
+ └──────┬───────────┘
+        ▼
+ Forward to MCP server (stdio/remote)
+        ▼
+ ┌──────────────────┐
+ │ Output redaction │──▶ Replace configured matches in textual Content[].Text
  └──────┬───────────┘
         ▼
  Return result to client
 ```
+
+Denied or approval-rejected calls do not enter the relay write path. Selected events cover denies, approvals, argument redactions, session taints, and session lifecycle. Policy lifecycle constants exist but are not emitted. Output redaction and plain unredacted allows lack standalone JSONL events.
 
 ## Core Components
 
@@ -204,7 +201,7 @@ The main proxy loop (`Run`) manages the full lifecycle:
 1. Start the MCP server as a child process with stdin/stdout pipes
 2. Run the MCP handshake (forward `initialize` request/response, `initialized` notification)
 3. Spawn two relay goroutines:
-   - `relayClientToServer`: reads client messages, intercepts `tools/call`, enforces policy
+   - `relayClientToServer`: enforces valid request-form `tools/call`; notification/malformed gaps are documented above
    - `relayServerToClient`: reads server responses, redacts outputs, forwards to client
 4. Graceful shutdown on SIGINT/SIGTERM via `signal.NotifyContext`
 
@@ -212,10 +209,10 @@ The main proxy loop (`Run`) manages the full lifecycle:
 
 Per-proxy-connection session state:
 
-- Records every `tools/call` in chronological order with tool name, server, arguments, and result preview
-- Maintains a thread-safe call history (`sync.RWMutex`)
-- Exposes `RecentCallChain(windowSize)` for the chain detector
-- Session state is ephemeral — lost on proxy restart
+- **Call history** (`ToolCalls`): calls are appended after authorization but before `EncodeRaw`. Denied, approval-rejected, and malformed calls are not recorded, but a transport-write failure can leave an authorized call in history. Chain detection therefore sees calls authorized for relay, not a confirmed execution ledger.
+- **Session taints** (`Taints`): set after an allowed source tool matches a `taints[]` rule (`markMatchingTaints` in `session_taint.go`).
+- Thread-safe (`sync.RWMutex`); exposes `RecentCallChain(windowSize)` for chain detection.
+- Ephemeral — lost on proxy restart.
 
 ### 4. Policy Engine (`internal/policy/`)
 
@@ -228,15 +225,15 @@ Deterministic, YAML-driven policy evaluation. No LLM involvement.
   - `EvaluateChain(server, call, previousCalls)` → chain detection
   - `GetRiskLevel(server, tool)` → risk classification
 - **Registry** (`registry.go`): In-memory lookup maps built from policy for fast tool/server resolution
-- **11 argument rule types**: deny_path, allow_path, deny_command_pattern, allow_command_pattern, deny_query_pattern, allow_query_pattern, allowed_repos, deny_recipient_domain, allow_recipient_domain, max_file_size, max_rows
+- **14 enforced argument rule types**: `deny_path`, `allow_path`, `deny_command_pattern`, `allow_command_pattern`, `deny_command_keyword`, `deny_query_pattern`, `allow_query_pattern`, `deny_recipient_domain`, `allow_recipient_domain`, `allowed_repos`, `max_file_size`, `max_result_rows`, `max_export_rows`, `require_approval_always`
 
 ### 5. Redaction Engine (`internal/redaction/`)
 
 Configurable regex-based secret detection:
 
-- **Built-in patterns**: OpenAI keys (`sk-`), GitHub tokens (`ghp_`), Slack tokens (`xoxb-`), AWS keys (`AKIA`), JWTs, private keys, database connection strings, internal IPs, email addresses
+- **Built-in patterns**: OpenAI keys (`sk-`), GitHub tokens (`ghp_`), Slack tokens (`xoxb-`), AWS keys (`AKIA`), JWTs, private-key headers, database connection strings, and internal IPs. The private-key pattern does not remove an entire PEM body.
 - **Argument redaction**: Scans tool arguments before forwarding to the MCP server
-- **Output redaction**: Scans server responses before returning to the client
+- **Output redaction**: scans textual MCP result entries (`Content[].Text`); structured `Data`, JSON-RPC errors, and other fields are not comprehensively scanned
 - **Sensitive file blocking**: `**/.env`, `**/credentials`, `**/*.pem`, `**/.ssh/**`, etc.
 - **Deep scanning**: Recursively scans nested maps, arrays, and slices
 
@@ -264,12 +261,13 @@ Human-in-the-loop approval for high-risk tool calls:
 
 ### 8. Audit Logger (`internal/audit/`)
 
-Structured JSONL audit trail:
+Structured JSONL audit trail (`internal/audit/logger.go`):
 
-- **7 event types**: `tool_call_allowed`, `tool_call_denied`, `tool_call_chain_detected`, `tool_call_approval_required`, `session_started`, `session_ended`, `policy_loaded`
-- **Redacted data**: All logged arguments are scrubbed of secrets before writing
-- **O_SYNC writes**: Durability (append-only semantics)
-- **Each event includes**: timestamp, session ID, agent ID, server, tool, arguments (redacted), decision, reason, risk level, chain context
+- **Event constants**: nine types are defined, but `policy_loaded` and `policy_reloaded` are not currently emitted. A plain unredacted allow and output-only redaction also lack standalone audit events.
+- **Healthy-sink logger-lifetime chain**: successful writes link within one `Logger` instance. The logger advances chain state before confirming persistence, so a failed write can leave the next stored event pointing to a missing hash. Another logger instance or file reopen starts a new segment. Regression: `TestAuditLogHashChain` covers only healthy writes.
+- **Redacted data**: arguments, reasons, and result previews scrubbed before write
+- **O_SYNC** append-only file writes
+- **Decision fields**: timestamp, session/agent IDs, server, tool, redacted arguments, `policy_decision`, reason, risk, chain context; egress denials add `session_taints`, `taint_source`, `taint_reason`, `policy_rule`
 
 ## Key Design Decisions
 
@@ -288,15 +286,15 @@ The policy engine uses exact match, prefix/suffix, regex, and rule-chain logic. 
 ### Fail-Closed Default
 
 - Unknown tools/servers are denied by default
-- If the policy engine encounters an error, it denies
+- YAML/schema startup errors and approval timeouts deny, but unsupported rules and some invalid regexes can be ignored or no-match
 - Approval timeouts deny by default
 - No "default-allow" posture is possible without explicit configuration
 
 ### Minimal TCB
 
-- One non-stdlib dependency: `gopkg.in/yaml.v3` for policy parsing
-- No frameworks, no ORMs, no HTTP routers
-- Small binary size (~8 MB stripped)
+- **Core enforcement path** (policy, proxy, audit, redaction): no LLM; policy parsing uses `gopkg.in/yaml.v3` only among direct deps for the decision hot path.
+- **Optional integrations** (see `go.mod`): OpenTelemetry export, partial `fsnotify` engine reload, and gRPC OTLP are not required for default stdio proxy + YAML policy.
+- Single static binary; no ORM or application framework.
 
 ## Runtime Decision Examples
 
@@ -313,33 +311,31 @@ See [docs/action-boundary-demo.md](action-boundary-demo.md) and [examples/demo-r
 
 The default transport. The proxy starts the MCP server as a child process and communicates over stdin/stdout pipes. Newline-delimited JSON-RPC messages are relayed bidirectionally. This is the standard MCP transport for locally installed tools.
 
-### HTTP + SSE (Remote)
+### HTTP + SSE (Remote, experimental)
 
-Enabled via `--server-url`. The proxy connects to a remote MCP server over HTTP:
+Enabled via `--server-url`. The code supports SSE reads and POST writes, but Phase 1 evidence currently covers handshake only. A shared read/write mutex can block post-handshake calls while the SSE reader waits, so this path is not production-supported until the transport concurrency test and interoperability matrix pass.
 - **SSE endpoint** (GET) for server-to-proxy streaming of responses and notifications
 - **Message endpoint** (POST) for proxy-to-server requests
-- Configurable TLS/mTLS with client certs, CA pool, and server name verification
+- Optional TLS configuration exists, but a one-sided client certificate/key configuration is not currently rejected; operators must provide both files and use HTTPS
 - `--sse-path` to customize the SSE endpoint, `--insecure-tls` for development
 
 The `Transport` interface (`ReadRaw`, `EncodeRaw`, `Close`) is implemented by both `PipeTransport` (stdio) and `HTTPTransport` (remote). A `MockTransport` provides an in-memory channel-based transport for testing.
 
-## Trace Logging
+## Trace Logging (incomplete)
 
-MCP message-level tracing captures every message flowing through the proxy for debugging and forensics:
+Text, JSONL, and summary formatter types exist, and `--trace` / `--trace-format` initialize a tracer. The handshake, relay, decision, redaction, and chain paths do not currently call that tracer, so the flags do not provide runtime message tracing. Treat this surface as incomplete until integration tests prove real event capture.
 
-- **Text format**: Human-readable directional output (`C->S`, `S->C`, `INT`) with message previews
-- **JSONL format**: Machine-readable structured trace events
-- **Summary format**: Aggregated message direction and method counters
+## Observability surfaces (experimental)
 
-Configure via `--trace` and `--trace-format` CLI flags. Tracing granularity can be tuned to capture handshake messages, policy decisions, redaction events, and chain detections independently. `ProxyMetrics` provides 8 counters (messages processed, denied, allowed, approved, bytes redacted, etc.) for observability.
-
-## Observability export (Prometheus / OTLP)
-
-Production telemetry is **exported**, not rendered inside visor:
+`ProxyMetrics` defines seven counters, but they use unsynchronized `int64` fields while relay and HTTP handlers can access them concurrently. Prometheus and dashboard metrics are therefore not production-grade until a race-safe snapshot or atomic counters are implemented.
 
 - **Prometheus** (`--metrics-addr`): scrape `/metrics` for `ProxyMetrics` counters.
-- **OTLP gRPC** (`--otel-endpoint`): per `tools/call` spans (`mcp.tools/call`) with `policy.decision`, `tool.name`, `session.id`, and risk — **no tool argument payloads**.
+- **OTLP gRPC** (`--otel-endpoint`): per-`tools/call` spans omit the raw argument map, but `policy.reason` can include argument-derived values such as a sensitive path.
 - Export failures are non-blocking; enforcement stays on the hot path.
+
+The embedded dashboard is a separate local rendering surface. Its API has no built-in authentication and can expose redacted arguments/result previews; bind it locally or place it behind authenticated access control.
+
+`bytes_redacted_total` currently adds the full raw request length whenever any field is redacted; it is not a count of bytes actually removed.
 
 See `examples/otel-lgtm` for a Grafana LGTM local stack.
 

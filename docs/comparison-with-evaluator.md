@@ -12,9 +12,9 @@ This document explains the relationship between [mcp-visor](https://github.com/t
 | **MCP integration** | Simulates mock tool calls | Proxies real MCP protocol traffic |
 | **Policy role** | Assesses policy compliance of configs | Enforces policy before tool execution |
 | **Output** | Reports, scores, findings | Allow/deny/approval decisions, audit logs |
-| **When it runs** | CI/CD, on-demand scans | Every tool call in production |
+| **When it runs** | CI/CD, on-demand scans | Valid request-form calls with IDs on stdio; notification/malformed bypasses and experimental remote transport are documented limitations |
 | **Language** | Python | Go |
-| **Deployment** | CLI tool, CI pipeline | Long-running daemon, Docker container |
+| **Deployment** | CLI, CI pipeline, optional FastAPI service | Long-running daemon, Docker container |
 
 ## The Relationship
 
@@ -39,7 +39,7 @@ They are designed to work together:
                                         │  RUNTIME ENFORCEMENT     │
                                         │  (visor)                  │
                                         │                           │
-                                        │  Every tool call          │
+                                        │  Valid request calls      │
                                         │  • Enforces policy rules │
                                         │  • Blocks dangerous calls│
                                         │  • Detects tool chains   │
@@ -61,11 +61,11 @@ They are designed to work together:
 
 ### Use the visor when:
 
-- You are **running** an AI agent with MCP tools in production
+- You are running an AI agent on the supported stdio path and accept the documented threat-model limitations
 - You want to **enforce** tool access policies at runtime
-- You need a **deterministic** enforcement point that prompt injection cannot bypass
+- You need a deterministic enforcement point outside the model for supported request-form `tools/call` traffic
 - You want to **detect** dangerous tool chains in real time
-- You need **audit logs** for every tool execution
+- You need structured audit events for denials, approvals, argument redactions, chain detections, session taints, and session lifecycle
 - You want **human approval** for high-risk operations
 
 ## Using Both Together
@@ -105,8 +105,9 @@ The recommended workflow:
                     │                           │
                     │  Runs:                    │
                     │  • Continuously (daemon)  │
-                    │  • Every tools/call       │
-                    │  • Hot-reloads policy     │
+                    │  • Request calls with ID  │
+                    │  • Partially reloads      │
+                    │    engine policy          │
                     └──────────────────────────┘
 ```
 
@@ -118,9 +119,9 @@ The recommended workflow:
 | Policy enforcement | No (assesses) | Yes (enforces) |
 | Tool allowlist/denylist | Simulates | Enforces in real time |
 | Chain detection | Flags possible chains in config | Detects chains in real tool call sequences |
-| Secret redaction | Evaluates redaction accuracy | Strips secrets from live traffic |
+| Secret redaction | Evaluates redaction accuracy | Replaces configured matches in arguments and textual `Content[].Text`; not comprehensive sanitization |
 | Human approval | No | Yes |
-| Audit logging | Generates test reports | Generates production audit trail |
+| Audit logging | Generates test reports | Emits selected structured security/session events; not yet a complete per-call ledger |
 | LLM prompt injection testing | Yes | No (deterministic, no LLM) |
 | LLM provider comparison | Yes | No |
 | MCP config scanning | Yes | No |
@@ -130,15 +131,12 @@ The recommended workflow:
 
 ## Security Model Differences
 
-The evaluator actively tests LLMs against adversarial prompts. It **calls LLM APIs** and measures their resistance to manipulation. This means the evaluator:
-- Requires API keys for LLM providers
-- Sends potentially malicious prompts to LLMs
-- Runs in a controlled CI/CD environment, not production
+The evaluator actively tests LLMs against adversarial prompts. It can use keyed cloud providers, local Ollama, or deterministic mock providers. Cloud providers require credentials and receive test prompts; local and mock modes do not require cloud API keys. Run it in a controlled testing environment, not in the production tool-execution path.
 
 The visor never calls an LLM. Its policy engine is deterministic — exact match, regex, and rule-chain logic. This means the visor:
-- Has no API keys or external API dependencies
+- Requires no LLM API key for the core enforcement path; optional integrations have their own credentials/endpoints
 - Cannot be manipulated by prompt injection
-- Runs continuously in the production tool execution path
+- Runs continuously in the supported stdio tool execution path
 
 ## Why Separate Repositories
 
@@ -146,9 +144,9 @@ These are separate projects by design:
 
 1. **Different audiences**: Evaluator is for security testers and compliance teams. Visor is for platform engineers and SREs.
 
-2. **Different lifecycles**: Evaluator is a Python project with LLM SDK dependencies. Visor is a Go project with minimal dependencies (one YAML library).
+2. **Different lifecycles**: Evaluator is a Python project with LLM SDK dependencies. Visor is a Go binary with a deterministic core and optional integration dependencies.
 
-3. **Different threat models**: Evaluator needs LLM API keys. Visor must never have API keys. Co-location would be a security anti-pattern.
+3. **Different threat models**: Evaluator cloud providers may require LLM API keys, while local/mock modes do not. The visor core requires no LLM key; credentials for optional integrations must stay isolated from the policy decision path.
 
 4. **Different deployment models**: Evaluator runs occasionally. Visor runs continuously. Different ops requirements.
 
@@ -161,7 +159,7 @@ These are separate projects by design:
 | "Which tool should I use?" | Both. Evaluator for assessment, visor for enforcement. |
 | "Can the visor replace the evaluator?" | No. The visor enforces policy; it doesn't assess configuration risk or test LLM responses. |
 | "Can the evaluator replace the visor?" | No. The evaluator finds issues; it doesn't block tool execution at runtime. |
-| "Do I need both?" | For a complete MCP security posture: yes. The evaluator tells you what policies to write. The visor enforces those policies. |
+| "Do I need both?" | They are complementary: the evaluator informs policy design and the visor enforces policy. Neither creates a complete security posture by itself or together. |
 
 ---
 

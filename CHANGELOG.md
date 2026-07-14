@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Documentation
+
+- Reconciled architecture, policy model, threat model, security policy, and public roadmap with the live v1.2 enforcement path.
+- Scoped audit hash linkage to healthy writes within one logger lifetime and documented incomplete per-call audit coverage.
+- Marked remote HTTP+SSE and built-in SIEM export experimental pending Phase 1 security and interoperability gates; earlier release notes overstated production readiness.
+
 ## v1.2.0 (2026-07-05)
 
 > Note: This release contains the session-taint egress-control feature from `v2.1.0`, but stays on the `v1.x` line so `go install github.com/themayursinha/mcp-visor/cmd/mcp-visor@v1.2.0` works without a `/v2` module path migration.
@@ -18,7 +24,7 @@
 ### Changed
 
 - README positioning now includes session-aware egress controls as a core action-boundary capability.
-- Policy evaluation order documents stateful egress enforcement after tool-chain detection.
+- Policy evaluation order documents stateful egress enforcement **before** tool-chain detection (see `docs/policy-model.md` evaluation order and `internal/proxy/tools_call.go`).
 
 ## v2.0.1 (2026-06-30)
 
@@ -51,19 +57,15 @@
 ### Policy Linting
 
 - Policy validation CLI (`mcp-visor lint`) for static analysis of policy YAML
-- 16 known rule type validators with severity classification
+- 15 rule names recognized by the linter; 14 have enforcement cases and `deny_command_pattern_composite` is currently linter-only
 - `--json`, `--strict`, `--no-info`, `--no-warnings` output flags
 - Detection of invalid regex, unknown rule types, missing required fields
-- Composite command pattern validation
+- `deny_command_pattern_composite` is recognized as a known linter name but is not validated or enforced
 
-### Trace Logging
+### Trace Logging (incomplete correction)
 
-- MCP message-level tracing with pluggable formatters
-- Text format (human-readable directional output: C->S, S->C, INT)
-- JSONL format for machine processing
-- Summary format with message counters
-- `--trace` and `--trace-format` CLI flags
-- Configurable granularity (handshake, decisions, redactions, chains)
+- Text, JSONL, and summary formatter types plus `--trace` / `--trace-format` flags exist
+- The proxy initializes a trace logger but does not invoke it from handshake, relay, or decision paths; runtime trace output is therefore not a shipped enforcement capability
 
 ### Performance Benchmarks
 
@@ -75,12 +77,12 @@
 - Ed25519 signing: 12.9 us sign, 28.4 us verify
 - `make bench` target for one-command benchmark run
 
-### Remote HTTP/SSE Transport
+### Remote HTTP/SSE Transport (experimental correction)
 
-- Proxying remote MCP servers over HTTP with SSE event streaming
+- HTTP POST + SSE transport implementation; current production evidence is limited to handshake
 - `--server-url`, `--sse-path`, `--insecure-tls` CLI flags
-- Full TLS/mTLS support with client certs, CA pool, and server name verification
-- SSE connection management with reconnect and timeout guards
+- TLS options for client certs, CA pool, and server name verification; incomplete cert/key pairs are not yet rejected
+- No verified reconnect behavior; a shared read/write mutex can block post-handshake calls
 - Mock transport with `ServeMCP()` HTTP handler for testing
 - Backward compatible: stdio transport unchanged, auto-detected from config
 
@@ -108,7 +110,7 @@
 - Updated architecture diagram with v2 components
 - Feature documentation for tracing, benchmarks, remote transport, and Vault integration
 - Policy linting CLI reference
-- Corrected argument rule type count from 11 to 16
+- Documented the current split between 14 enforced rule types and one linter-only composite name
 
 ## v1.0.0 (2026-05-25)
 
@@ -121,11 +123,11 @@
 ### Policy Engine
 
 - YAML-based policy schema with validation and defaults
-- 11 argument rule types: deny_path, allow_path, deny_command_pattern, allow_command_pattern, deny_query_pattern, allow_query_pattern, allowed_repos, deny_recipient_domain, allow_recipient_domain, max_file_size, max_rows
+- Initial argument-rule inventory; the current engine enforces 14 rule types listed in `docs/policy-model.md`
 - Tool allowlist/denylist with default-deny posture
 - Risk classification (critical/high/medium/low) via policy or inference
 - Approval requirement detection
-- Policy hot-reload via fsnotify with 2-second debounce and atomic swaps
+- Engine/registry hot-reload via fsnotify with 2-second debounce and atomic swaps; redaction and approval settings remain startup snapshots
 
 ### Chain Detection
 
@@ -134,12 +136,12 @@
 - Deny or require-approval actions for matched chains
 - Audit events with chain context
 
-### Redaction Engine
+### Redaction Engine (scope correction)
 
-- Regex-based secret stripping (API keys, tokens, JWTs, connection strings, private keys, internal IPs)
+- Regex-based replacement for configured matches (API keys, tokens, JWTs, connection strings, private-key headers, internal IPs)
 - Argument redaction before forwarding to MCP server
-- Output redaction before returning to client
-- Sensitive file blocking (.env, credentials, .pem, .key, .ssh)
+- Text-only output redaction for MCP `Content[].Text`; structured data and JSON-RPC error fields are not comprehensive
+- Sensitive-file patterns for qualified paths; basename-only matching has known gaps
 - Deep map and array scanning for nested secrets
 
 ### Audit Logging

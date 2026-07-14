@@ -18,11 +18,11 @@ What a new adopter must understand in one session. Everything here is on the **6
 | Secret redaction + sensitive paths | `internal/redaction` |
 | Tool-chain detection | `internal/policy` (engine + session) |
 | JSONL audit | `internal/audit` |
-| Policy lint CLI | `mcp-visor lint`, `internal/policy/linter` |
+| Policy lint CLI | Supplemental validation only; current `--strict` is not a complete deployment gate |
 | Basic approval (file / CLI) | `internal/approval` |
 | Demo mock server + examples | `examples/demo-mcp-server`, `serve --demo` |
 
-**Core decision path:** redaction → policy → chain → approval → audit. No LLM in the allow/deny path.
+**Core decision path:** runtime limits → argument redaction → sensitive-path block → policy → taint-aware egress → chain detection → approval → post-authorization taint marking → relay. Audit events are emitted at selected intermediate decisions; no LLM participates in allow/deny.
 
 ### Advanced (shipped, optional)
 
@@ -30,14 +30,14 @@ Enterprise and operator integrations. **On by flag only**; not required for the 
 
 | Capability | Decision |
 |------------|----------|
-| HTTP+SSE remote transport | **Keep** — real deployments need remote MCP; document as Advanced |
+| HTTP+SSE remote transport | **Experimental** — keep isolated until post-handshake relay, concurrency, TLS validation, and interoperability gates pass |
 | Durable approval + signed receipts | **Keep** — strengthens enforcement receipts; Advanced |
 | Webhook emitter | **Keep** — control-plane hook; Advanced |
-| SIEM export | **Keep** — compliance path; Advanced |
+| SIEM export | **Experimental/basic** — current TCP/UDP path is plaintext and reduced; not audit-chain retention |
 | Vault Transit signing | **Keep** — KMS path; Advanced |
-| Embedded dashboard | **Keep** — local operator UI; Advanced (OTLP/Grafana for fleet) |
-| Prometheus + OTLP export | **Keep** — proves enforcement in customer observability stacks |
-| Trace logging (`--trace`) | **Keep** — forensics; Advanced |
+| Embedded dashboard | **Experimental** — unauthenticated local API can expose redacted payload data; require access-control and race hardening |
+| Prometheus + OTLP export | **Experimental** — counters are not synchronized; keep off production claims until race-safe |
+| Trace logging (`--trace`) | **Incomplete** — formatter/config types exist but runtime paths do not invoke the tracer |
 | n8n blueprint | **Keep** — example control plane; Advanced / examples |
 
 ### Experimental / roadmap
