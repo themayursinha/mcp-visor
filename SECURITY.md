@@ -23,7 +23,7 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 
 1. **Deterministic policy** — No AI in the decision path
 2. **Fail-closed** — Unknown tools denied by default
-3. **Secrets redaction** — Strips credentials before they reach tools or logs
+3. **Pattern redaction** — Replaces configured matches in arguments and textual outputs; encoded, structured, and unmatched secrets can pass
 4. **Chain detection** — Blocks read→send patterns regardless of individual tool policies
 5. **Audit logging** — O_SYNC JSONL for selected events; healthy writes are hash-linked within one logger lifetime
 
@@ -43,6 +43,8 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 - Invalid deny/chain/redaction regexes and unknown rule types are not fully fail-closed at `serve` time
 - Declared destination fields are not enforced; path rules omit `uri`, and basename-only sensitive-file matching has gaps
 - OTLP `policy.reason`, dashboard/trace data, and pre-logger SIEM/webhook events can expose values not removed by configured redaction
+- `tools/call` notifications without IDs and malformed envelopes can bypass interception
+- Strict lint is not a complete enforcement gate; the linter-only composite rule passes, and `--no-warnings` can neutralize strict warning failures
 
 ### Hardening Recommendations
 

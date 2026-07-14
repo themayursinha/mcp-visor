@@ -2,7 +2,7 @@
 
 **Deterministic authorization for MCP tool calls.**
 
-MCP Visor is a self-hosted policy enforcement proxy for AI agents. It sits between an agent and MCP servers, evaluates every `tools/call` before execution, and enforces allow, deny, approval, redaction, chain, and session-taint rules without an LLM in the decision path. It is not prompt filtering, output moderation, or system-prompt hardening.
+MCP Visor is a self-hosted policy enforcement proxy for AI agents. It evaluates valid JSON-RPC `tools/call` requests that include an `id` before relay and applies allow, deny, approval, redaction, chain, and session-taint rules without an LLM. `tools/call` notifications and malformed envelopes are a documented enforcement gap.
 
 > **MCP Visor is not a model guardrail. It is an action boundary.**
 > Models can request actions. MCP Visor decides whether those actions are allowed.
@@ -28,7 +28,7 @@ MCP Visor adds that boundary at the MCP `tools/call` layer:
 AI agent → MCP Visor → policy decision → MCP server
 ```
 
-Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. While the audit sink remains healthy, events are hash-linked within one logger lifetime.
+Valid `tools/call` requests with IDs are evaluated before relay. Notifications without IDs currently bypass interception, so clients and servers must not treat notification-form tool calls as executable until that gap is fixed.
 
 ## Install
 
@@ -44,7 +44,8 @@ Pre-built binaries and checksums are available on the [Releases](https://github.
 # Run the built-in demo proxy
 mcp-visor serve --demo
 
-# Fail the deployment gate on warnings such as unknown rule types
+# Supplemental lint. Do not combine --strict with --no-warnings.
+# This is not yet a complete fail-closed policy gate; see the threat model.
 mcp-visor lint --strict examples/policies/session-taint-egress.yaml
 
 # Proxy a real MCP server through a policy boundary
@@ -158,7 +159,7 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, w
 
 ```text
 mcp-visor serve [flags]    Run the proxy
-mcp-visor lint [--strict] <policy>  Validate a policy file; use --strict for deployment gates
+mcp-visor lint [--strict] <policy>  Supplemental policy validation; not a complete fail-closed gate
 mcp-visor version          Print version
 ```
 

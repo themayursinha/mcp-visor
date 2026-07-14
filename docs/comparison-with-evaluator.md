@@ -39,7 +39,7 @@ They are designed to work together:
                                         │  RUNTIME ENFORCEMENT     │
                                         │  (visor)                  │
                                         │                           │
-                                        │  Every tool call          │
+                                        │  Valid request calls      │
                                         │  • Enforces policy rules │
                                         │  • Blocks dangerous calls│
                                         │  • Detects tool chains   │

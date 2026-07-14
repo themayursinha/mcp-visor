@@ -98,7 +98,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 |--------|----------|------------|---------------------|
 | Session exhaustion | Medium | Low | v1 has no built-in rate limiting. Can rely on host-level limits (systemd, Docker). |
 | Large argument DDoS | Medium | Medium | `max_argument_size_bytes` setting rejects oversized calls. Default: 1 MB. |
-| Large output DDoS | Medium | Medium | `max_output_size_bytes` setting allows truncation. Default: 10 MB. |
+| Large output DDoS | Medium | Medium | `max_output_size_bytes` truncates each textual `Content[].Text` entry. It does not cap aggregate responses, structured `Data`, or JSON-RPC errors. |
 | Approval exhaustion | Low | Low | Each session queues one pending approval at a time. No approval flood path. |
 | Policy file watcher exploit | Medium | Low | `serve -policy` reloads engine-backed policy and registry state after a 2-second debounce, but the redactor, audit redaction patterns, and approval timeout remain startup snapshots. Invalid reloads keep the last valid engine policy. |
 
@@ -270,6 +270,14 @@ Policy `deny_path` / `allow_path` rules do not inspect `uri`. Built-in sensitive
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
+
+### 16. Notification-Form `tools/call` Bypass
+
+Interception currently returns early for JSON-RPC notifications without an `id`, before checking the `tools/call` method. A server that executes notification-form tool calls can therefore receive them without policy, redaction, approval, taint, chain, or audit enforcement. Malformed request envelopes can also be forwarded.
+
+### 17. Strict Lint Is Not a Complete Gate
+
+`deny_command_pattern_composite` is recognized by the linter but has no enforcement case and produces no strict-lint finding. Combining `--strict` with `--no-warnings` removes warnings before exit evaluation. Do not treat current lint output as sufficient proof of policy enforcement coverage.
 
 ## Hardening Recommendations
 

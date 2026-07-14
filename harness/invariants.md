@@ -18,7 +18,7 @@ Each invariant maps to automated checks in `check.sh` (via `go test`) or manual 
 
 **Prompt-injection immunity** is architectural: decisions do not parse natural language from tool descriptions in an LLM. Regression: policy engine tests + integration deny paths; document scenarios in `examples/malicious-prompts/`.
 
-**Malformed policy gate:** loader rejects YAML/schema errors. Before `serve`, use `mcp-visor lint --strict <policy>` so unknown-rule warnings also produce a non-zero exit.
+**Policy-validation limitation:** loader rejects YAML/schema errors. `lint --strict` fails reported warnings, but `deny_command_pattern_composite` is recognized without enforcement and `--no-warnings` can neutralize strict warning failures. It is not yet a complete deployment gate.
 
 ## Adding an invariant
 

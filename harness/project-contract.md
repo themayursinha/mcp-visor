@@ -2,21 +2,21 @@
 
 ## Purpose
 
-MCP Visor is a **fail-closed, deterministic** MCP proxy that evaluates every `tools/call` against YAML policy **before** the MCP server runs the tool. It is not an LLM guardrail and does not use a model in the decision path.
+MCP Visor is a deterministic MCP proxy for valid JSON-RPC `tools/call` requests with IDs. Notification-form calls and malformed envelopes currently bypass interception; closing that gap is required before claiming universal fail-closed enforcement.
 
 ## Non-negotiable invariants
 
 1. **Default deny** — Unknown tools and unspecified servers are denied unless policy explicitly allows.
 2. **No LLM in decisions** — Allow, deny, redact, chain, and approval gating are rule-based only.
-3. **Single enforcement path** — Stdio and remote transports share the same `tools/call` processing (metrics, audit, policy).
-4. **Startup parse/schema failure is closed** — Invalid YAML and schema errors prevent startup. Regex and unknown-rule deployment gates require a separate `mcp-visor lint --strict <policy>`; plain lint can succeed with warnings.
+3. **Single request enforcement path** — Stdio and remote transports share processing for valid `tools/call` requests with IDs. Remote transport remains experimental.
+4. **Startup parse/schema failure is closed** — Invalid YAML and schema errors prevent startup. Lint is supplemental, not a complete fail-closed gate: the linter-only composite rule passes strict mode, and `--strict --no-warnings` can suppress warning failures.
 5. **Audit selected security events** — Denies, approvals, chain detections, argument redactions, session taints, and session lifecycle emit structured events. Plain allows and output-only redaction do not yet have standalone JSONL events.
 6. **OTLP excludes raw argument maps, not all argument-derived data** — spans omit the argument object, but `policy.reason` can contain values such as a denied path. Trace/dashboard surfaces can expose additional redacted-but-sensitive data.
 
 ## Public CLI contract (stable)
 
 - `mcp-visor serve` — run proxy
-- `mcp-visor lint --strict <policy>` — fail-closed static validation for deployment gates
+- `mcp-visor lint --strict <policy>` — supplemental static validation; never combine with `--no-warnings`
 - `mcp-visor version` — build info
 
 Core flags: `-server`, `-policy`, `-audit-log`, `-demo`, approval flags for high-risk tools.

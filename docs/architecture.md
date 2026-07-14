@@ -126,7 +126,7 @@ tests/
 
 ## Decision Pipeline
 
-Every intercepted `tools/call` is handled in `internal/proxy/tools_call.go` (shared by stdio and remote transports). [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the same proxy-level order and its current caveats:
+Valid JSON-RPC `tools/call` requests with an `id` are handled in `internal/proxy/tools_call.go` (shared by stdio and remote transports). Notification-form calls and malformed request envelopes currently bypass interception and can be relayed. [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the enforced request path:
 
 ```
 intercepted tools/call

@@ -30,7 +30,7 @@ time_restrictions: # Time-of-day access controls (optional)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `version` | string | Yes | Schema version. Must be `"1.0"`. |
+| `version` | string | Yes | Non-empty schema-version label. `"1.0"` is the current convention, but the loader does not reject other non-empty values. |
 | `description` | string | No | Human-readable description of the policy. |
 | `default_action` | string | Yes | `"deny"` or `"allow"`. What happens when no rule matches. |
 | `settings` | object | No | Global settings (defaults applied if omitted). |
@@ -47,7 +47,7 @@ time_restrictions: # Time-of-day access controls (optional)
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_argument_size_bytes` | int | 1048576 | Max tool call argument size (1 MB). Larger calls rejected. |
-| `max_output_size_bytes` | int | 10485760 | Max tool output size (10 MB). Larger responses truncated. |
+| `max_output_size_bytes` | int | 10485760 | Per-entry cap for textual `Content[].Text`. It is not a limit on aggregate responses, structured `Data`, or JSON-RPC errors. |
 | `session_max_tools` | int | 100 | Max tool calls per session. New calls denied after limit. |
 | `session_timeout_seconds` | int | 3600 | Session timeout (1 hour). |
 | `approval_timeout_seconds` | int | 300 | Approval timeout (5 minutes). Deny after timeout. |
@@ -461,7 +461,7 @@ These patterns are built into the redaction engine and active by default:
 
 ## Decision Model
 
-Every tool call reaches a terminal `allow`, `deny`, or `require_approval` decision. `redact_then_allow` is also used as an input-redaction audit label before the terminal policy decision:
+Every valid JSON-RPC `tools/call` request with an `id` reaches a terminal `allow`, `deny`, or `require_approval` decision. Notification-form calls and malformed envelopes currently bypass this path. `redact_then_allow` is also used as an input-redaction audit label before the terminal policy decision:
 
 | Decision | Meaning |
 |----------|---------|
@@ -596,4 +596,4 @@ The repository includes example policies demonstrating different postures:
 - **Invalid regex**: the loader does not compile all rule, chain, or redaction regexes. `mcp-visor lint --strict` catches several cases, but `serve` does not run lint automatically. Invalid deny/chain regexes can behave as no match, and invalid redaction regexes are skipped.
 - **Unknown rule type**: loader succeeds and the engine ignores the rule.
 
-Invalid YAML and schema-validation errors prevent startup. A fail-closed deployment gate must run `mcp-visor lint --strict <policy>` separately; plain `mcp-visor lint` can exit successfully when it reports unknown-rule warnings.
+Invalid YAML and schema-validation errors prevent startup. Lint remains supplemental: plain lint can succeed with warnings; `--strict --no-warnings` can suppress warning failures; and `deny_command_pattern_composite` is recognized without enforcement, so even strict lint is not a complete fail-closed gate.
