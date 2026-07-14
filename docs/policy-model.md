@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-11 rule types are supported. Each rule has a `type` field and type-specific parameters.
+The engine enforces 14 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -431,7 +431,7 @@ redaction:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `patterns` | array | No | Regex patterns for redacting tool call arguments. |
-| `output_redaction` | bool | No | Enable redaction of tool outputs before returning to client. |
+| `output_redaction` | bool | No | Declared in policy but not consulted by the current redaction engine. Configured input and output patterns are applied to outputs regardless of this value. |
 | `output_patterns` | array | No | Regex patterns for redacting tool outputs. |
 | `sensitive_files` | array | No | Glob patterns for files that should be completely blocked. |
 
@@ -457,7 +457,7 @@ These patterns are built into the redaction engine and active by default:
 | Private key | `-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----` |
 | DB connection string | `mongodb://`, `postgresql://`, `mysql://`, `redis://`, `jdbc://` with credentials |
 | Internal IP | `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x` |
-| Email address | Standard email regex |
+
 
 ## Decision Model
 

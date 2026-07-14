@@ -225,13 +225,13 @@ Deterministic, YAML-driven policy evaluation. No LLM involvement.
   - `EvaluateChain(server, call, previousCalls)` → chain detection
   - `GetRiskLevel(server, tool)` → risk classification
 - **Registry** (`registry.go`): In-memory lookup maps built from policy for fast tool/server resolution
-- **11 argument rule types**: deny_path, allow_path, deny_command_pattern, allow_command_pattern, deny_query_pattern, allow_query_pattern, allowed_repos, deny_recipient_domain, allow_recipient_domain, max_file_size, max_rows
+- **14 enforced argument rule types**: `deny_path`, `allow_path`, `deny_command_pattern`, `allow_command_pattern`, `deny_command_keyword`, `deny_query_pattern`, `allow_query_pattern`, `deny_recipient_domain`, `allow_recipient_domain`, `allowed_repos`, `max_file_size`, `max_result_rows`, `max_export_rows`, `require_approval_always`
 
 ### 5. Redaction Engine (`internal/redaction/`)
 
 Configurable regex-based secret detection:
 
-- **Built-in patterns**: OpenAI keys (`sk-`), GitHub tokens (`ghp_`), Slack tokens (`xoxb-`), AWS keys (`AKIA`), JWTs, private keys, database connection strings, internal IPs, email addresses
+- **Built-in patterns**: OpenAI keys (`sk-`), GitHub tokens (`ghp_`), Slack tokens (`xoxb-`), AWS keys (`AKIA`), JWTs, private keys, database connection strings, and internal IPs
 - **Argument redaction**: Scans tool arguments before forwarding to the MCP server
 - **Output redaction**: Scans server responses before returning to the client
 - **Sensitive file blocking**: `**/.env`, `**/credentials`, `**/*.pem`, `**/.ssh/**`, etc.

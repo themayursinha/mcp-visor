@@ -14,7 +14,7 @@ This document explains the relationship between [mcp-visor](https://github.com/t
 | **Output** | Reports, scores, findings | Allow/deny/approval decisions, audit logs |
 | **When it runs** | CI/CD, on-demand scans | Every call on the supported stdio enforcement path; remote transport is experimental |
 | **Language** | Python | Go |
-| **Deployment** | CLI tool, CI pipeline | Long-running daemon, Docker container |
+| **Deployment** | CLI, CI pipeline, optional FastAPI service | Long-running daemon, Docker container |
 
 ## The Relationship
 
@@ -131,10 +131,7 @@ The recommended workflow:
 
 ## Security Model Differences
 
-The evaluator actively tests LLMs against adversarial prompts. It **calls LLM APIs** and measures their resistance to manipulation. This means the evaluator:
-- Requires API keys for LLM providers
-- Sends potentially malicious prompts to LLMs
-- Runs in a controlled CI/CD environment, not production
+The evaluator actively tests LLMs against adversarial prompts. It can use keyed cloud providers, local Ollama, or deterministic mock providers. Cloud providers require credentials and receive test prompts; local and mock modes do not require cloud API keys. Run it in a controlled testing environment, not in the production tool-execution path.
 
 The visor never calls an LLM. Its policy engine is deterministic — exact match, regex, and rule-chain logic. This means the visor:
 - Requires no LLM API key for the core enforcement path; optional integrations have their own credentials/endpoints
@@ -149,7 +146,7 @@ These are separate projects by design:
 
 2. **Different lifecycles**: Evaluator is a Python project with LLM SDK dependencies. Visor is a Go binary with a deterministic core and optional integration dependencies.
 
-3. **Different threat models**: Evaluator requires LLM API keys. The visor core requires none; credentials for optional integrations must stay isolated from the policy decision path.
+3. **Different threat models**: Evaluator cloud providers may require LLM API keys, while local/mock modes do not. The visor core requires no LLM key; credentials for optional integrations must stay isolated from the policy decision path.
 
 4. **Different deployment models**: Evaluator runs occasionally. Visor runs continuously. Different ops requirements.
 

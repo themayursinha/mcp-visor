@@ -249,7 +249,7 @@ Input redaction emits a `tool_call_allowed` event before later policy, egress, c
 
 ### 10. Basic SIEM Export Is Not Audit-Chain Retention
 
-Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter receives the original reduced event copy, not the timestamped/redacted/hash-linked copy produced inside the file logger, so it lacks logger-added `timestamp`, `hash`, `prev_hash`, and `chain_index`. Use secure external shipping of the JSONL audit file for retention.
+Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter receives the original pre-logger event, not the redacted/timestamped/hash-linked copy written to JSONL. Its reduced formats omit arguments but can include an unredacted `reason`, and they lack logger-added `timestamp`, `hash`, `prev_hash`, and `chain_index`. Use secure external shipping of the JSONL audit file for retention.
 
 ### 11. Experimental Telemetry and Dashboard
 

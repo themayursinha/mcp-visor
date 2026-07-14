@@ -35,7 +35,7 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 - Audit write failure can leave a later stored event referencing an event that was not persisted
 - Policy hot reload does not atomically refresh redaction and approval settings
 - Remote HTTP+SSE is experimental; post-handshake relay and complete mTLS configuration need hardening
-- Built-in TCP/UDP SIEM export is plaintext and is not equivalent to the JSONL audit chain
+- Built-in TCP/UDP SIEM export is plaintext and uses a reduced pre-logger event that does not inherit JSONL logger redaction or hash-link fields
 - No end-to-end cryptographic attestation of all policy decisions
 - Session state is ephemeral (in-memory, lost on restart)
 - No built-in rate limiting or DoS protection

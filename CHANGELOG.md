@@ -57,7 +57,7 @@
 ### Policy Linting
 
 - Policy validation CLI (`mcp-visor lint`) for static analysis of policy YAML
-- 16 known rule type validators with severity classification
+- 15 rule names recognized by the linter; 14 have enforcement cases and `deny_command_pattern_composite` is currently linter-only
 - `--json`, `--strict`, `--no-info`, `--no-warnings` output flags
 - Detection of invalid regex, unknown rule types, missing required fields
 - Composite command pattern validation
@@ -110,7 +110,7 @@
 - Updated architecture diagram with v2 components
 - Feature documentation for tracing, benchmarks, remote transport, and Vault integration
 - Policy linting CLI reference
-- Corrected argument rule type count from 11 to 16
+- Documented the current split between 14 enforced rule types and one linter-only composite name
 
 ## v1.0.0 (2026-05-25)
 
@@ -123,7 +123,7 @@
 ### Policy Engine
 
 - YAML-based policy schema with validation and defaults
-- 11 argument rule types: deny_path, allow_path, deny_command_pattern, allow_command_pattern, deny_query_pattern, allow_query_pattern, allowed_repos, deny_recipient_domain, allow_recipient_domain, max_file_size, max_rows
+- Initial argument-rule inventory; the current engine enforces 14 rule types listed in `docs/policy-model.md`
 - Tool allowlist/denylist with default-deny posture
 - Risk classification (critical/high/medium/low) via policy or inference
 - Approval requirement detection
