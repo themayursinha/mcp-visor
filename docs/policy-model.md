@@ -30,11 +30,11 @@ time_restrictions: # Time-of-day access controls (optional)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `version` | string | Yes | Non-empty schema-version label. `"1.0"` is the current convention, but the loader does not reject other non-empty values. |
+| `version` | string | No | Defaults to `"1.0"`. Other non-empty values are accepted; supported-version compatibility is not enforced. |
 | `description` | string | No | Human-readable description of the policy. |
-| `default_action` | string | Yes | `"deny"` or `"allow"`. What happens when no rule matches. |
+| `default_action` | string | No | Defaults to `"deny"`; may be `"deny"` or `"allow"`. |
 | `settings` | object | No | Global settings (defaults applied if omitted). |
-| `servers` | array | Yes | List of MCP server configurations and their tool rules. |
+| `servers` | array | No | Defaults to an empty list; no configured server/tool rules then exist. |
 | `tool_chains` | array | No | Chain detection rules for dangerous tool sequences. |
 | `taints` | array | No | Session state markers set when source tools access sensitive data. |
 | `egress_controls` | array | No | Stateful sink controls triggered by existing session taints. |
@@ -47,7 +47,7 @@ time_restrictions: # Time-of-day access controls (optional)
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_argument_size_bytes` | int | 1048576 | Max tool call argument size (1 MB). Larger calls rejected. |
-| `max_output_size_bytes` | int | 10485760 | Per-entry cap for textual `Content[].Text`. It is not a limit on aggregate responses, structured `Data`, or JSON-RPC errors. |
+| `max_output_size_bytes` | int | 10485760 | Truncation threshold for each textual `Content[].Text`; a marker is appended after truncation, so final text can exceed the threshold. Not an aggregate/structured/error limit. |
 | `session_max_tools` | int | 100 | Max tool calls per session. New calls denied after limit. |
 | `session_timeout_seconds` | int | 3600 | Session timeout (1 hour). |
 | `approval_timeout_seconds` | int | 300 | Approval timeout (5 minutes). Deny after timeout. |

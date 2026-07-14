@@ -12,7 +12,7 @@ This document explains the relationship between [mcp-visor](https://github.com/t
 | **MCP integration** | Simulates mock tool calls | Proxies real MCP protocol traffic |
 | **Policy role** | Assesses policy compliance of configs | Enforces policy before tool execution |
 | **Output** | Reports, scores, findings | Allow/deny/approval decisions, audit logs |
-| **When it runs** | CI/CD, on-demand scans | Every call on the supported stdio enforcement path; remote transport is experimental |
+| **When it runs** | CI/CD, on-demand scans | Valid request-form calls with IDs on stdio; notification/malformed bypasses and experimental remote transport are documented limitations |
 | **Language** | Python | Go |
 | **Deployment** | CLI, CI pipeline, optional FastAPI service | Long-running daemon, Docker container |
 
@@ -105,7 +105,7 @@ The recommended workflow:
                     │                           │
                     │  Runs:                    │
                     │  • Continuously (daemon)  │
-                    │  • Every tools/call       │
+                    │  • Request calls with ID  │
                     │  • Partially reloads      │
                     │    engine policy          │
                     └──────────────────────────┘
@@ -119,7 +119,7 @@ The recommended workflow:
 | Policy enforcement | No (assesses) | Yes (enforces) |
 | Tool allowlist/denylist | Simulates | Enforces in real time |
 | Chain detection | Flags possible chains in config | Detects chains in real tool call sequences |
-| Secret redaction | Evaluates redaction accuracy | Strips secrets from live traffic |
+| Secret redaction | Evaluates redaction accuracy | Replaces configured matches in arguments and textual `Content[].Text`; not comprehensive sanitization |
 | Human approval | No | Yes |
 | Audit logging | Generates test reports | Emits selected structured security/session events; not yet a complete per-call ledger |
 | LLM prompt injection testing | Yes | No (deterministic, no LLM) |

@@ -24,7 +24,7 @@ Runtime architecture and component design for the MCP Visor policy enforcement p
 │                                ▼                              │
 │  ┌───────────────────────────────────────────────┐           │
 │  │              interceptor Layer                 │           │
-│  │  Parses every tools/call, extracts:           │           │
+│  │  Parses valid request tools/call with ID:     │           │
 │  │  - Tool name, server name, arguments          │           │
 │  │  - Session/agent identity                     │           │
 │  │  - Call sequence context                      │           │
@@ -175,7 +175,7 @@ intercepted tools/call
  Forward to MCP server (stdio/remote)
         ▼
  ┌──────────────────┐
- │ Output redaction │──▶ Strip secrets from server response before client
+ │ Output redaction │──▶ Replace configured matches in textual Content[].Text
  └──────┬───────────┘
         ▼
  Return result to client
@@ -201,7 +201,7 @@ The main proxy loop (`Run`) manages the full lifecycle:
 1. Start the MCP server as a child process with stdin/stdout pipes
 2. Run the MCP handshake (forward `initialize` request/response, `initialized` notification)
 3. Spawn two relay goroutines:
-   - `relayClientToServer`: reads client messages, intercepts `tools/call`, enforces policy
+   - `relayClientToServer`: enforces valid request-form `tools/call`; notification/malformed gaps are documented above
    - `relayServerToClient`: reads server responses, redacts outputs, forwards to client
 4. Graceful shutdown on SIGINT/SIGTERM via `signal.NotifyContext`
 
@@ -286,7 +286,7 @@ The policy engine uses exact match, prefix/suffix, regex, and rule-chain logic. 
 ### Fail-Closed Default
 
 - Unknown tools/servers are denied by default
-- If the policy engine encounters an error, it denies
+- YAML/schema startup errors and approval timeouts deny, but unsupported rules and some invalid regexes can be ignored or no-match
 - Approval timeouts deny by default
 - No "default-allow" posture is possible without explicit configuration
 
