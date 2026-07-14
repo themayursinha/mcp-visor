@@ -59,6 +59,9 @@ Covered by integration tests in this run:
 - H3 read→send chain — chain_detection tests
 - H5 audit redaction — \`TestAuditLogRedaction\`
 - H6 proxy path — proxy_integration tests
+- H9–H10 session taint / egress — \`internal/proxy/session_taint_test.go\`
+- H11 audit hash chain — \`TestAuditLogHashChain\`
+- H12 forwarded-only session history — \`TestSessionHistoryRecordsForwardedCallsOnly\`
 
 ## Result
 

@@ -1,9 +1,12 @@
 package audit_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
@@ -259,6 +262,74 @@ func TestMustLoggerWithEmptyPath(t *testing.T) {
 		SessionID: "test",
 		Decision:  "allow",
 	})
+}
+
+func TestAuditLogHashChain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-chain", Server: "demo"})
+	l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-chain", Server: "demo", Tool: "file_read", Decision: "allow"})
+
+	lines := readAuditLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 audit lines, got %d", len(lines))
+	}
+
+	var first, second audit.Event
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+
+	if first.ChainIndex != 0 {
+		t.Errorf("first chain_index: want 0, got %d", first.ChainIndex)
+	}
+	if first.PrevHash != "" {
+		t.Errorf("first prev_hash: want empty, got %q", first.PrevHash)
+	}
+	if second.ChainIndex != 1 {
+		t.Errorf("second chain_index: want 1, got %d", second.ChainIndex)
+	}
+	if second.PrevHash != first.Hash {
+		t.Errorf("prev_hash linkage: second.PrevHash=%q first.Hash=%q", second.PrevHash, first.Hash)
+	}
+	if got := recomputeAuditHash(first); got != first.Hash {
+		t.Errorf("first hash mismatch: recomputed %q stored %q", got, first.Hash)
+	}
+	if got := recomputeAuditHash(second); got != second.Hash {
+		t.Errorf("second hash mismatch: recomputed %q stored %q", got, second.Hash)
+	}
+}
+
+func recomputeAuditHash(e audit.Event) string {
+	e.Hash = ""
+	data, _ := json.Marshal(e)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func readAuditLines(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func TestLoggerConcurrency(t *testing.T) {

@@ -18,7 +18,7 @@
 ### Changed
 
 - README positioning now includes session-aware egress controls as a core action-boundary capability.
-- Policy evaluation order documents stateful egress enforcement after tool-chain detection.
+- Policy evaluation order documents stateful egress enforcement **before** tool-chain detection (see `docs/policy-model.md` evaluation order and `internal/proxy/tools_call.go`).
 
 ## v2.0.1 (2026-06-30)
 

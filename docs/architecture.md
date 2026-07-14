@@ -92,7 +92,7 @@ internal/
     linter.go                   Static policy validation CLI
     watcher.go                  fsnotify-based policy hot-reload watcher
   audit/                       Structured audit logging
-    logger.go                   JSONL logger with O_SYNC, hash-chaining, 8 event types
+    logger.go                   JSONL logger with O_SYNC, hash-chaining, 9 event types
   redaction/                   Sensitive data redaction
     engine.go                   Configurable regex-based secret scanning
   approval/                    Human approval workflow
@@ -126,65 +126,62 @@ tests/
 
 ## Decision Pipeline
 
-Every intercepted `tools/call` passes through this ordered pipeline:
+Every intercepted `tools/call` is handled in `internal/proxy/tools_call.go` (shared by stdio and remote transports). Order matches [`docs/policy-model.md`](policy-model.md#evaluation-order):
 
 ```
 intercepted tools/call
         │
         ▼
  ┌──────────────────┐
- │ Redaction first  │──▶ Strip secrets from arguments before evaluation
+ │ Runtime limits   │──▶ DENY if argument/output size caps exceeded
  └──────┬───────────┘
         ▼
  ┌──────────────────┐
- │ Known tool?      │──No──▶ DENY (unknown tool)
+ │ Argument         │──▶ Rewrite forwarded args when secrets match redaction patterns
+ │ redaction        │
  └──────┬───────────┘
-   Yes  │
         ▼
  ┌──────────────────┐
- │ Tool denylisted? │──Yes──▶ DENY (explicit deny)
- └──────┬───────────┘
-   No   │
-        ▼
- ┌──────────────────┐
- │ Not in allowlist?│──Yes──▶ DENY (not allowlisted, if default-deny)
+ │ Sensitive path   │──Yes──▶ DENY (built-in sensitive file patterns)
+ │ block            │
  └──────┬───────────┘
    No   │
         ▼
  ┌──────────────────┐
- │ Arguments pass   │──No──▶ DENY (argument validation failed)
- │ validation?      │
+ │ Policy evaluate  │──▶ DENY / REQUIRE_APPROVAL / ALLOW (tool + argument rules)
+ │ (YAML engine)    │
  └──────┬───────────┘
-   Yes  │
         ▼
  ┌──────────────────┐
- │ Dangerous chain  │──Yes──▶ DENY (chain detected)
- │ detected?        │
+ │ Egress controls  │──Match──▶ DENY or REQUIRE_APPROVAL when session taint + sink tool
+ │ (session taints) │
  └──────┬───────────┘
-   No   │
         ▼
  ┌──────────────────┐
- │ Sensitive data   │──Yes──▶ Redact, then continue
- │ in args?         │
+ │ Chain detection  │──Match──▶ DENY or REQUIRE_APPROVAL (recent forwarded calls)
+ │ (session history)│
  └──────┬───────────┘
-   No   │
         ▼
  ┌──────────────────┐
- │ Requires         │──Yes──▶ REQUIRE_APPROVAL
- │ approval?        │
+ │ Final decision   │──DENY / REQUIRE_APPROVAL / ALLOW
  └──────┬───────────┘
-   No   │
-        ▼
-     ALLOW
-        │
+   Allow│
         ▼
  ┌──────────────────┐
- │ Sensitive data   │──Yes──▶ Redact output before returning to client
- │ in output?       │
+ │ Post-allow taint │──▶ Matching `taints[]` rules mark session; emit `session_tainted`
+ │ marking          │
+ └──────┬───────────┘
+        ▼
+ Forward to MCP server (stdio/remote)
+        ▼
+ ┌──────────────────┐
+ │ Output redaction │──▶ Strip secrets from server response before client
  └──────┬───────────┘
         ▼
  Return result to client
 ```
+
+Denied or approval-rejected calls never reach the MCP server. Audit events are emitted for policy decisions (`tool_call_allowed`, `tool_call_denied`, `tool_call_chain_detected`, `tool_call_approval_required`, `session_tainted`).
 
 ## Core Components
 
@@ -212,10 +209,10 @@ The main proxy loop (`Run`) manages the full lifecycle:
 
 Per-proxy-connection session state:
 
-- Records every `tools/call` in chronological order with tool name, server, arguments, and result preview
-- Maintains a thread-safe call history (`sync.RWMutex`)
-- Exposes `RecentCallChain(windowSize)` for the chain detector
-- Session state is ephemeral — lost on proxy restart
+- **Call history** (`ToolCalls`): only **forwarded** `tools/call` messages are appended after policy allows relay (`relayClientToServer` → `logClientMessage`). Denied, approval-rejected, and malformed calls are not recorded. Chain detection therefore sees executed (or approval-granted) calls only — see `TestSessionHistoryRecordsForwardedCallsOnly` in `internal/proxy/session_taint_test.go`.
+- **Session taints** (`Taints`): set after an allowed source tool matches a `taints[]` rule (`markMatchingTaints` in `session_taint.go`).
+- Thread-safe (`sync.RWMutex`); exposes `RecentCallChain(windowSize)` for chain detection.
+- Ephemeral — lost on proxy restart.
 
 ### 4. Policy Engine (`internal/policy/`)
 
@@ -264,12 +261,13 @@ Human-in-the-loop approval for high-risk tool calls:
 
 ### 8. Audit Logger (`internal/audit/`)
 
-Structured JSONL audit trail:
+Structured JSONL audit trail (`internal/audit/logger.go`):
 
-- **7 event types**: `tool_call_allowed`, `tool_call_denied`, `tool_call_chain_detected`, `tool_call_approval_required`, `session_started`, `session_ended`, `policy_loaded`
-- **Redacted data**: All logged arguments are scrubbed of secrets before writing
-- **O_SYNC writes**: Durability (append-only semantics)
-- **Each event includes**: timestamp, session ID, agent ID, server, tool, arguments (redacted), decision, reason, risk level, chain context
+- **9 event types**: `tool_call_allowed`, `tool_call_denied`, `tool_call_approval_required`, `tool_call_chain_detected`, `session_tainted`, `session_started`, `session_ended`, `policy_loaded`, `policy_reloaded`
+- **Hash chain**: each line sets `prev_hash` to the prior event's `hash`, monotonic `chain_index`, and `hash` = SHA-256 of the JSON payload with `hash` cleared — regression: `TestAuditLogHashChain` in `internal/audit/logger_test.go`
+- **Redacted data**: arguments, reasons, and result previews scrubbed before write
+- **O_SYNC** append-only file writes
+- **Decision fields**: timestamp, session/agent IDs, server, tool, redacted arguments, `policy_decision`, reason, risk, chain context; egress denials add `session_taints`, `taint_source`, `taint_reason`, `policy_rule`
 
 ## Key Design Decisions
 
@@ -294,9 +292,9 @@ The policy engine uses exact match, prefix/suffix, regex, and rule-chain logic. 
 
 ### Minimal TCB
 
-- One non-stdlib dependency: `gopkg.in/yaml.v3` for policy parsing
-- No frameworks, no ORMs, no HTTP routers
-- Small binary size (~8 MB stripped)
+- **Core enforcement path** (policy, proxy, audit, redaction): no LLM; policy parsing uses `gopkg.in/yaml.v3` only among direct deps for the decision hot path.
+- **Optional integrations** (see `go.mod`): OpenTelemetry export, `fsnotify` hot-reload, gRPC OTLP — loaded for observability/ops flags, not required for default stdio proxy + YAML policy.
+- Single static binary; no ORM or application framework.
 
 ## Runtime Decision Examples
 

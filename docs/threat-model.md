@@ -69,8 +69,8 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
 | Policy file tampering | Critical | Low | Policy file should be owned by root/administrator. Visor reads only. v1 assumes filesystem integrity. v2 will support policy file signing. |
-| Audit log tampering | High | Low | Logs written with O_SYNC flag for durability. Recommend append-only filesystem permissions. v2 will support streaming to external SIEM. |
-| In-flight message tampering | Medium | Low | v1 uses local stdio pipes between visor and server. Attacker would need host compromise. v2 will add mTLS for remote servers. |
+| Audit log tampering | High | Low | JSONL lines are hash-chained (`prev_hash`, `hash`, `chain_index` in `internal/audit/logger.go`; `TestAuditLogHashChain`). Recommend append-only permissions; external SIEM export optional. |
+| In-flight message tampering | Medium | Low | Local stdio uses host pipes. Remote `--server-url` supports TLS/mTLS client configuration; operators must enable it for untrusted networks. |
 | Tool output tampering | Medium | Medium | Visor redacts secrets in outputs but does not sanitize against prompt injection. Output sanitization is a separate concern. |
 | Argument tampering | Medium | Low | Visor rewrites arguments after redaction. Attacker could attempt to bypass redaction via encoding tricks. |
 
@@ -78,7 +78,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Agent denies making a tool call | Medium | Medium | Audit logs include session ID, agent ID, timestamp, tool name, and arguments. Structured JSONL format. |
+| Agent denies making a tool call | Medium | Medium | Audit logs include session ID, agent ID, timestamp, tool name, and redacted arguments. JSONL lines are hash-chained for tamper detection (`TestAuditLogHashChain`). |
 | Approver denies approving | Medium | Low | Approval events are logged with timestamp and decision. v1 relies on who wrote the approval file. v2 can add approval signatures. |
 | Policy author denies a rule | Low | Low | Policy version and content should be tracked in version control. Not a visor concern. |
 
@@ -123,6 +123,7 @@ Which controls mitigate which threats?
 | **Argument Validation** | ✓ | — | — | ✓ | — | — | — | — |
 | **Redaction Engine** | — | ✓ | ✓ | — | — | — | — | ✓ |
 | **Chain Detector** | ✓ | ✓ | — | ✓ | — | ✓ | — | — |
+| **Session taints / egress controls** | ✓ | ✓ | — | — | — | ✓ | — | — |
 | **Approval Engine** | ✓ | — | — | — | — | — | ✓ | — |
 | **Risk Classifier** | — | — | — | — | ✓ | — | — | — |
 | **Audit Logger** | — | — | — | — | — | — | — | ✓ |
@@ -214,13 +215,13 @@ Which controls mitigate which threats?
 
 Policy integrity relies on filesystem permissions. If an attacker gains write access to the policy file, they can reconfigure the visor to allow any tool. Mitigation: deploy with proper file ownership and minimal visor user privileges.
 
-### 2. No Cryptographic Attestation
+### 2. Hash Chain vs Signed Decisions
 
-Policy decisions are not cryptographically signed. Audit log entries cannot be proven to have come from the visor. Mitigation: v2 will add HMAC-signed audit events and policy decision signatures.
+Audit events are hash-chained in the JSONL log (see `internal/audit/logger.go`), but policy decisions and approvals are not yet cryptographically signed end-to-end. Optional Vault Transit signing covers receipts where enabled. Mitigation: treat audit files as append-only; use SIEM export for off-host retention.
 
-### 3. No mTLS for Remote Servers
+### 3. Remote Server Authentication
 
-v1 supports stdio transport only (local child process). Remote servers over HTTP require mTLS for mutual authentication. Mitigation: v2 will add HTTP/SSE transport with mTLS support.
+Remote MCP over HTTP+SSE is supported (`--server-url`, TLS/mTLS flags). Operators must configure TLS/mTLS for production; stdio child-process transport remains the default local path.
 
 ### 4. Ephemeral Session State
 
@@ -271,8 +272,9 @@ Visor does not limit request rate from clients. A malicious or buggy agent could
 │  Layer 2: Allow/Deny  → Block unknown or forbidden tools│
 │  Layer 3: Arguments   → Validate paths, commands, sizes │
 │  Layer 4: Chains      → Detect dangerous sequences      │
-│  Layer 5: Approval    → Human checkpoint for high-risk  │
-│  Layer 6: Audit       → Tamper-evident decision record  │
+│  Layer 5: Session     → Taint + egress sink controls  │
+│  Layer 6: Approval    → Human checkpoint for high-risk  │
+│  Layer 7: Audit       → Hash-chained decision record  │
 │                                                          │
 │  Fail-closed: Unknown → DENY                             │
 │  Deterministic: No LLM in the decision path              │

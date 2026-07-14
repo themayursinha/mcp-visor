@@ -149,7 +149,7 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, H
 
 - **Deterministic:** no LLM in the allow/deny path
 - **Fail closed:** unknown tools are denied by default
-- **Layered:** redaction → policy → chain detection → session taints → approval → audit
+- **Layered:** redaction → policy → session taints/egress → chain detection → approval → audit
 - **Observable:** decisions are recorded in hash-chained JSONL audit logs
 - **Self-hosted:** single Go binary; no SaaS dependency required
 - **Operator-controlled:** optional telemetry exports to your Prometheus, OTLP, webhook, or SIEM stack
@@ -186,7 +186,7 @@ make bench                     # benchmarks
 - [x] v1.0: Proxy, policy engine, redaction, approval, audit, chain detection
 - [x] v1.1: Identity/time policies, hot-reload, CLI approval, remote transport
 - [x] v1.2: Session taints and egress controls
-- [ ] v1.3: Polished demo flows and stronger policy receipts
+- [ ] v1.3: Polished demo flows and stronger policy receipts (not yet released; current release line is v1.2)
 - [ ] Future: sandboxing, richer telemetry, optional policy engines
 
 ## Contributing
