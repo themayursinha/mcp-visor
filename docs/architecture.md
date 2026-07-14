@@ -92,7 +92,7 @@ internal/
     linter.go                   Static policy validation CLI
     watcher.go                  fsnotify-based policy hot-reload watcher
   audit/                       Structured audit logging
-    logger.go                   JSONL logger with O_SYNC, hash-chaining, 9 event types
+    logger.go                   JSONL logger with O_SYNC, per-process hash linking, 9 event types
   redaction/                   Sensitive data redaction
     engine.go                   Configurable regex-based secret scanning
   approval/                    Human approval workflow
@@ -181,7 +181,7 @@ intercepted tools/call
  Return result to client
 ```
 
-Denied or approval-rejected calls never reach the MCP server. Hash-chained audit events cover denies, approvals, redactions, session taints, and policy/session lifecycle. A plain unredacted allow currently has no standalone audit event; session history still records the forwarded call.
+Denied or approval-rejected calls never reach the MCP server. Per-process hash-linked audit events cover denies, approvals, redactions, session taints, and policy/session lifecycle. A plain unredacted allow currently has no standalone audit event; session history still records the forwarded call.
 
 ## Core Components
 
@@ -264,7 +264,7 @@ Human-in-the-loop approval for high-risk tool calls:
 Structured JSONL audit trail (`internal/audit/logger.go`):
 
 - **9 event types**: `tool_call_allowed`, `tool_call_denied`, `tool_call_approval_required`, `tool_call_chain_detected`, `session_tainted`, `session_started`, `session_ended`, `policy_loaded`, `policy_reloaded`
-- **Hash chain**: each line sets `prev_hash` to the prior event's `hash`, monotonic `chain_index`, and `hash` = SHA-256 of the JSON payload with `hash` cleared — regression: `TestAuditLogHashChain` in `internal/audit/logger_test.go`
+- **Process-local hash chain**: within one `Logger` instance, each line sets `prev_hash` to the prior event's `hash`, increments `chain_index`, and hashes the JSON payload with `hash` cleared. Reopening an existing file currently starts a new chain segment; cross-restart recovery is not implemented. Regression: `TestAuditLogHashChain` in `internal/audit/logger_test.go`.
 - **Redacted data**: arguments, reasons, and result previews scrubbed before write
 - **O_SYNC** append-only file writes
 - **Decision fields**: timestamp, session/agent IDs, server, tool, redacted arguments, `policy_decision`, reason, risk, chain context; egress denials add `session_taints`, `taint_source`, `taint_reason`, `policy_rule`

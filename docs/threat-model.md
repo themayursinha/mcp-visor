@@ -69,7 +69,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
 | Policy file tampering | Critical | Low | Policy files should be owned by root/administrator. The core proxy relies on host filesystem integrity and does not sign policy files. |
-| Audit log tampering | High | Low | JSONL lines are hash-chained (`prev_hash`, `hash`, `chain_index` in `internal/audit/logger.go`; `TestAuditLogHashChain`). Recommend append-only permissions; external SIEM export optional. |
+| Audit log tampering | High | Low | Events are hash-linked within one logger process (`prev_hash`, `hash`, `chain_index`; `TestAuditLogHashChain`). Reopening an existing file starts a new segment, so append-only permissions and off-host SIEM retention remain required. |
 | In-flight message tampering | Medium | Low | Local stdio uses host pipes. Remote `--server-url` supports TLS/mTLS client configuration; operators must enable it for untrusted networks. |
 | Tool output tampering | Medium | Medium | Visor redacts secrets in outputs but does not sanitize against prompt injection. Output sanitization is a separate concern. |
 | Argument tampering | Medium | Low | Visor rewrites arguments after redaction. Attacker could attempt to bypass redaction via encoding tricks. |
@@ -78,7 +78,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Agent denies making a tool call | Medium | Medium | Hash-chained events include session/agent IDs, tool, decision, reason, and redacted arguments for denies, approvals, redactions, and taints. A plain unredacted allow currently has no standalone audit event. |
+| Agent denies making a tool call | Medium | Medium | Process-local hash-linked events include session/agent IDs, tool, decision, reason, and redacted arguments for denies, approvals, redactions, and taints. A plain unredacted allow currently has no standalone audit event. |
 | Approver denies approving | Medium | Low | File approval relies on approval-directory permissions. Signed receipts are available when the receipt signer is configured, but operator identity still depends on backend and key custody. |
 | Policy author denies a rule | Low | Low | Policy version and content should be tracked in version control. Not a visor concern. |
 
@@ -215,9 +215,9 @@ Which controls mitigate which threats?
 
 Policy integrity relies on filesystem permissions. If an attacker gains write access to the policy file, they can reconfigure the visor to allow any tool. Mitigation: deploy with proper file ownership and minimal visor user privileges.
 
-### 2. Hash Chain vs Signed Decisions
+### 2. Process-Local Hash Chain vs Signed Decisions
 
-Audit events are hash-chained in the JSONL log (see `internal/audit/logger.go`), but policy decisions and approvals are not yet cryptographically signed end-to-end. Optional Vault Transit signing covers receipts where enabled. Mitigation: treat audit files as append-only; use SIEM export for off-host retention.
+Audit events are hash-linked within one logger lifetime, but reopening an existing JSONL file does not recover or validate the previous chain head. Policy decisions are also not cryptographically signed end-to-end. Optional Vault Transit signing covers receipts where enabled. Mitigation: treat files as append-only and export events off-host; cross-restart chain recovery belongs in the security-verification phase.
 
 ### 3. Remote Server Authentication
 
@@ -278,7 +278,7 @@ Forwarded calls are recorded in in-memory session history, but a plain allow wit
 │  Layer 4: Chains      → Detect dangerous sequences      │
 │  Layer 5: Session     → Taint + egress sink controls     │
 │  Layer 6: Approval    → Human checkpoint for high-risk  │
-│  Layer 7: Audit       → Hash-chained event record        │
+│  Layer 7: Audit       → Process-local hash-linked events │
 │                                                          │
 │  Fail-closed: Unknown → DENY                             │
 │  Deterministic: No LLM in the decision path              │

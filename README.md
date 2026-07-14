@@ -28,7 +28,7 @@ MCP Visor adds that boundary at the MCP `tools/call` layer:
 AI agent → MCP Visor → policy decision → MCP server
 ```
 
-Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. Hash-chained audit events cover denies, approvals, redactions, session taints, and policy/session lifecycle events.
+Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. Per-process hash-linked audit events cover denies, approvals, redactions, session taints, and policy/session lifecycle events.
 
 ## Install
 
@@ -140,7 +140,7 @@ More policies: [`examples/policies/`](examples/policies/) · Schema reference: [
 | Tool-chain detection | Block dangerous sequences such as read → exfiltrate |
 | Session taints | Change later authorization decisions after sensitive context is touched |
 | Human approval | Gate critical tools before execution |
-| Audit log | Hash-chained JSONL evidence for security-relevant decisions and lifecycle events |
+| Audit log | Per-process hash-linked JSONL events for security decisions and lifecycle events |
 | Policy linting | Validate YAML policy before deployment |
 
 Advanced capabilities include signed decision receipts, Vault Transit signing, HTTP+SSE remote transport with mTLS, webhooks, SIEM export, Prometheus metrics, OTLP tracing, and a local web dashboard. See [`docs/complexity-budget.md`](docs/complexity-budget.md) for feature tiering.
@@ -150,7 +150,7 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, H
 - **Deterministic:** no LLM in the allow/deny path
 - **Fail closed:** unknown tools are denied by default
 - **Layered:** redaction → policy → taint-aware egress → chain detection → approval → post-allow taint marking
-- **Observable:** denies, approvals, redactions, taints, and lifecycle events are recorded in hash-chained JSONL
+- **Observable:** denies, approvals, redactions, taints, and lifecycle events are recorded in per-process hash-linked JSONL
 - **Self-hosted:** single Go binary; no SaaS dependency required
 - **Operator-controlled:** optional telemetry exports to your Prometheus, OTLP, webhook, or SIEM stack
 
