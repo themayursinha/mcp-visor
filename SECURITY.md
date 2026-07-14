@@ -25,13 +25,17 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 2. **Fail-closed** — Unknown tools denied by default
 3. **Secrets redaction** — Strips credentials before they reach tools or logs
 4. **Chain detection** — Blocks read→send patterns regardless of individual tool policies
-5. **Audit logging** — Append-only O_SYNC writes for every decision
+5. **Audit logging** — O_SYNC JSONL for selected security events, hash-linked within one logger lifetime
 
-### Known Limitations (v1)
+### Known Limitations
 
 - Policy file integrity relies on host filesystem permissions
-- No cryptographic attestation of policy decisions
-- No mTLS between visor and remote MCP servers
+- No complete per-call audit ledger; plain allows and output-only redaction lack standalone events
+- Audit hash linkage resets for each logger instance and on file reopen
+- Policy hot reload does not atomically refresh redaction and approval settings
+- Remote HTTP+SSE is experimental; post-handshake relay and complete mTLS configuration need hardening
+- Built-in TCP/UDP SIEM export is plaintext and is not equivalent to the JSONL audit chain
+- No end-to-end cryptographic attestation of all policy decisions
 - Session state is ephemeral (in-memory, lost on restart)
 - No built-in rate limiting or DoS protection
 - Approval is file-based; an attacker with write access to the approval directory can forge approvals

@@ -69,7 +69,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
 | Policy file tampering | Critical | Low | Policy files should be owned by root/administrator. The core proxy relies on host filesystem integrity and does not sign policy files. |
-| Audit log tampering | High | Low | Events are hash-linked within one logger process (`prev_hash`, `hash`, `chain_index`; `TestAuditLogHashChain`). Reopening an existing file starts a new segment, so append-only permissions and off-host SIEM retention remain required. |
+| Audit log tampering | High | Low | Events are hash-linked within one logger lifetime. New logger instances and file reopen start a new segment, so append-only permissions and secure external file shipping remain required. |
 | In-flight message tampering | Medium | Low | Local stdio uses host pipes. Remote `--server-url` supports TLS/mTLS client configuration; operators must enable it for untrusted networks. |
 | Tool output tampering | Medium | Medium | Visor redacts secrets in outputs but does not sanitize against prompt injection. Output sanitization is a separate concern. |
 | Argument tampering | Medium | Low | Visor rewrites arguments after redaction. Attacker could attempt to bypass redaction via encoding tricks. |
@@ -78,7 +78,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Agent denies making a tool call | Medium | Medium | Process-local hash-linked events include session/agent IDs, tool, decision, reason, and redacted arguments for denies, approvals, redactions, and taints. A plain unredacted allow currently has no standalone audit event. |
+| Agent denies making a tool call | Medium | Medium | Logger-lifetime hash-linked events cover selected decisions, but a plain unredacted allow has no standalone audit event and authorized-call history is in-memory. This is not yet a complete repudiation control. |
 | Approver denies approving | Medium | Low | File approval relies on approval-directory permissions. Signed receipts are available when the receipt signer is configured, but operator identity still depends on backend and key custody. |
 | Policy author denies a rule | Low | Low | Policy version and content should be tracked in version control. Not a visor concern. |
 
@@ -100,7 +100,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Large argument DDoS | Medium | Medium | `max_argument_size_bytes` setting rejects oversized calls. Default: 1 MB. |
 | Large output DDoS | Medium | Medium | `max_output_size_bytes` setting allows truncation. Default: 10 MB. |
 | Approval exhaustion | Low | Low | Each session queues one pending approval at a time. No approval flood path. |
-| Policy file watcher exploit | Low | Low | `serve -policy` enables an fsnotify watcher with a 2-second debounce. Invalid reloads keep the last valid policy; filesystem permissions remain the trust boundary. |
+| Policy file watcher exploit | Medium | Low | `serve -policy` reloads engine-backed policy and registry state after a 2-second debounce, but the redactor, audit redaction patterns, and approval timeout remain startup snapshots. Invalid reloads keep the last valid engine policy. |
 
 ### 6. Elevation of Privilege
 
@@ -191,7 +191,7 @@ Which controls mitigate which threats?
 **Actors**: Internal developer with filesystem access
 
 1. Attacker edits policy to add `allowed: true` for `file_delete` on `/`
-2. If visor is running with `-policy`, the watcher loads the valid changed policy after its debounce interval
+2. If visor is running with `-policy`, engine-backed rules reload after the debounce interval; redaction and approval settings do not fully refresh
 3. **Limitation**: Policy file integrity relies on host filesystem permissions
 
 **Mitigation**: Run visor as a different user from developers. Keep the policy file root-owned and readable by the visor process; require reviewed deployment changes.
@@ -215,13 +215,13 @@ Which controls mitigate which threats?
 
 Policy integrity relies on filesystem permissions. If an attacker gains write access to the policy file, they can reconfigure the visor to allow any tool. Mitigation: deploy with proper file ownership and minimal visor user privileges.
 
-### 2. Process-Local Hash Chain vs Signed Decisions
+### 2. Logger-Lifetime Hash Chain vs Signed Decisions
 
-Audit events are hash-linked within one logger lifetime, but reopening an existing JSONL file does not recover or validate the previous chain head. Policy decisions are also not cryptographically signed end-to-end. Optional Vault Transit signing covers receipts where enabled. Mitigation: treat files as append-only and export events off-host; cross-restart chain recovery belongs in the security-verification phase.
+Audit events are hash-linked within one logger lifetime. New logger instances and reopening an existing JSONL file do not recover or validate a previous chain head. Policy decisions are also not signed end-to-end. Optional Vault Transit signing covers receipts where enabled. Treat files as append-only and ship the JSONL file through a secure external channel.
 
 ### 3. Remote Server Authentication
 
-Remote MCP over HTTP+SSE is supported (`--server-url`, TLS/mTLS flags). Operators must configure TLS/mTLS for production; stdio child-process transport remains the default local path.
+Remote MCP over HTTP+SSE is experimental. Current evidence covers handshake, not a post-handshake `tools/call`; the transport's shared read/write mutex can block POST while SSE read waits. Incomplete certificate/key pairs are not rejected. Use stdio for the supported path until these defects and the interoperability matrix are closed.
 
 ### 4. Ephemeral Session State
 
@@ -238,6 +238,18 @@ Visor does not limit request rate from clients. A malicious or buggy agent could
 ### 7. Plain Allowed Calls Lack a Standalone Audit Event
 
 Forwarded calls are recorded in in-memory session history, but a plain allow with no redaction, approval, or taint does not currently emit its own JSONL audit event. Denies and the other security-relevant transitions remain audited. Closing this gap belongs in the security-verification phase before claiming a complete per-call decision ledger.
+
+### 8. Partial Hot Reload
+
+The watcher refreshes engine-backed rules, taints, egress controls, and registry state. The proxy redactor, audit redaction patterns, and approval timeout remain based on the startup policy, so hot reload is not an atomic full-policy update.
+
+### 9. Audit Event Ordering
+
+Input redaction emits a `tool_call_allowed` event before later policy, egress, chain, and approval checks. A redacted request that is later denied can therefore produce contradictory allow-labelled and deny events. Output-only redaction has no JSONL audit event.
+
+### 10. Basic SIEM Export Is Not Audit-Chain Retention
+
+Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exported representation is reduced and is produced before the file logger adds hash-link fields. Use secure external shipping of the JSONL audit file for retention; do not treat `--siem-target` as equivalent evidence.
 
 ## Hardening Recommendations
 
@@ -264,7 +276,7 @@ Forwarded calls are recorded in in-memory session history, but a plain allow wit
 1. Separate policy authoring (security team) from policy consumption (visor runtime)
 2. Require PR review for policy changes
 3. Rotate approval operator access regularly
-4. Use `--siem-target` or existing file shipping to retain audit events off-host
+4. Securely ship the JSONL audit file off-host; do not rely on plaintext `--siem-target` for evidence retention
 
 ## Security Model Summary
 
@@ -278,7 +290,7 @@ Forwarded calls are recorded in in-memory session history, but a plain allow wit
 │  Layer 4: Chains      → Detect dangerous sequences      │
 │  Layer 5: Session     → Taint + egress sink controls     │
 │  Layer 6: Approval    → Human checkpoint for high-risk  │
-│  Layer 7: Audit       → Process-local hash-linked events │
+│  Layer 7: Audit       → Logger-lifetime linked events    │
 │                                                          │
 │  Fail-closed: Unknown → DENY                             │
 │  Deterministic: No LLM in the decision path              │

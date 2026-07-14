@@ -30,10 +30,10 @@ Enterprise and operator integrations. **On by flag only**; not required for the 
 
 | Capability | Decision |
 |------------|----------|
-| HTTP+SSE remote transport | **Keep** — real deployments need remote MCP; document as Advanced |
+| HTTP+SSE remote transport | **Experimental** — keep isolated until post-handshake relay, concurrency, TLS validation, and interoperability gates pass |
 | Durable approval + signed receipts | **Keep** — strengthens enforcement receipts; Advanced |
 | Webhook emitter | **Keep** — control-plane hook; Advanced |
-| SIEM export | **Keep** — compliance path; Advanced |
+| SIEM export | **Experimental/basic** — current TCP/UDP path is plaintext and reduced; not audit-chain retention |
 | Vault Transit signing | **Keep** — KMS path; Advanced |
 | Embedded dashboard | **Keep** — local operator UI; Advanced (OTLP/Grafana for fleet) |
 | Prometheus + OTLP export | **Keep** — proves enforcement in customer observability stacks |

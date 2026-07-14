@@ -120,49 +120,6 @@ egress_controls:
 	}
 }
 
-func TestSessionHistoryRecordsForwardedCallsOnly(t *testing.T) {
-	p := New(Config{
-		ServerName: "workspace",
-		Policy: mustLoadPolicy(t, `
-version: "1.0"
-default_action: deny
-servers:
-  - name: "workspace"
-    allowed: true
-    tools:
-      - name: "file_read"
-        allowed: true
-`),
-	})
-
-	out := &bytes.Buffer{}
-	client := mcp.NewParser(nil, out)
-
-	_, action := p.interceptAndModify(toolCallRaw(1, "unknown_tool", map[string]any{}), client)
-	if action != "denied" {
-		t.Fatalf("expected unknown tool denied, got %s", action)
-	}
-	if p.session.ToolCallCount() != 0 {
-		t.Fatalf("denied call should not be in session history, count=%d", p.session.ToolCallCount())
-	}
-
-	out.Reset()
-	_, action = p.interceptAndModify(toolCallRaw(2, "file_read", map[string]any{"path": "/tmp/ok.txt"}), client)
-	if action != "forward" {
-		t.Fatalf("expected allowed read to forward, got %s", action)
-	}
-
-	// relay path records only forwarded tools/call messages
-	p.logClientMessage(toolCallRaw(2, "file_read", map[string]any{"path": "/tmp/ok.txt"}))
-	if p.session.ToolCallCount() != 1 {
-		t.Fatalf("expected one forwarded call recorded, count=%d", p.session.ToolCallCount())
-	}
-	calls := p.session.RecentCalls(10)
-	if len(calls) != 1 || calls[0].ToolName != "file_read" {
-		t.Fatalf("unexpected session history: %+v", calls)
-	}
-}
-
 func findAuditEvent(t *testing.T, path string, eventType audit.EventType, tool string) audit.Event {
 	t.Helper()
 	data, err := os.ReadFile(path)

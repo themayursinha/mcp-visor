@@ -92,7 +92,7 @@ internal/
     linter.go                   Static policy validation CLI
     watcher.go                  fsnotify-based policy hot-reload watcher
   audit/                       Structured audit logging
-    logger.go                   JSONL logger with O_SYNC, per-process hash linking, 9 event types
+    logger.go                   JSONL logger with O_SYNC and per-logger-lifetime hash linking
   redaction/                   Sensitive data redaction
     engine.go                   Configurable regex-based secret scanning
   approval/                    Human approval workflow
@@ -126,7 +126,7 @@ tests/
 
 ## Decision Pipeline
 
-Every intercepted `tools/call` is handled in `internal/proxy/tools_call.go` (shared by stdio and remote transports). Order matches [`docs/policy-model.md`](policy-model.md#evaluation-order):
+Every intercepted `tools/call` is handled in `internal/proxy/tools_call.go` (shared by stdio and remote transports). [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the same proxy-level order and its current caveats:
 
 ```
 intercepted tools/call
@@ -181,7 +181,7 @@ intercepted tools/call
  Return result to client
 ```
 
-Denied or approval-rejected calls never reach the MCP server. Per-process hash-linked audit events cover denies, approvals, redactions, session taints, and policy/session lifecycle. A plain unredacted allow currently has no standalone audit event; session history still records the forwarded call.
+Denied or approval-rejected calls do not enter the relay write path. Per-logger-lifetime hash-linked events cover denies, approvals, argument redactions, session taints, and session lifecycle. Policy lifecycle constants exist but are not currently emitted. Output redaction is operationally logged, not emitted as a JSONL audit event. A plain unredacted allow has no standalone audit event.
 
 ## Core Components
 
@@ -209,7 +209,7 @@ The main proxy loop (`Run`) manages the full lifecycle:
 
 Per-proxy-connection session state:
 
-- **Call history** (`ToolCalls`): only **forwarded** `tools/call` messages are appended after policy allows relay (`relayClientToServer` → `logClientMessage`). Denied, approval-rejected, and malformed calls are not recorded. Chain detection therefore sees executed (or approval-granted) calls only — see `TestSessionHistoryRecordsForwardedCallsOnly` in `internal/proxy/session_taint_test.go`.
+- **Call history** (`ToolCalls`): calls are appended after authorization but before `EncodeRaw`. Denied, approval-rejected, and malformed calls are not recorded, but a transport-write failure can leave an authorized call in history. Chain detection therefore sees calls authorized for relay, not a confirmed execution ledger.
 - **Session taints** (`Taints`): set after an allowed source tool matches a `taints[]` rule (`markMatchingTaints` in `session_taint.go`).
 - Thread-safe (`sync.RWMutex`); exposes `RecentCallChain(windowSize)` for chain detection.
 - Ephemeral — lost on proxy restart.
@@ -263,8 +263,8 @@ Human-in-the-loop approval for high-risk tool calls:
 
 Structured JSONL audit trail (`internal/audit/logger.go`):
 
-- **9 event types**: `tool_call_allowed`, `tool_call_denied`, `tool_call_approval_required`, `tool_call_chain_detected`, `session_tainted`, `session_started`, `session_ended`, `policy_loaded`, `policy_reloaded`
-- **Process-local hash chain**: within one `Logger` instance, each line sets `prev_hash` to the prior event's `hash`, increments `chain_index`, and hashes the JSON payload with `hash` cleared. Reopening an existing file currently starts a new chain segment; cross-restart recovery is not implemented. Regression: `TestAuditLogHashChain` in `internal/audit/logger_test.go`.
+- **Event constants**: nine types are defined, but `policy_loaded` and `policy_reloaded` are not currently emitted. A plain unredacted allow and output-only redaction also lack standalone audit events.
+- **Logger-lifetime hash chain**: within one `Logger` instance, each line links to the previous event. Another logger instance, including one reopening the same file, starts a new segment. Regression: `TestAuditLogHashChain`.
 - **Redacted data**: arguments, reasons, and result previews scrubbed before write
 - **O_SYNC** append-only file writes
 - **Decision fields**: timestamp, session/agent IDs, server, tool, redacted arguments, `policy_decision`, reason, risk, chain context; egress denials add `session_taints`, `taint_source`, `taint_reason`, `policy_rule`
@@ -311,12 +311,12 @@ See [docs/action-boundary-demo.md](action-boundary-demo.md) and [examples/demo-r
 
 The default transport. The proxy starts the MCP server as a child process and communicates over stdin/stdout pipes. Newline-delimited JSON-RPC messages are relayed bidirectionally. This is the standard MCP transport for locally installed tools.
 
-### HTTP + SSE (Remote)
+### HTTP + SSE (Remote, experimental)
 
-Enabled via `--server-url`. The proxy connects to a remote MCP server over HTTP:
+Enabled via `--server-url`. The code supports SSE reads and POST writes, but Phase 1 evidence currently covers handshake only. A shared read/write mutex can block post-handshake calls while the SSE reader waits, so this path is not production-supported until the transport concurrency test and interoperability matrix pass.
 - **SSE endpoint** (GET) for server-to-proxy streaming of responses and notifications
 - **Message endpoint** (POST) for proxy-to-server requests
-- Configurable TLS/mTLS with client certs, CA pool, and server name verification
+- Optional TLS configuration exists, but a one-sided client certificate/key configuration is not currently rejected; operators must provide both files and use HTTPS
 - `--sse-path` to customize the SSE endpoint, `--insecure-tls` for development
 
 The `Transport` interface (`ReadRaw`, `EncodeRaw`, `Close`) is implemented by both `PipeTransport` (stdio) and `HTTPTransport` (remote). A `MockTransport` provides an in-memory channel-based transport for testing.

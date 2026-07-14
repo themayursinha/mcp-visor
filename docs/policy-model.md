@@ -461,33 +461,34 @@ These patterns are built into the redaction engine and active by default:
 
 ## Decision Model
 
-Every tool call evaluation produces one of four decisions:
+Every tool call reaches a terminal `allow`, `deny`, or `require_approval` decision. `redact_then_allow` is also used as an input-redaction audit label before the terminal policy decision:
 
 | Decision | Meaning |
 |----------|---------|
 | `allow` | Tool call is permitted. Forwarded to server immediately. |
 | `deny` | Tool call is blocked. Error returned to client. |
 | `require_approval` | Tool call is held. Proceeds only on human approval. |
-| `redact_then_allow` | Sensitive data stripped from arguments, then forwarded. |
+| `redact_then_allow` | Sensitive data was stripped from the forwarded payload. This is not terminal; later checks can still deny the call. |
 
 Decisions include a `reason` field explaining _why_ the decision was made for auditability.
 
 ## Evaluation Order
 
-Policy checks are applied in a fixed order:
+The proxy applies checks in this order:
 
-1. Redaction — secrets stripped from arguments
-2. Server known? (deny if not, under default-deny)
-3. Tool known? (deny if not, under default-deny)
-4. Server allowed? (deny if explicitly `allowed: false`)
-5. Tool allowed? (deny if explicitly `allowed: false`)
-6. Argument validation rules (in order: deny rules first, then allow rules)
-7. Existing session taints checked against egress controls
-8. Chain detection (check recent call history)
-9. Approval check (hold if `approval_required: true`)
-10. Allow (forward to server); matching source tools can mark session taints for later calls
+1. Runtime limits — argument size, session call count, and session timeout
+2. Argument redaction — secrets are removed from the payload prepared for relay
+3. Built-in sensitive-path block
+4. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload.
+5. Existing session taints checked against egress controls
+6. Chain detection against recent calls authorized for relay
+7. Approval check
+8. Post-allow taint marking for matching source tools
+9. Relay to the MCP server
 
-The first non-allow decision terminates evaluation. For example, if a tool is denied by argument validation, chain detection is never checked.
+Session history is appended after authorization but before the transport write. It therefore represents calls authorized for relay, including a call whose transport write later fails.
+
+The first terminal deny stops relay. Input-redaction audit is currently emitted before the final decision, so a redacted request that is later denied can produce both an allow-labelled redaction event and a deny event; this ordering is tracked for security hardening.
 
 ## Complete Example
 
