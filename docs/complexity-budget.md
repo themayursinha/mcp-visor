@@ -22,7 +22,7 @@ What a new adopter must understand in one session. Everything here is on the **6
 | Basic approval (file / CLI) | `internal/approval` |
 | Demo mock server + examples | `examples/demo-mcp-server`, `serve --demo` |
 
-**Core decision path:** redaction → policy → chain → approval → audit. No LLM in the allow/deny path.
+**Core decision path:** runtime limits → argument redaction → sensitive-path block → policy → taint-aware egress → chain detection → approval → post-authorization taint marking → relay. Audit events are emitted at selected intermediate decisions; no LLM participates in allow/deny.
 
 ### Advanced (shipped, optional)
 
