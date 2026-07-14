@@ -184,7 +184,7 @@ make bench                     # benchmarks
 ## Roadmap
 
 - [x] v1.0: Proxy, policy engine, redaction, approval, audit, chain detection
-- [x] v1.1: Identity/time policies, hot-reload, CLI approval, remote transport
+- [x] v1.1: Identity/time policies, partial engine hot-reload, CLI approval, experimental remote transport
 - [x] v1.2: Session taints and egress controls
 - [ ] v1.3: Documentation truth, security verification, interoperability evidence, and release hardening
 - [ ] Future: sandboxing, richer telemetry, optional policy engines

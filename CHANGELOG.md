@@ -81,12 +81,12 @@
 - Ed25519 signing: 12.9 us sign, 28.4 us verify
 - `make bench` target for one-command benchmark run
 
-### Remote HTTP/SSE Transport
+### Remote HTTP/SSE Transport (experimental correction)
 
-- Proxying remote MCP servers over HTTP with SSE event streaming
+- HTTP POST + SSE transport implementation; current production evidence is limited to handshake
 - `--server-url`, `--sse-path`, `--insecure-tls` CLI flags
-- Full TLS/mTLS support with client certs, CA pool, and server name verification
-- SSE connection management with reconnect and timeout guards
+- TLS options for client certs, CA pool, and server name verification; incomplete cert/key pairs are not yet rejected
+- No verified reconnect behavior; a shared read/write mutex can block post-handshake calls
 - Mock transport with `ServeMCP()` HTTP handler for testing
 - Backward compatible: stdio transport unchanged, auto-detected from config
 
@@ -131,7 +131,7 @@
 - Tool allowlist/denylist with default-deny posture
 - Risk classification (critical/high/medium/low) via policy or inference
 - Approval requirement detection
-- Policy hot-reload via fsnotify with 2-second debounce and atomic swaps
+- Engine/registry hot-reload via fsnotify with 2-second debounce and atomic swaps; redaction and approval settings remain startup snapshots
 
 ### Chain Detection
 

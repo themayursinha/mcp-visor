@@ -106,7 +106,8 @@ The recommended workflow:
                     │  Runs:                    │
                     │  • Continuously (daemon)  │
                     │  • Every tools/call       │
-                    │  • Hot-reloads policy     │
+                    │  • Partially reloads      │
+                    │    engine policy          │
                     └──────────────────────────┘
 ```
 
@@ -120,7 +121,7 @@ The recommended workflow:
 | Chain detection | Flags possible chains in config | Detects chains in real tool call sequences |
 | Secret redaction | Evaluates redaction accuracy | Strips secrets from live traffic |
 | Human approval | No | Yes |
-| Audit logging | Generates test reports | Generates production audit trail |
+| Audit logging | Generates test reports | Emits selected structured security/session events; not yet a complete per-call ledger |
 | LLM prompt injection testing | Yes | No (deterministic, no LLM) |
 | LLM provider comparison | Yes | No |
 | MCP config scanning | Yes | No |
@@ -136,7 +137,7 @@ The evaluator actively tests LLMs against adversarial prompts. It **calls LLM AP
 - Runs in a controlled CI/CD environment, not production
 
 The visor never calls an LLM. Its policy engine is deterministic — exact match, regex, and rule-chain logic. This means the visor:
-- Has no API keys or external API dependencies
+- Requires no LLM API key for the core enforcement path; optional integrations have their own credentials/endpoints
 - Cannot be manipulated by prompt injection
 - Runs continuously in the production tool execution path
 
@@ -146,9 +147,9 @@ These are separate projects by design:
 
 1. **Different audiences**: Evaluator is for security testers and compliance teams. Visor is for platform engineers and SREs.
 
-2. **Different lifecycles**: Evaluator is a Python project with LLM SDK dependencies. Visor is a Go project with minimal dependencies (one YAML library).
+2. **Different lifecycles**: Evaluator is a Python project with LLM SDK dependencies. Visor is a Go binary with a deterministic core and optional integration dependencies.
 
-3. **Different threat models**: Evaluator needs LLM API keys. Visor must never have API keys. Co-location would be a security anti-pattern.
+3. **Different threat models**: Evaluator requires LLM API keys. The visor core requires none; credentials for optional integrations must stay isolated from the policy decision path.
 
 4. **Different deployment models**: Evaluator runs occasionally. Visor runs continuously. Different ops requirements.
 

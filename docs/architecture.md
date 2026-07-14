@@ -85,12 +85,12 @@ internal/
     vault.go                    Vault signer/verifier construction
   policy/                      Policy engine
     types.go                    Policy struct definitions
-    loader.go                   YAML policy file loader with hot-reload
+    loader.go                   YAML policy file loader
     validator.go                Policy argument validation
     engine.go                   Policy evaluation pipeline + chain detection
     registry.go                 In-memory tool/server registry
     linter.go                   Static policy validation CLI
-    watcher.go                  fsnotify-based policy hot-reload watcher
+    watcher.go                  fsnotify engine/registry reload; proxy-derived settings remain static
   audit/                       Structured audit logging
     logger.go                   JSONL logger with O_SYNC and healthy-sink, logger-lifetime hash linking
   redaction/                   Sensitive data redaction
@@ -293,7 +293,7 @@ The policy engine uses exact match, prefix/suffix, regex, and rule-chain logic. 
 ### Minimal TCB
 
 - **Core enforcement path** (policy, proxy, audit, redaction): no LLM; policy parsing uses `gopkg.in/yaml.v3` only among direct deps for the decision hot path.
-- **Optional integrations** (see `go.mod`): OpenTelemetry export, `fsnotify` hot-reload, gRPC OTLP — loaded for observability/ops flags, not required for default stdio proxy + YAML policy.
+- **Optional integrations** (see `go.mod`): OpenTelemetry export, partial `fsnotify` engine reload, and gRPC OTLP are not required for default stdio proxy + YAML policy.
 - Single static binary; no ORM or application framework.
 
 ## Runtime Decision Examples
