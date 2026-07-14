@@ -40,6 +40,9 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 - Session state is ephemeral (in-memory, lost on restart)
 - No built-in rate limiting or DoS protection
 - Approval is file-based; an attacker with write access to the approval directory can forge approvals
+- Invalid deny/chain/redaction regexes and unknown rule types are not fully fail-closed at `serve` time
+- Declared destination fields are not enforced; path rules omit `uri`, and basename-only sensitive-file matching has gaps
+- OTLP `policy.reason`, dashboard/trace data, and pre-logger SIEM/webhook events can expose values not removed by configured redaction
 
 ### Hardening Recommendations
 

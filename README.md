@@ -56,7 +56,7 @@ Two-minute action-boundary demo: `go run ./examples/demo-runner` · [walkthrough
 ## What it protects against
 
 - Secret reads followed by outbound exfiltration
-- Access to `.env`, SSH keys, kubeconfigs, credentials, and private keys
+- Access to configured sensitive paths such as `/project/.env`, SSH keys, kubeconfigs, credentials, and key files; basename-only and policy-`uri` gaps are documented in the threat model
 - Unsafe shell commands and command-injection patterns
 - Unknown or newly introduced tools under default-deny policy
 - High-risk actions without human approval
@@ -136,7 +136,7 @@ More policies: [`examples/policies/`](examples/policies/) · Schema reference: [
 |------------|---------|
 | Default-deny policy | Unknown servers and tools fail closed |
 | Argument rules | Restrict paths, commands, queries, recipients, sizes, and repos |
-| Secret redaction | Remove API keys, tokens, JWTs, and private keys from arguments and outputs |
+| Pattern redaction | Replace configured matches in arguments and textual `Content[].Text` output; this is not full structured-payload or complete private-key sanitization |
 | Tool-chain detection | Block dangerous sequences such as read → exfiltrate |
 | Session taints | Change later authorization decisions after sensitive context is touched |
 | Human approval | Gate critical tools before execution |

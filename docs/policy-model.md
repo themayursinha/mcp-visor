@@ -63,8 +63,8 @@ Each server entry defines an MCP server and its tools:
 | `name` | string | Yes | Server identifier matching the MCP command. |
 | `transport` | string | No | `"stdio"` (local child process) or `"http"` (remote HTTP+SSE). |
 | `allowed` | bool | Yes | Whether this server is allowed (`true`/`false`). |
-| `allowed_destinations` | array | No | Allowed network destinations (hosts/domains). |
-| `denied_destinations` | array | No | Blocked network destinations. |
+| `allowed_destinations` | array | No | Declared in the schema but not evaluated by the current engine. Do not rely on it for network control. |
+| `denied_destinations` | array | No | Declared in the schema but not evaluated by the current engine. Do not rely on it for network control. |
 | `tools` | array | Yes | Tool-specific rules for this server. |
 
 ### Tool Rules
@@ -103,7 +103,7 @@ rules:
       - "/tmp/mcp-safe/**"
 ```
 
-Matched against argument keys: `path`, `file`, `file_path`, `uri`.
+Policy path rules match argument keys `path`, `file`, and `file_path`. The separate built-in sensitive-file check also inspects `uri`.
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -593,7 +593,7 @@ The repository includes example policies demonstrating different postures:
 
 - **Invalid YAML**: Policy file fails to parse → rejected with line/column error
 - **Schema validation failure**: Missing required fields, wrong types → rejected with field-level error
-- **Invalid regex**: Pattern compilation failure → rejected with regex parse error
-- **Unknown rule type**: Skips unrecognized rule type (succeeds, rule ignored)
+- **Invalid regex**: the loader does not compile all rule, chain, or redaction regexes. `mcp-visor lint` catches several cases, but `serve` does not run lint automatically. Invalid deny/chain regexes can behave as no match, and invalid redaction regexes are skipped.
+- **Unknown rule type**: loader succeeds and the engine ignores the rule.
 
-All policy loading errors prevent the proxy from starting. No partial or degraded policy state.
+Invalid YAML and schema-validation errors prevent startup. Regex and unknown-rule safety currently depend on a separate lint step and are not fail-closed at `serve` time.

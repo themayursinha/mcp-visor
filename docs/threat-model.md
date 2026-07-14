@@ -86,9 +86,9 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Secrets in tool arguments | Critical | High | Redaction engine strips API keys, tokens, JWTs, connection strings, private keys before forwarding to server. |
-| Secrets in tool outputs | Critical | High | Output redaction scans results before returning to client. Strips `password=`, `secret=`, `token=` patterns. |
-| Audit log contains secrets | Critical | Low | All logged arguments are redacted before writing to audit log. Audit events use redacted args map. |
+| Secrets in tool arguments | Critical | High | Pattern redaction replaces configured string matches. It does not decode encoded secrets, and the built-in private-key regex covers only the PEM header rather than the whole key. |
+| Secrets in tool outputs | Critical | High | Output redaction scans textual `Content[].Text`; structured `Data`, JSON-RPC errors, and other payload fields are not comprehensively scanned. |
+| Audit log contains secrets | Critical | Medium | The JSONL logger applies configured string patterns, but unmatched/encoded secrets can remain. SIEM/webhook exports receive the pre-logger event and do not inherit logger-side redaction. |
 | Internal topology exposure | Medium | Medium | Redaction patterns for internal IPs (`10.x`, `192.168.x`, `172.16-31.x`). Configurable patterns for internal hostnames. |
 | Policy file leakage | Low | Low | Policy may contain allowed destination lists. Not secret. If policy is leaked, attacker knows what's blocked. |
 
@@ -254,6 +254,22 @@ Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter re
 ### 11. Experimental Telemetry and Dashboard
 
 `ProxyMetrics` counters are unsynchronized across relay and HTTP-handler access. The embedded dashboard has no built-in authentication and can expose redacted arguments and result previews that may still be sensitive. Trace formatter/config types exist, but runtime proxy paths do not invoke the tracer. Keep these surfaces local and non-production until race safety, authentication, and trace integration are verified.
+
+### 12. Policy Validation Is Not Fully Fail-Closed
+
+`serve` rejects invalid YAML and schema errors but does not automatically run the linter or compile all deny, chain, and redaction regexes. Invalid deny/chain regexes can behave as no match; invalid redaction regexes are silently skipped. Unknown rule types are ignored.
+
+### 13. Declared Destination Controls Are Inert
+
+`allowed_destinations` and `denied_destinations` exist in the policy schema but are not evaluated by the engine. Enforce destinations with implemented argument rules or external network controls until runtime support exists.
+
+### 14. Path-Matching Gaps
+
+Policy `deny_path` / `allow_path` rules do not inspect `uri`. Built-in sensitive-file matching does inspect `uri`, but patterns such as `**/.env` do not match a basename-only `.env` under the current glob conversion. Use absolute/qualified paths and explicit tests for protected resources.
+
+### 15. OTLP Reason Leakage
+
+OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
 
 ## Hardening Recommendations
 

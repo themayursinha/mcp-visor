@@ -231,9 +231,9 @@ Deterministic, YAML-driven policy evaluation. No LLM involvement.
 
 Configurable regex-based secret detection:
 
-- **Built-in patterns**: OpenAI keys (`sk-`), GitHub tokens (`ghp_`), Slack tokens (`xoxb-`), AWS keys (`AKIA`), JWTs, private keys, database connection strings, and internal IPs
+- **Built-in patterns**: OpenAI keys (`sk-`), GitHub tokens (`ghp_`), Slack tokens (`xoxb-`), AWS keys (`AKIA`), JWTs, private-key headers, database connection strings, and internal IPs. The private-key pattern does not remove an entire PEM body.
 - **Argument redaction**: Scans tool arguments before forwarding to the MCP server
-- **Output redaction**: Scans server responses before returning to the client
+- **Output redaction**: scans textual MCP result entries (`Content[].Text`); structured `Data`, JSON-RPC errors, and other fields are not comprehensively scanned
 - **Sensitive file blocking**: `**/.env`, `**/credentials`, `**/*.pem`, `**/.ssh/**`, etc.
 - **Deep scanning**: Recursively scans nested maps, arrays, and slices
 
@@ -330,10 +330,12 @@ Text, JSONL, and summary formatter types exist, and `--trace` / `--trace-format`
 `ProxyMetrics` defines seven counters, but they use unsynchronized `int64` fields while relay and HTTP handlers can access them concurrently. Prometheus and dashboard metrics are therefore not production-grade until a race-safe snapshot or atomic counters are implemented.
 
 - **Prometheus** (`--metrics-addr`): scrape `/metrics` for `ProxyMetrics` counters.
-- **OTLP gRPC** (`--otel-endpoint`): per `tools/call` spans (`mcp.tools/call`) with `policy.decision`, `tool.name`, `session.id`, and risk — **no tool argument payloads**.
+- **OTLP gRPC** (`--otel-endpoint`): per-`tools/call` spans omit the raw argument map, but `policy.reason` can include argument-derived values such as a sensitive path.
 - Export failures are non-blocking; enforcement stays on the hot path.
 
 The embedded dashboard is a separate local rendering surface. Its API has no built-in authentication and can expose redacted arguments/result previews; bind it locally or place it behind authenticated access control.
+
+`bytes_redacted_total` currently adds the full raw request length whenever any field is redacted; it is not a count of bytes actually removed.
 
 See `examples/otel-lgtm` for a Grafana LGTM local stack.
 

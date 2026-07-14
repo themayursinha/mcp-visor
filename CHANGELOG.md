@@ -60,7 +60,7 @@
 - 15 rule names recognized by the linter; 14 have enforcement cases and `deny_command_pattern_composite` is currently linter-only
 - `--json`, `--strict`, `--no-info`, `--no-warnings` output flags
 - Detection of invalid regex, unknown rule types, missing required fields
-- Composite command pattern validation
+- `deny_command_pattern_composite` is recognized as a known linter name but is not validated or enforced
 
 ### Trace Logging (incomplete correction)
 
@@ -136,12 +136,12 @@
 - Deny or require-approval actions for matched chains
 - Audit events with chain context
 
-### Redaction Engine
+### Redaction Engine (scope correction)
 
-- Regex-based secret stripping (API keys, tokens, JWTs, connection strings, private keys, internal IPs)
+- Regex-based replacement for configured matches (API keys, tokens, JWTs, connection strings, private-key headers, internal IPs)
 - Argument redaction before forwarding to MCP server
-- Output redaction before returning to client
-- Sensitive file blocking (.env, credentials, .pem, .key, .ssh)
+- Text-only output redaction for MCP `Content[].Text`; structured data and JSON-RPC error fields are not comprehensive
+- Sensitive-file patterns for qualified paths; basename-only matching has known gaps
 - Deep map and array scanning for nested secrets
 
 ### Audit Logging
