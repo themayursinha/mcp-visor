@@ -18,7 +18,7 @@ What a new adopter must understand in one session. Everything here is on the **6
 | Secret redaction + sensitive paths | `internal/redaction` |
 | Tool-chain detection | `internal/policy` (engine + session) |
 | JSONL audit | `internal/audit` |
-| Policy lint CLI | `mcp-visor lint`, `internal/policy/linter` |
+| Policy lint CLI | `mcp-visor lint --strict` for deployment gates, `internal/policy/linter` |
 | Basic approval (file / CLI) | `internal/approval` |
 | Demo mock server + examples | `examples/demo-mcp-server`, `serve --demo` |
 

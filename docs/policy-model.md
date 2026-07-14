@@ -593,7 +593,7 @@ The repository includes example policies demonstrating different postures:
 
 - **Invalid YAML**: Policy file fails to parse → rejected with line/column error
 - **Schema validation failure**: Missing required fields, wrong types → rejected with field-level error
-- **Invalid regex**: the loader does not compile all rule, chain, or redaction regexes. `mcp-visor lint` catches several cases, but `serve` does not run lint automatically. Invalid deny/chain regexes can behave as no match, and invalid redaction regexes are skipped.
+- **Invalid regex**: the loader does not compile all rule, chain, or redaction regexes. `mcp-visor lint --strict` catches several cases, but `serve` does not run lint automatically. Invalid deny/chain regexes can behave as no match, and invalid redaction regexes are skipped.
 - **Unknown rule type**: loader succeeds and the engine ignores the rule.
 
-Invalid YAML and schema-validation errors prevent startup. Regex and unknown-rule safety currently depend on a separate lint step and are not fail-closed at `serve` time.
+Invalid YAML and schema-validation errors prevent startup. A fail-closed deployment gate must run `mcp-visor lint --strict <policy>` separately; plain `mcp-visor lint` can exit successfully when it reports unknown-rule warnings.

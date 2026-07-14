@@ -18,7 +18,7 @@ Each invariant maps to automated checks in `check.sh` (via `go test`) or manual 
 
 **Prompt-injection immunity** is architectural: decisions do not parse natural language from tool descriptions in an LLM. Regression: policy engine tests + integration deny paths; document scenarios in `examples/malicious-prompts/`.
 
-**Malformed policy fail-closed:** loader/linter tests in `internal/policy`; `mcp-visor lint` must error on invalid files before `serve`.
+**Malformed policy gate:** loader rejects YAML/schema errors. Before `serve`, use `mcp-visor lint --strict <policy>` so unknown-rule warnings also produce a non-zero exit.
 
 ## Adding an invariant
 

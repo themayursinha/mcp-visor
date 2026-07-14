@@ -44,8 +44,8 @@ Pre-built binaries and checksums are available on the [Releases](https://github.
 # Run the built-in demo proxy
 mcp-visor serve --demo
 
-# Validate a policy before using it
-mcp-visor lint examples/policies/session-taint-egress.yaml
+# Fail the deployment gate on warnings such as unknown rule types
+mcp-visor lint --strict examples/policies/session-taint-egress.yaml
 
 # Proxy a real MCP server through a policy boundary
 mcp-visor serve -server <your-mcp-server> -policy policy.yaml
@@ -158,7 +158,7 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, w
 
 ```text
 mcp-visor serve [flags]    Run the proxy
-mcp-visor lint <policy>    Validate a policy file
+mcp-visor lint [--strict] <policy>  Validate a policy file; use --strict for deployment gates
 mcp-visor version          Print version
 ```
 
