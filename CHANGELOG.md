@@ -62,14 +62,10 @@
 - Detection of invalid regex, unknown rule types, missing required fields
 - Composite command pattern validation
 
-### Trace Logging
+### Trace Logging (incomplete correction)
 
-- MCP message-level tracing with pluggable formatters
-- Text format (human-readable directional output: C->S, S->C, INT)
-- JSONL format for machine processing
-- Summary format with message counters
-- `--trace` and `--trace-format` CLI flags
-- Configurable granularity (handshake, decisions, redactions, chains)
+- Text, JSONL, and summary formatter types plus `--trace` / `--trace-format` flags exist
+- The proxy initializes a trace logger but does not invoke it from handshake, relay, or decision paths; runtime trace output is therefore not a shipped enforcement capability
 
 ### Performance Benchmarks
 

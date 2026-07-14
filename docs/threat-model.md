@@ -251,6 +251,10 @@ Input redaction emits a `tool_call_allowed` event before later policy, egress, c
 
 Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter receives the original reduced event copy, not the timestamped/redacted/hash-linked copy produced inside the file logger, so it lacks logger-added `timestamp`, `hash`, `prev_hash`, and `chain_index`. Use secure external shipping of the JSONL audit file for retention.
 
+### 11. Experimental Telemetry and Dashboard
+
+`ProxyMetrics` counters are unsynchronized across relay and HTTP-handler access. The embedded dashboard has no built-in authentication and can expose redacted arguments and result previews that may still be sensitive. Trace formatter/config types exist, but runtime proxy paths do not invoke the tracer. Keep these surfaces local and non-production until race safety, authentication, and trace integration are verified.
+
 ## Hardening Recommendations
 
 ### For Local Development

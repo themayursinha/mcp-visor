@@ -12,7 +12,7 @@ This document explains the relationship between [mcp-visor](https://github.com/t
 | **MCP integration** | Simulates mock tool calls | Proxies real MCP protocol traffic |
 | **Policy role** | Assesses policy compliance of configs | Enforces policy before tool execution |
 | **Output** | Reports, scores, findings | Allow/deny/approval decisions, audit logs |
-| **When it runs** | CI/CD, on-demand scans | Every tool call in production |
+| **When it runs** | CI/CD, on-demand scans | Every call on the supported stdio enforcement path; remote transport is experimental |
 | **Language** | Python | Go |
 | **Deployment** | CLI tool, CI pipeline | Long-running daemon, Docker container |
 
@@ -61,7 +61,7 @@ They are designed to work together:
 
 ### Use the visor when:
 
-- You are **running** an AI agent with MCP tools in production
+- You are running an AI agent on the supported stdio path and accept the documented threat-model limitations
 - You want to **enforce** tool access policies at runtime
 - You need a **deterministic** enforcement point that prompt injection cannot bypass
 - You want to **detect** dangerous tool chains in real time
@@ -139,7 +139,7 @@ The evaluator actively tests LLMs against adversarial prompts. It **calls LLM AP
 The visor never calls an LLM. Its policy engine is deterministic — exact match, regex, and rule-chain logic. This means the visor:
 - Requires no LLM API key for the core enforcement path; optional integrations have their own credentials/endpoints
 - Cannot be manipulated by prompt injection
-- Runs continuously in the production tool execution path
+- Runs continuously in the supported stdio tool execution path
 
 ## Why Separate Repositories
 
@@ -162,7 +162,7 @@ These are separate projects by design:
 | "Which tool should I use?" | Both. Evaluator for assessment, visor for enforcement. |
 | "Can the visor replace the evaluator?" | No. The visor enforces policy; it doesn't assess configuration risk or test LLM responses. |
 | "Can the evaluator replace the visor?" | No. The evaluator finds issues; it doesn't block tool execution at runtime. |
-| "Do I need both?" | For a complete MCP security posture: yes. The evaluator tells you what policies to write. The visor enforces those policies. |
+| "Do I need both?" | They are complementary: the evaluator informs policy design and the visor enforces policy. Neither creates a complete security posture by itself or together. |
 
 ---
 

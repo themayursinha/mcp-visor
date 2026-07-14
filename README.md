@@ -143,7 +143,7 @@ More policies: [`examples/policies/`](examples/policies/) · Schema reference: [
 | Audit log | Selected security and session events, hash-linked within one healthy logger lifetime |
 | Policy linting | Validate YAML policy before deployment |
 
-Advanced capabilities include signed decision receipts, Vault Transit signing, experimental HTTP+SSE remote transport, webhooks, basic SIEM export, Prometheus metrics, OTLP tracing, and a local web dashboard. See [`docs/complexity-budget.md`](docs/complexity-budget.md) for feature tiering and [`docs/threat-model.md`](docs/threat-model.md) for current limitations.
+Advanced capabilities include signed decision receipts, Vault Transit signing, webhooks, and experimental remote transport, SIEM, metrics/OTLP, and local dashboard surfaces. The `--trace` formatters are not yet connected to runtime message paths. See [`docs/complexity-budget.md`](docs/complexity-budget.md) and [`docs/threat-model.md`](docs/threat-model.md).
 
 ## Security model
 

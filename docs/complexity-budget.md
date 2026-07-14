@@ -35,9 +35,9 @@ Enterprise and operator integrations. **On by flag only**; not required for the 
 | Webhook emitter | **Keep** — control-plane hook; Advanced |
 | SIEM export | **Experimental/basic** — current TCP/UDP path is plaintext and reduced; not audit-chain retention |
 | Vault Transit signing | **Keep** — KMS path; Advanced |
-| Embedded dashboard | **Keep** — local operator UI; Advanced (OTLP/Grafana for fleet) |
-| Prometheus + OTLP export | **Keep** — proves enforcement in customer observability stacks |
-| Trace logging (`--trace`) | **Keep** — forensics; Advanced |
+| Embedded dashboard | **Experimental** — unauthenticated local API can expose redacted payload data; require access-control and race hardening |
+| Prometheus + OTLP export | **Experimental** — counters are not synchronized; keep off production claims until race-safe |
+| Trace logging (`--trace`) | **Incomplete** — formatter/config types exist but runtime paths do not invoke the tracer |
 | n8n blueprint | **Keep** — example control plane; Advanced / examples |
 
 ### Experimental / roadmap

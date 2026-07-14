@@ -321,23 +321,19 @@ Enabled via `--server-url`. The code supports SSE reads and POST writes, but Pha
 
 The `Transport` interface (`ReadRaw`, `EncodeRaw`, `Close`) is implemented by both `PipeTransport` (stdio) and `HTTPTransport` (remote). A `MockTransport` provides an in-memory channel-based transport for testing.
 
-## Trace Logging
+## Trace Logging (incomplete)
 
-MCP message-level tracing captures every message flowing through the proxy for debugging and forensics:
+Text, JSONL, and summary formatter types exist, and `--trace` / `--trace-format` initialize a tracer. The handshake, relay, decision, redaction, and chain paths do not currently call that tracer, so the flags do not provide runtime message tracing. Treat this surface as incomplete until integration tests prove real event capture.
 
-- **Text format**: Human-readable directional output (`C->S`, `S->C`, `INT`) with message previews
-- **JSONL format**: Machine-readable structured trace events
-- **Summary format**: Aggregated message direction and method counters
+## Observability surfaces (experimental)
 
-Configure via `--trace` and `--trace-format` CLI flags. Tracing granularity can be tuned to capture handshake messages, policy decisions, redaction events, and chain detections independently. `ProxyMetrics` provides 8 counters (messages processed, denied, allowed, approved, bytes redacted, etc.) for observability.
-
-## Observability export (Prometheus / OTLP)
-
-Production telemetry is **exported**, not rendered inside visor:
+`ProxyMetrics` defines seven counters, but they use unsynchronized `int64` fields while relay and HTTP handlers can access them concurrently. Prometheus and dashboard metrics are therefore not production-grade until a race-safe snapshot or atomic counters are implemented.
 
 - **Prometheus** (`--metrics-addr`): scrape `/metrics` for `ProxyMetrics` counters.
 - **OTLP gRPC** (`--otel-endpoint`): per `tools/call` spans (`mcp.tools/call`) with `policy.decision`, `tool.name`, `session.id`, and risk — **no tool argument payloads**.
 - Export failures are non-blocking; enforcement stays on the hot path.
+
+The embedded dashboard is a separate local rendering surface. Its API has no built-in authentication and can expose redacted arguments/result previews; bind it locally or place it behind authenticated access control.
 
 See `examples/otel-lgtm` for a Grafana LGTM local stack.
 
