@@ -63,7 +63,7 @@ They are designed to work together:
 
 - You are running an AI agent on the supported stdio path and accept the documented threat-model limitations
 - You want to **enforce** tool access policies at runtime
-- You need a **deterministic** enforcement point that prompt injection cannot bypass
+- You need a deterministic enforcement point outside the model for supported request-form `tools/call` traffic
 - You want to **detect** dangerous tool chains in real time
 - You need structured audit events for denials, approvals, argument redactions, chain detections, session taints, and session lifecycle
 - You want **human approval** for high-risk operations

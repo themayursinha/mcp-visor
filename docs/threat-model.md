@@ -106,10 +106,10 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Prompt injection escalates tool access | Critical | High | **Deterministic policy engine cannot be tricked by prompt injection.** It evaluates tool name, server, arguments — not LLM intent. |
+| Prompt injection escalates tool access | Critical | High | For intercepted request-form calls, the deterministic engine evaluates tool name, server, and arguments rather than prompt text. Protocol bypass gaps remain separate risks. |
 | Tool chain escalation | High | Medium | Chain detector identifies dangerous Read→Send sequences regardless of individual tool risk levels. |
 | Config file escalation | Critical | Low | If attacker gains write access to visor config, they can allow any tool. v1 assumes filesystem security. |
-| Approval bypass | High | Low | Approval is enforced in the decision engine, not in the client. Client cannot skip the approval step. |
+| Approval bypass | High | Low | For intercepted request-form calls, approval is enforced by the proxy rather than delegated to the client. Notification/malformed bypasses remain open. |
 | Encoding bypass of redaction | Medium | Low | Attacker might try base64-encode secrets to bypass regex detection. v1 regex scans raw strings; does not decode. |
 
 ## Control Matrix
@@ -312,7 +312,7 @@ Interception currently returns early for JSON-RPC notifications without an `id`,
 ┌─────────────────────────────────────────────────────────┐
 │                 DEFENSE IN DEPTH                         │
 │                                                          │
-│  Layer 1: Redaction   → Strip secrets before forwarding │
+│  Layer 1: Redaction   → Replace configured patterns     │
 │  Layer 2: Allow/Deny  → Block unknown or forbidden tools│
 │  Layer 3: Arguments   → Validate paths, commands, sizes │
 │  Layer 4: Chains      → Detect dangerous sequences      │
@@ -320,7 +320,7 @@ Interception currently returns early for JSON-RPC notifications without an `id`,
 │  Layer 6: Approval    → Human checkpoint for high-risk  │
 │  Layer 7: Audit       → Logger-lifetime linked events    │
 │                                                          │
-│  Fail-closed: Unknown → DENY                             │
+│  Intercepted unknown request → DENY                      │
 │  Deterministic: No LLM in the decision path              │
 │  Deployment: Single Go binary; optional integrations off │
 └─────────────────────────────────────────────────────────┘
