@@ -28,7 +28,7 @@ MCP Visor adds that boundary at the MCP `tools/call` layer:
 AI agent → MCP Visor → policy decision → MCP server
 ```
 
-Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. Per-logger-lifetime hash-linked audit events cover denies, approvals, argument redactions, session taints, and session lifecycle events.
+Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. While the audit sink remains healthy, events are hash-linked within one logger lifetime.
 
 ## Install
 
@@ -140,7 +140,7 @@ More policies: [`examples/policies/`](examples/policies/) · Schema reference: [
 | Tool-chain detection | Block dangerous sequences such as read → exfiltrate |
 | Session taints | Change later authorization decisions after sensitive context is touched |
 | Human approval | Gate critical tools before execution |
-| Audit log | Per-logger-lifetime hash-linked JSONL events for selected security decisions and session lifecycle |
+| Audit log | Selected security and session events, hash-linked within one healthy logger lifetime |
 | Policy linting | Validate YAML policy before deployment |
 
 Advanced capabilities include signed decision receipts, Vault Transit signing, experimental HTTP+SSE remote transport, webhooks, basic SIEM export, Prometheus metrics, OTLP tracing, and a local web dashboard. See [`docs/complexity-budget.md`](docs/complexity-budget.md) for feature tiering and [`docs/threat-model.md`](docs/threat-model.md) for current limitations.
@@ -150,7 +150,7 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, e
 - **Deterministic:** no LLM in the allow/deny path
 - **Fail closed:** unknown tools are denied by default
 - **Layered:** redaction → policy → taint-aware egress → chain detection → approval → post-allow taint marking
-- **Observable:** selected security events are recorded in per-logger-lifetime hash-linked JSONL; this is not yet a complete per-call ledger
+- **Observable:** selected security events are recorded in JSONL; this is not yet a complete per-call ledger or a chain that survives sink failure/reopen
 - **Self-hosted:** single Go binary; no SaaS dependency required
 - **Operator-controlled:** optional telemetry exports to your Prometheus, OTLP, webhook, or SIEM stack
 

@@ -5,7 +5,7 @@
 ### Documentation
 
 - Reconciled architecture, policy model, threat model, security policy, and public roadmap with the live v1.2 enforcement path.
-- Scoped audit hash linkage to one logger lifetime and documented incomplete per-call audit coverage.
+- Scoped audit hash linkage to healthy writes within one logger lifetime and documented incomplete per-call audit coverage.
 - Marked remote HTTP+SSE and built-in SIEM export experimental pending Phase 1 security and interoperability gates; earlier release notes overstated production readiness.
 
 ## v1.2.0 (2026-07-05)

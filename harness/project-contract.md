@@ -10,7 +10,7 @@ MCP Visor is a **fail-closed, deterministic** MCP proxy that evaluates every `to
 2. **No LLM in decisions** — Allow, deny, redact, chain, and approval gating are rule-based only.
 3. **Single enforcement path** — Stdio and remote transports share the same `tools/call` processing (metrics, audit, policy).
 4. **Fail-closed on bad policy** — Invalid or unloadable policy must not silently open access (lint + loader behavior).
-5. **Audit on decisions** — Allowed, denied, chain, and approval-required calls emit structured audit events (redacted).
+5. **Audit selected security events** — Denies, approvals, chain detections, argument redactions, session taints, and session lifecycle emit structured events. Plain allows and output-only redaction do not yet have standalone JSONL events.
 6. **Secrets not in telemetry** — OTLP/trace/dashboard surfaces carry policy metadata, not raw tool argument bodies.
 
 ## Public CLI contract (stable)

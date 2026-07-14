@@ -92,7 +92,7 @@ internal/
     linter.go                   Static policy validation CLI
     watcher.go                  fsnotify-based policy hot-reload watcher
   audit/                       Structured audit logging
-    logger.go                   JSONL logger with O_SYNC and per-logger-lifetime hash linking
+    logger.go                   JSONL logger with O_SYNC and healthy-sink, logger-lifetime hash linking
   redaction/                   Sensitive data redaction
     engine.go                   Configurable regex-based secret scanning
   approval/                    Human approval workflow
@@ -181,7 +181,7 @@ intercepted tools/call
  Return result to client
 ```
 
-Denied or approval-rejected calls do not enter the relay write path. Per-logger-lifetime hash-linked events cover denies, approvals, argument redactions, session taints, and session lifecycle. Policy lifecycle constants exist but are not currently emitted. Output redaction is operationally logged, not emitted as a JSONL audit event. A plain unredacted allow has no standalone audit event.
+Denied or approval-rejected calls do not enter the relay write path. Selected events cover denies, approvals, argument redactions, session taints, and session lifecycle. Policy lifecycle constants exist but are not emitted. Output redaction and plain unredacted allows lack standalone JSONL events.
 
 ## Core Components
 
@@ -264,7 +264,7 @@ Human-in-the-loop approval for high-risk tool calls:
 Structured JSONL audit trail (`internal/audit/logger.go`):
 
 - **Event constants**: nine types are defined, but `policy_loaded` and `policy_reloaded` are not currently emitted. A plain unredacted allow and output-only redaction also lack standalone audit events.
-- **Logger-lifetime hash chain**: within one `Logger` instance, each line links to the previous event. Another logger instance, including one reopening the same file, starts a new segment. Regression: `TestAuditLogHashChain`.
+- **Healthy-sink logger-lifetime chain**: successful writes link within one `Logger` instance. The logger advances chain state before confirming persistence, so a failed write can leave the next stored event pointing to a missing hash. Another logger instance or file reopen starts a new segment. Regression: `TestAuditLogHashChain` covers only healthy writes.
 - **Redacted data**: arguments, reasons, and result previews scrubbed before write
 - **O_SYNC** append-only file writes
 - **Decision fields**: timestamp, session/agent IDs, server, tool, redacted arguments, `policy_decision`, reason, risk, chain context; egress denials add `session_taints`, `taint_source`, `taint_reason`, `policy_rule`

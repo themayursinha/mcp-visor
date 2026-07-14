@@ -65,7 +65,7 @@ They are designed to work together:
 - You want to **enforce** tool access policies at runtime
 - You need a **deterministic** enforcement point that prompt injection cannot bypass
 - You want to **detect** dangerous tool chains in real time
-- You need **audit logs** for every tool execution
+- You need structured audit events for denials, approvals, argument redactions, chain detections, session taints, and session lifecycle
 - You want **human approval** for high-risk operations
 
 ## Using Both Together

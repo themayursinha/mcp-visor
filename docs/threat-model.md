@@ -69,7 +69,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
 | Policy file tampering | Critical | Low | Policy files should be owned by root/administrator. The core proxy relies on host filesystem integrity and does not sign policy files. |
-| Audit log tampering | High | Low | Events are hash-linked within one logger lifetime. New logger instances and file reopen start a new segment, so append-only permissions and secure external file shipping remain required. |
+| Audit log tampering | High | Low | Events are hash-linked within one logger lifetime while writes succeed. A failed write advances in-memory chain state, and new logger instances or file reopen start a new segment. Append-only permissions and secure external file shipping remain required. |
 | In-flight message tampering | Medium | Low | Local stdio uses host pipes. Remote `--server-url` supports TLS/mTLS client configuration; operators must enable it for untrusted networks. |
 | Tool output tampering | Medium | Medium | Visor redacts secrets in outputs but does not sanitize against prompt injection. Output sanitization is a separate concern. |
 | Argument tampering | Medium | Low | Visor rewrites arguments after redaction. Attacker could attempt to bypass redaction via encoding tricks. |
@@ -217,7 +217,7 @@ Policy integrity relies on filesystem permissions. If an attacker gains write ac
 
 ### 2. Logger-Lifetime Hash Chain vs Signed Decisions
 
-Audit events are hash-linked within one logger lifetime. New logger instances and reopening an existing JSONL file do not recover or validate a previous chain head. Policy decisions are also not signed end-to-end. Optional Vault Transit signing covers receipts where enabled. Treat files as append-only and ship the JSONL file through a secure external channel.
+Audit events are hash-linked within one logger lifetime while the sink remains healthy. A write failure advances in-memory chain state before persistence, so a later event can reference an event missing from the file. New logger instances and file reopen also start a new segment. Policy decisions are not signed end-to-end. Treat files as append-only and ship the JSONL file through a secure external channel.
 
 ### 3. Remote Server Authentication
 
@@ -249,7 +249,7 @@ Input redaction emits a `tool_call_allowed` event before later policy, egress, c
 
 ### 10. Basic SIEM Export Is Not Audit-Chain Retention
 
-Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exported representation is reduced and is produced before the file logger adds hash-link fields. Use secure external shipping of the JSONL audit file for retention; do not treat `--siem-target` as equivalent evidence.
+Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter receives the original reduced event copy, not the timestamped/redacted/hash-linked copy produced inside the file logger, so it lacks logger-added `timestamp`, `hash`, `prev_hash`, and `chain_index`. Use secure external shipping of the JSONL audit file for retention.
 
 ## Hardening Recommendations
 

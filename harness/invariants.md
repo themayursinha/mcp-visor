@@ -14,7 +14,7 @@ Each invariant maps to automated checks in `check.sh` (via `go test`) or manual 
 | H8 | No LLM in policy engine | Code review + `internal/policy/engine.go` has no LLM client imports |
 | H9 | An authorized sensitive-source request taints the session | `TestSessionTaintEgressDenyBlocksSinkAfterSensitiveSource` — `internal/proxy/session_taint_test.go` |
 | H10 | A tainted egress request is denied with audit metadata before relay | Same test + `TestSessionTaintEgressAllowsSinkBeforeTaint` — `internal/proxy/session_taint_test.go` |
-| H11 | Audit hash linkage within one logger lifetime | `TestAuditLogHashChain` — `internal/audit/logger_test.go` |
+| H11 | Audit hash linkage for healthy writes within one logger lifetime | `TestAuditLogHashChain` — `internal/audit/logger_test.go` |
 
 **Prompt-injection immunity** is architectural: decisions do not parse natural language from tool descriptions in an LLM. Regression: policy engine tests + integration deny paths; document scenarios in `examples/malicious-prompts/`.
 
