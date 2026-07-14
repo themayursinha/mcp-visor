@@ -302,17 +302,21 @@ func TestAuditLogHashChain(t *testing.T) {
 	if second.PrevHash != first.Hash {
 		t.Errorf("prev_hash linkage: second.PrevHash=%q first.Hash=%q", second.PrevHash, first.Hash)
 	}
-	if got := recomputeAuditHash(first); got != first.Hash {
+	if got := recomputeAuditHash(t, first); got != first.Hash {
 		t.Errorf("first hash mismatch: recomputed %q stored %q", got, first.Hash)
 	}
-	if got := recomputeAuditHash(second); got != second.Hash {
+	if got := recomputeAuditHash(t, second); got != second.Hash {
 		t.Errorf("second hash mismatch: recomputed %q stored %q", got, second.Hash)
 	}
 }
 
-func recomputeAuditHash(e audit.Event) string {
+func recomputeAuditHash(t *testing.T, e audit.Event) string {
+	t.Helper()
 	e.Hash = ""
-	data, _ := json.Marshal(e)
+	data, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("marshal audit event for hash: %v", err)
+	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }

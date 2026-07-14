@@ -133,7 +133,7 @@ intercepted tools/call
         │
         ▼
  ┌──────────────────┐
- │ Runtime limits   │──▶ DENY if argument/output size caps exceeded
+ │ Runtime limits   │──▶ DENY if argument/session caps are exceeded
  └──────┬───────────┘
         ▼
  ┌──────────────────┐
@@ -181,7 +181,7 @@ intercepted tools/call
  Return result to client
 ```
 
-Denied or approval-rejected calls never reach the MCP server. Audit events are emitted for policy decisions (`tool_call_allowed`, `tool_call_denied`, `tool_call_chain_detected`, `tool_call_approval_required`, `session_tainted`).
+Denied or approval-rejected calls never reach the MCP server. Hash-chained audit events cover denies, approvals, redactions, session taints, and policy/session lifecycle. A plain unredacted allow currently has no standalone audit event; session history still records the forwarded call.
 
 ## Core Components
 

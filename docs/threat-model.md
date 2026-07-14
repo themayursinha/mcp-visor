@@ -60,15 +60,15 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Spoofed agent identity | Medium | Low | Identity-based policies match against `--client-id`. v1 trusts the flag value. v2 will add token/auth-based identity. |
-| Spoofed MCP server | High | Medium | Server name must match policy config. v1 trusts server name from client. v2 can validate via binary hash or TLS certificate. |
+| Spoofed agent identity | Medium | Low | Identity-based policies match the operator-supplied `--client-id`; the value is not authenticated by the core proxy. |
+| Spoofed MCP server | High | Medium | Local stdio starts the operator-selected command. Remote transport supports TLS/mTLS, but the logical policy server name is operator configuration rather than cryptographic identity. |
 | Spoofed approval | High | Low | File-based approval assumes host filesystem integrity. Only users with write access to `--approval-dir` can approve. |
 
 ### 2. Tampering
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Policy file tampering | Critical | Low | Policy file should be owned by root/administrator. Visor reads only. v1 assumes filesystem integrity. v2 will support policy file signing. |
+| Policy file tampering | Critical | Low | Policy files should be owned by root/administrator. The core proxy relies on host filesystem integrity and does not sign policy files. |
 | Audit log tampering | High | Low | JSONL lines are hash-chained (`prev_hash`, `hash`, `chain_index` in `internal/audit/logger.go`; `TestAuditLogHashChain`). Recommend append-only permissions; external SIEM export optional. |
 | In-flight message tampering | Medium | Low | Local stdio uses host pipes. Remote `--server-url` supports TLS/mTLS client configuration; operators must enable it for untrusted networks. |
 | Tool output tampering | Medium | Medium | Visor redacts secrets in outputs but does not sanitize against prompt injection. Output sanitization is a separate concern. |
@@ -78,8 +78,8 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Agent denies making a tool call | Medium | Medium | Audit logs include session ID, agent ID, timestamp, tool name, and redacted arguments. JSONL lines are hash-chained for tamper detection (`TestAuditLogHashChain`). |
-| Approver denies approving | Medium | Low | Approval events are logged with timestamp and decision. v1 relies on who wrote the approval file. v2 can add approval signatures. |
+| Agent denies making a tool call | Medium | Medium | Hash-chained events include session/agent IDs, tool, decision, reason, and redacted arguments for denies, approvals, redactions, and taints. A plain unredacted allow currently has no standalone audit event. |
+| Approver denies approving | Medium | Low | File approval relies on approval-directory permissions. Signed receipts are available when the receipt signer is configured, but operator identity still depends on backend and key custody. |
 | Policy author denies a rule | Low | Low | Policy version and content should be tracked in version control. Not a visor concern. |
 
 ### 4. Information Disclosure
@@ -100,7 +100,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Large argument DDoS | Medium | Medium | `max_argument_size_bytes` setting rejects oversized calls. Default: 1 MB. |
 | Large output DDoS | Medium | Medium | `max_output_size_bytes` setting allows truncation. Default: 10 MB. |
 | Approval exhaustion | Low | Low | Each session queues one pending approval at a time. No approval flood path. |
-| Policy file watcher exploit | Low | Low | v1 does not have hot-reload. When added (v1.1), will debounce policy reloads (5-second cooldown). |
+| Policy file watcher exploit | Low | Low | `serve -policy` enables an fsnotify watcher with a 2-second debounce. Invalid reloads keep the last valid policy; filesystem permissions remain the trust boundary. |
 
 ### 6. Elevation of Privilege
 
@@ -191,10 +191,10 @@ Which controls mitigate which threats?
 **Actors**: Internal developer with filesystem access
 
 1. Attacker edits policy to add `allowed: true` for `file_delete` on `/`
-2. If visor is running, it loads new policy (when hot-reload is implemented)
-3. **v1 limitation**: Policy file integrity relies on host filesystem permissions
+2. If visor is running with `-policy`, the watcher loads the valid changed policy after its debounce interval
+3. **Limitation**: Policy file integrity relies on host filesystem permissions
 
-**Mitigation**: Run visor as different user than developers. Policy file owned by root, readable by visor. v2 will add policy signing.
+**Mitigation**: Run visor as a different user from developers. Keep the policy file root-owned and readable by the visor process; require reviewed deployment changes.
 
 ### Scenario 6: Compromised MCP Server Returns Malicious Output
 
@@ -207,9 +207,9 @@ Which controls mitigate which threats?
 5. If the agent does, visor's command deny patterns catch the curl pipe
 6. **Partial mitigation**: Visor redacts secrets in outputs but does not scan for prompt injection payloads
 
-**Limitation**: Output sanitization against prompt injection is a separate concern. This is a v2 feature.
+**Limitation**: Output sanitization against prompt injection is a separate concern and is not part of the current deterministic authorization boundary.
 
-## Known Limitations (v1)
+## Known Limitations
 
 ### 1. Host Filesystem Dependency
 
@@ -225,15 +225,19 @@ Remote MCP over HTTP+SSE is supported (`--server-url`, TLS/mTLS flags). Operator
 
 ### 4. Ephemeral Session State
 
-Session state (call history, chain windows) is in-memory and lost on visor restart. A restarted visor has no memory of previous tool calls. Mitigation: acceptable for v1. Persistent session state is a v2 item.
+Session state (call history, chain windows, and taints) is in-memory and lost on visor restart. A restarted visor has no memory of previous tool calls. Persistent state remains gated on a demonstrated deployment requirement.
 
 ### 5. No Output Prompt Injection Scanning
 
-Visor redacts secrets in outputs but does not scan for prompt injection payloads. A compromised server could embed malicious instructions in otherwise legitimate output. Mitigation: v2 can add output scanning patterns. For now, this is acknowledged.
+Visor redacts secrets in outputs but does not scan for prompt injection payloads. A compromised server could embed malicious instructions in otherwise legitimate output. The deterministic boundary still evaluates any later tool call; content classification is not currently implemented.
 
 ### 6. No Rate Limiting
 
 Visor does not limit request rate from clients. A malicious or buggy agent could flood the proxy with tool calls. Mitigation: deploy behind a process supervisor with resource limits (systemd, cgroups, Docker).
+
+### 7. Plain Allowed Calls Lack a Standalone Audit Event
+
+Forwarded calls are recorded in in-memory session history, but a plain allow with no redaction, approval, or taint does not currently emit its own JSONL audit event. Denies and the other security-relevant transitions remain audited. Closing this gap belongs in the security-verification phase before claiming a complete per-call decision ledger.
 
 ## Hardening Recommendations
 
@@ -260,7 +264,7 @@ Visor does not limit request rate from clients. A malicious or buggy agent could
 1. Separate policy authoring (security team) from policy consumption (visor runtime)
 2. Require PR review for policy changes
 3. Rotate approval operator access regularly
-4. Export audit logs to a centralized SIEM (v2 feature; for now, use file shipping)
+4. Use `--siem-target` or existing file shipping to retain audit events off-host
 
 ## Security Model Summary
 
@@ -272,12 +276,12 @@ Visor does not limit request rate from clients. A malicious or buggy agent could
 │  Layer 2: Allow/Deny  → Block unknown or forbidden tools│
 │  Layer 3: Arguments   → Validate paths, commands, sizes │
 │  Layer 4: Chains      → Detect dangerous sequences      │
-│  Layer 5: Session     → Taint + egress sink controls  │
+│  Layer 5: Session     → Taint + egress sink controls     │
 │  Layer 6: Approval    → Human checkpoint for high-risk  │
-│  Layer 7: Audit       → Hash-chained decision record  │
+│  Layer 7: Audit       → Hash-chained event record        │
 │                                                          │
 │  Fail-closed: Unknown → DENY                             │
 │  Deterministic: No LLM in the decision path              │
-│  Minimal TCB: Single Go binary, one YAML dependency      │
+│  Deployment: Single Go binary; optional integrations off │
 └─────────────────────────────────────────────────────────┘
 ```

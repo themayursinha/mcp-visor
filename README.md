@@ -28,7 +28,7 @@ MCP Visor adds that boundary at the MCP `tools/call` layer:
 AI agent → MCP Visor → policy decision → MCP server
 ```
 
-Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. Audit logs record what happened and why.
+Every tool call is evaluated before execution. Unknown tools fail closed. Sensitive arguments can be redacted. Dangerous chains can be denied. High-risk actions can require human approval. Hash-chained audit events cover denies, approvals, redactions, session taints, and policy/session lifecycle events.
 
 ## Install
 
@@ -140,7 +140,7 @@ More policies: [`examples/policies/`](examples/policies/) · Schema reference: [
 | Tool-chain detection | Block dangerous sequences such as read → exfiltrate |
 | Session taints | Change later authorization decisions after sensitive context is touched |
 | Human approval | Gate critical tools before execution |
-| Audit log | Hash-chained JSONL evidence for every decision |
+| Audit log | Hash-chained JSONL evidence for security-relevant decisions and lifecycle events |
 | Policy linting | Validate YAML policy before deployment |
 
 Advanced capabilities include signed decision receipts, Vault Transit signing, HTTP+SSE remote transport with mTLS, webhooks, SIEM export, Prometheus metrics, OTLP tracing, and a local web dashboard. See [`docs/complexity-budget.md`](docs/complexity-budget.md) for feature tiering.
@@ -149,8 +149,8 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, H
 
 - **Deterministic:** no LLM in the allow/deny path
 - **Fail closed:** unknown tools are denied by default
-- **Layered:** redaction → policy → session taints/egress → chain detection → approval → audit
-- **Observable:** decisions are recorded in hash-chained JSONL audit logs
+- **Layered:** redaction → policy → taint-aware egress → chain detection → approval → post-allow taint marking
+- **Observable:** denies, approvals, redactions, taints, and lifecycle events are recorded in hash-chained JSONL
 - **Self-hosted:** single Go binary; no SaaS dependency required
 - **Operator-controlled:** optional telemetry exports to your Prometheus, OTLP, webhook, or SIEM stack
 
@@ -186,7 +186,7 @@ make bench                     # benchmarks
 - [x] v1.0: Proxy, policy engine, redaction, approval, audit, chain detection
 - [x] v1.1: Identity/time policies, hot-reload, CLI approval, remote transport
 - [x] v1.2: Session taints and egress controls
-- [ ] v1.3: Polished demo flows and stronger policy receipts (not yet released; current release line is v1.2)
+- [ ] v1.3: Documentation truth, security verification, interoperability evidence, and release hardening
 - [ ] Future: sandboxing, richer telemetry, optional policy engines
 
 ## Contributing

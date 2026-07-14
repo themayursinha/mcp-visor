@@ -52,7 +52,7 @@ cat >"$EVID_DIR/manifest.md" <<EOF
 
 ## Invariants (see \`harness/invariants.md\`)
 
-Covered by integration tests in this run:
+Covered by tests in this run:
 
 - H1 default deny — \`TestUnknownToolDenied\`
 - H2 sensitive paths — \`TestSensitiveFileAccessDenied\`
