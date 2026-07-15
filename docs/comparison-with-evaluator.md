@@ -12,7 +12,7 @@ This document explains the relationship between [mcp-visor](https://github.com/t
 | **MCP integration** | Simulates mock tool calls | Proxies real MCP protocol traffic |
 | **Policy role** | Assesses policy compliance of configs | Enforces policy before tool execution |
 | **Output** | Reports, scores, findings | Allow/deny/approval decisions, audit logs |
-| **When it runs** | CI/CD, on-demand scans | Valid request-form calls with IDs on stdio; notification/malformed bypasses and experimental remote transport are documented limitations |
+| **When it runs** | CI/CD, on-demand scans | Valid request-form calls with IDs on stdio and remote; notification-form `tools/call` blocked; experimental remote transport interoperability remains a documented limitation |
 | **Language** | Python | Go |
 | **Deployment** | CLI, CI pipeline, optional FastAPI service | Long-running daemon, Docker container |
 

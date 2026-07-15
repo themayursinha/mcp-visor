@@ -382,29 +382,11 @@ func (p *Proxy) relayClientToServer(ctx context.Context, client, server *mcp.Par
 }
 
 func (p *Proxy) interceptAndModify(raw json.RawMessage, client *mcp.Parser) (json.RawMessage, string) {
-	req, err := mcp.NewParser(nil, nil).DecodeRequest(raw)
-	if err != nil || req.IsNotification() {
-		return raw, "forward"
-	}
-
-	if req.Method != mcp.MethodToolsCall {
-		return raw, "forward"
-	}
-
-	var callReq mcp.ToolsCallRequest
-	if err := json.Unmarshal(req.Params, &callReq); err != nil {
-		errResp := mcp.NewErrorResponse(req.ID, -32000, "invalid tools/call parameters")
-		_ = client.EncodeResponse(errResp)
-		p.logDenied(serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerCommand), "", nil, "invalid tools/call parameters", policy.RiskUnknown)
-		return raw, "denied"
-	}
-
+	serverName := serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerCommand)
 	respond := func(id any, message string) {
-		errResp := mcp.NewErrorResponse(id, -32000, message)
-		_ = client.EncodeResponse(errResp)
+		_ = client.EncodeResponse(mcp.NewErrorResponse(id, -32000, message))
 	}
-	originalRaw := raw
-	return p.processToolsCall(req, callReq, raw, originalRaw, p.cfg.ServerName, respond)
+	return p.interceptClientToServerEnvelope(raw, serverName, respond)
 }
 
 func (p *Proxy) checkChain(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, risk policy.RiskLevel) (policy.Decision, []string) {

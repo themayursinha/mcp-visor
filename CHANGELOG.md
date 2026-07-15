@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Block notification-form `tools/call` on stdio and remote client paths; shared envelope classification in `internal/mcp/envelope.go` and `internal/proxy/client_envelope.go`.
+- Fail closed on recognizable malformed `tools/call` envelopes that include a response `id` (error response, no relay).
+
 ### Documentation
 
 - Reconciled architecture, policy model, threat model, security policy, and public roadmap with the live v1.2 enforcement path.

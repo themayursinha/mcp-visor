@@ -2,7 +2,7 @@
 
 ## Purpose
 
-MCP Visor is a deterministic MCP proxy for valid JSON-RPC `tools/call` requests with IDs. Notification-form calls and malformed envelopes currently bypass interception; closing that gap is required before claiming universal fail-closed enforcement.
+MCP Visor is a deterministic MCP proxy for valid JSON-RPC `tools/call` requests with IDs. Notification-form `tools/call` is blocked before relay on stdio and remote transports; non-tools notifications forward unchanged. Unrelated invalid JSON is not a universal fail-closed surface.
 
 ## Non-negotiable invariants
 
