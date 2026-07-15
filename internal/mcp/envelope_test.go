@@ -13,6 +13,33 @@ func TestClassifyClientEnvelopeForwardsNonToolsNotification(t *testing.T) {
 	}
 }
 
+func TestClassifyClientEnvelopeForwardsNonToolsBatch(t *testing.T) {
+	raw := json.RawMessage(`[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"}]` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeForward {
+		t.Fatalf("kind=%v want forward for non-tools batch", got.Kind)
+	}
+}
+
+func TestClassifyClientEnvelopeDeniesBatchContainingToolsCallNotification(t *testing.T) {
+	raw := json.RawMessage(`[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"tools/call","params":{"name":"file_read"}}]` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeToolsCallNotification {
+		t.Fatalf("kind=%v want notification deny for batch containing tools/call", got.Kind)
+	}
+}
+
+func TestClassifyClientEnvelopeDeniesBatchContainingToolsCallRequest(t *testing.T) {
+	raw := json.RawMessage(`[{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"file_read"}}]` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeToolsCallMalformed {
+		t.Fatalf("kind=%v want malformed deny for batch containing tools/call request", got.Kind)
+	}
+	if got.Request.ID != float64(7) {
+		t.Fatalf("id=%v want 7", got.Request.ID)
+	}
+}
+
 func TestClassifyClientEnvelopeDeniesNotificationToolsCall(t *testing.T) {
 	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
 	got := ClassifyClientEnvelope(raw)

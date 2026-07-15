@@ -2,7 +2,7 @@
 
 **Deterministic authorization for MCP tool calls.**
 
-MCP Visor is a self-hosted policy enforcement proxy for AI agents. It evaluates valid JSON-RPC `tools/call` requests that include an `id` before relay and applies allow, deny, approval, redaction, chain, and session-taint rules without an LLM. Notification-form `tools/call` (no `id`) is blocked at the proxy; recognizable malformed `tools/call` attempts with an `id` fail closed without relay.
+MCP Visor is a self-hosted policy enforcement proxy for AI agents. It evaluates valid JSON-RPC `tools/call` requests that include an `id` before relay and applies allow, deny, approval, redaction, chain, and session-taint rules without an LLM. Notification-form `tools/call` (no `id`), duplicate `method` keys, and JSON-RPC batches containing `tools/call` are blocked at the proxy; recognizable malformed `tools/call` attempts with an `id` fail closed without relay.
 
 > **MCP Visor is not a model guardrail. It is an action boundary.**
 > Models can request actions. MCP Visor decides whether those actions are allowed.
@@ -28,7 +28,7 @@ MCP Visor adds that boundary at the MCP `tools/call` layer:
 AI agent → MCP Visor → policy decision → MCP server
 ```
 
-Valid `tools/call` requests with IDs are evaluated before relay. Notification-form `tools/call` is dropped (no JSON-RPC response) with audit and metrics; non-tools MCP notifications such as `notifications/initialized` still forward unchanged.
+Valid `tools/call` requests with IDs are evaluated before relay. Notification-form `tools/call` is dropped without response; duplicate `method` keys and JSON-RPC batches containing `tools/call` are blocked before relay. Non-tools MCP notifications and batches still forward unchanged.
 
 ## Install
 

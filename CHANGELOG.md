@@ -6,6 +6,8 @@
 
 - Block notification-form `tools/call` on stdio and remote client paths; shared envelope classification in `internal/mcp/envelope.go` and `internal/proxy/client_envelope.go`.
 - Fail closed on recognizable malformed `tools/call` envelopes that include a response `id` (error response, no relay).
+- Fail closed on duplicate `method` keys where any value resolves to `tools/call`, preventing parser differential attacks between Go (last-wins) and JavaScript (also last-wins, but first-wins servers also blocked).
+- Block JSON-RPC batches containing any `tools/call` element before relay; non-tools batches forward unchanged.
 
 ### Documentation
 

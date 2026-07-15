@@ -167,6 +167,43 @@ default_action: deny`)})
 	}
 }
 
+func TestInterceptDeniesBatchContainingToolsCall(t *testing.T) {
+	p := New(Config{
+		ServerName: "demo",
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "demo"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+`),
+	})
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	respond := encodeResponseVia(client)
+
+	notifBatch := json.RawMessage(`[{"jsonrpc":"2.0","method":"tools/call","params":{"name":"file_read"}}]` + "\n")
+	_, action := p.interceptClientToServerEnvelope(notifBatch, "demo", respond)
+	if action != "denied" {
+		t.Fatalf("notification batch action=%q want denied", action)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("notification batch must not get response, got %q", out.String())
+	}
+
+	requestBatch := json.RawMessage(`[{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"file_read"}}]` + "\n")
+	_, action = p.interceptClientToServerEnvelope(requestBatch, "demo", respond)
+	if action != "denied" {
+		t.Fatalf("request batch action=%q want denied", action)
+	}
+	if !strings.Contains(out.String(), "invalid tools/call request") {
+		t.Fatalf("request batch expected error response, got %q", out.String())
+	}
+}
+
 func TestDenyNotificationToolsCallDoesNotLeakArgumentsInAudit(t *testing.T) {
 	auditPath := t.TempDir() + "/audit.jsonl"
 	p := New(Config{
