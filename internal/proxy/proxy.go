@@ -228,7 +228,7 @@ func (p *Proxy) Run(ctx context.Context) error {
 		return fmt.Errorf("start server: %w", err)
 	}
 	defer func() {
-		_ = serverCmd.Wait()
+		stopServerProcess(serverCmd, serverStdin)
 		p.logAudit(audit.Event{
 			EventType: audit.EventSessionEnded,
 			SessionID: p.session.ID,
@@ -290,6 +290,18 @@ func (p *Proxy) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func stopServerProcess(cmd *exec.Cmd, stdin io.Closer) {
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	if cmd != nil {
+		_ = cmd.Wait()
+	}
 }
 
 func (p *Proxy) streamStderr(stderr io.Reader) {

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 )
@@ -233,6 +235,30 @@ default_action: deny`),
 	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
 	if err := p.enforceHandshakeEnvelope(raw, client); err != nil {
 		t.Fatalf("handshake initialized notification must forward: %v", err)
+	}
+}
+
+func TestStopServerProcessTerminatesWaitingChild(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "while :; do sleep 1; done")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		stopServerProcess(cmd, stdin)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("server cleanup hung waiting for child")
 	}
 }
 

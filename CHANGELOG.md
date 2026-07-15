@@ -9,6 +9,7 @@
 - Fail closed on duplicate `method` keys where any value resolves to `tools/call`, preventing parser differential attacks between Go (last-wins) and JavaScript (also last-wins, but first-wins servers also blocked).
 - Block JSON-RPC batches containing any `tools/call` element before relay; non-tools batches forward unchanged.
 - Apply the same `tools/call` envelope gate to the post-initialize handshake slot on stdio and remote transports.
+- Terminate and reap the stdio MCP server when handshake enforcement fails, preventing cleanup from hanging on a child waiting for initialization.
 
 ### Documentation
 
