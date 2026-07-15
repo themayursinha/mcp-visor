@@ -70,6 +70,14 @@ func TestClassifyClientEnvelopeDeniesTypedDuplicateNotificationToolsCall(t *test
 	}
 }
 
+func TestClassifyClientEnvelopeDeniesDuplicateMethodWhenToolsCallAppearsFirst(t *testing.T) {
+	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"tools/call","method":"ping","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeToolsCallNotification {
+		t.Fatalf("kind=%v want notification deny when any duplicate method is tools/call", got.Kind)
+	}
+}
+
 func TestHasResponseID(t *testing.T) {
 	cases := []struct {
 		name string
@@ -83,11 +91,8 @@ func TestHasResponseID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var peek envelopePeek
-			if err := json.Unmarshal([]byte(tc.raw), &peek); err != nil {
-				t.Fatalf("unmarshal: %v", err)
-			}
-			if got := peek.hasResponseID(); got != tc.want {
+			scan := scanClientEnvelope([]byte(tc.raw))
+			if got := scan.hasResponseID(); got != tc.want {
 				t.Fatalf("hasResponseID=%v want %v", got, tc.want)
 			}
 		})

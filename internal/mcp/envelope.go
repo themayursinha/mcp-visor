@@ -1,6 +1,9 @@
 package mcp
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // ClientEnvelopeKind classifies client-to-proxy JSON-RPC lines at the tools/call gate.
 type ClientEnvelopeKind int
@@ -18,16 +21,16 @@ type ClientEnvelope struct {
 	Request Request
 }
 
-type envelopePeek struct {
-	Method string          `json:"method"`
-	ID     json.RawMessage `json:"id"`
+type clientEnvelopeScan struct {
+	hasToolsCallMethod bool
+	id                 json.RawMessage
 }
 
-func (p envelopePeek) hasResponseID() bool {
-	if len(p.ID) == 0 {
+func (s clientEnvelopeScan) hasResponseID() bool {
+	if len(s.id) == 0 {
 		return false
 	}
-	return string(p.ID) != "null"
+	return string(s.id) != "null"
 }
 
 // ClassifyClientEnvelope decides whether a client message should be forwarded,
@@ -35,11 +38,15 @@ func (p envelopePeek) hasResponseID() bool {
 // Unrelated traffic (including non-tools notifications) is forwarded unchanged.
 func ClassifyClientEnvelope(raw json.RawMessage) ClientEnvelope {
 	data := trimEnvelopeJSON(raw)
+	scan := scanClientEnvelope(data)
 
 	var req Request
 	if err := json.Unmarshal(data, &req); err == nil {
 		if req.Method != MethodToolsCall {
-			return ClientEnvelope{Kind: EnvelopeForward}
+			if !scan.hasToolsCallMethod {
+				return ClientEnvelope{Kind: EnvelopeForward}
+			}
+			return classifyScannedToolsCall(scan)
 		}
 		if req.IsNotification() {
 			return ClientEnvelope{Kind: EnvelopeToolsCallNotification, Request: req}
@@ -50,19 +57,57 @@ func ClassifyClientEnvelope(raw json.RawMessage) ClientEnvelope {
 		return ClientEnvelope{Kind: EnvelopeToolsCallRequest, Request: req}
 	}
 
-	var peek envelopePeek
-	// Unmarshal may report an earlier type error while retaining a later duplicate
-	// method. Use the partial value only to fail closed on tools/call attempts.
-	_ = json.Unmarshal(data, &peek)
-	if peek.Method != MethodToolsCall {
+	if !scan.hasToolsCallMethod {
 		return ClientEnvelope{Kind: EnvelopeForward}
 	}
-	if !peek.hasResponseID() {
+	return classifyScannedToolsCall(scan)
+}
+
+func scanClientEnvelope(data []byte) clientEnvelopeScan {
+	var scan clientEnvelopeScan
+	decoder := json.NewDecoder(bytes.NewReader(data))
+
+	first, err := decoder.Token()
+	if err != nil || first != json.Delim('{') {
+		return scan
+	}
+
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return scan
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return scan
+		}
+
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return scan
+		}
+
+		switch key {
+		case "method":
+			var method string
+			if err := json.Unmarshal(value, &method); err == nil && method == MethodToolsCall {
+				scan.hasToolsCallMethod = true
+			}
+		case "id":
+			scan.id = value
+		}
+	}
+
+	return scan
+}
+
+func classifyScannedToolsCall(scan clientEnvelopeScan) ClientEnvelope {
+	if !scan.hasResponseID() {
 		return ClientEnvelope{Kind: EnvelopeToolsCallNotification, Request: Request{Method: MethodToolsCall}}
 	}
 	return ClientEnvelope{Kind: EnvelopeToolsCallMalformed, Request: Request{
-		Method: peek.Method,
-		ID:     decodePeekID(peek.ID),
+		Method: MethodToolsCall,
+		ID:     decodePeekID(scan.id),
 	}}
 }
 
