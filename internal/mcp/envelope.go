@@ -39,6 +39,9 @@ func (s clientEnvelopeScan) hasResponseID() bool {
 // Unrelated traffic (including non-tools notifications) is forwarded unchanged.
 func ClassifyClientEnvelope(raw json.RawMessage) ClientEnvelope {
 	data := trimEnvelopeJSON(raw)
+	if len(data) > 0 {
+		data = bytes.TrimLeft(data, " 	\r\n")
+	}
 	if len(data) > 0 && data[0] == '[' {
 		return classifyBatchEnvelope(data)
 	}

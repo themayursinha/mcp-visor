@@ -40,6 +40,14 @@ func TestClassifyClientEnvelopeDeniesBatchContainingToolsCallRequest(t *testing.
 	}
 }
 
+func TestClassifyClientEnvelopeDeniesBatchWithLeadingWhitespace(t *testing.T) {
+	raw := json.RawMessage(` [{"jsonrpc":"2.0","method":"tools/call","params":{"name":"file_read"}}]` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeToolsCallNotification {
+		t.Fatalf("kind=%v want notification deny for batch with leading whitespace", got.Kind)
+	}
+}
+
 func TestClassifyClientEnvelopeDeniesNotificationToolsCall(t *testing.T) {
 	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
 	got := ClassifyClientEnvelope(raw)
