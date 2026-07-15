@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -100,10 +101,8 @@ func TestSensitiveFileAccessDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stdout pipe: %v", err)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("stderr pipe: %v", err)
-	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start visor: %v", err)
@@ -112,13 +111,6 @@ func TestSensitiveFileAccessDenied(t *testing.T) {
 
 	w := bufio.NewWriter(stdin)
 	r := bufio.NewReader(stdout)
-
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			t.Logf("visor stderr: %s", scanner.Text())
-		}
-	}()
 
 	sendInitMessages(w, r)
 

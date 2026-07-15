@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"os/exec"
@@ -20,15 +21,17 @@ func TestServeWithPrometheusMetrics(t *testing.T) {
 		"-metrics-addr", "127.0.0.1:19381",
 		"-log-level", "error",
 	)
-	cmd.Stdin = strings.NewReader("")
-	stderr, err := cmd.StderrPipe()
+	var stderr bytes.Buffer
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_ = stdin.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
@@ -48,8 +51,7 @@ func TestServeWithPrometheusMetrics(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !ready {
-		slurp, _ := io.ReadAll(stderr)
-		t.Fatalf("metrics endpoint not ready; stderr: %s", slurp)
+		t.Fatalf("metrics endpoint not ready; stderr: %s", stderr.String())
 	}
 
 	// Default path: observability enabled but no traffic yet — counters should exist at 0.

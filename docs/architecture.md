@@ -126,7 +126,7 @@ tests/
 
 ## Decision Pipeline
 
-Valid JSON-RPC `tools/call` requests with an `id` are handled in `internal/proxy/tools_call.go` (shared by stdio and remote transports). Notification-form calls and malformed request envelopes currently bypass interception and can be relayed. [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the enforced request path:
+Valid JSON-RPC `tools/call` requests with an `id` are classified in `internal/mcp/envelope.go` and enforced in `internal/proxy/client_envelope.go` → `internal/proxy/tools_call.go` (shared by stdio and remote transports). The same envelope gate protects the post-initialize handshake slot. Notification-form `tools/call`, duplicate `method` keys, and JSON-RPC batches containing `tools/call` are blocked before relay. Recognizable malformed `tools/call` attempts with an `id` fail closed. [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the enforced request path:
 
 ```
 intercepted tools/call
@@ -201,7 +201,7 @@ The main proxy loop (`Run`) manages the full lifecycle:
 1. Start the MCP server as a child process with stdin/stdout pipes
 2. Run the MCP handshake (forward `initialize` request/response, `initialized` notification)
 3. Spawn two relay goroutines:
-   - `relayClientToServer`: enforces valid request-form `tools/call`; notification/malformed gaps are documented above
+   - `relayClientToServer`: classifies client envelopes, blocks notification-form `tools/call`, then enforces valid request-form `tools/call`
    - `relayServerToClient`: reads server responses, redacts outputs, forwards to client
 4. Graceful shutdown on SIGINT/SIGTERM via `signal.NotifyContext`
 

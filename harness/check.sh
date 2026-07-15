@@ -61,6 +61,8 @@ Covered by tests in this run:
 - H6 proxy path — proxy_integration tests
 - H9–H10 authorized source taint / pre-relay egress deny — \`internal/proxy/session_taint_test.go\`
 - H11 audit hash chain — \`TestAuditLogHashChain\`
+- H12 notification-form \`tools/call\` blocked, including duplicate-key parser differentials, JSON-RPC batches, leading whitespace, and the post-initialize handshake slot (stdio + remote); non-tools notifications and batches forward — see the H12 tests in \`harness/invariants.md\`
+- H13 denied handshake cleanup terminates a waiting stdio server — \`TestStopServerProcessTerminatesWaitingChild\`
 
 ## Result
 

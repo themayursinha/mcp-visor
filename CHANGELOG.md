@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- Block notification-form `tools/call` on stdio and remote client paths; shared envelope classification in `internal/mcp/envelope.go` and `internal/proxy/client_envelope.go`.
+- Fail closed on recognizable malformed `tools/call` envelopes that include a response `id` (error response, no relay).
+- Fail closed on duplicate `method` keys where any value resolves to `tools/call`, preventing parser differential attacks between Go (last-wins) and JavaScript (also last-wins, but first-wins servers also blocked).
+- Block JSON-RPC batches containing any `tools/call` element before relay; non-tools batches forward unchanged.
+- Apply the same `tools/call` envelope gate to the post-initialize handshake slot on stdio and remote transports.
+- Terminate and reap the stdio MCP server when handshake enforcement fails, preventing cleanup from hanging on a child waiting for initialization.
+
 ### Documentation
 
 - Reconciled architecture, policy model, threat model, security policy, and public roadmap with the live v1.2 enforcement path.

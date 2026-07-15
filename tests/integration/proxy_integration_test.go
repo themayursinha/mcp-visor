@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 func buildMockServer(t *testing.T) string {
@@ -248,6 +249,92 @@ func TestProxyIntegrationToolsCall(t *testing.T) {
 	content := result["content"].([]any)
 	first := content[0].(map[string]any)
 	t.Logf("tool result: %s", first["text"])
+}
+
+func TestProxyIntegrationNotificationToolsCallNotRelayed(t *testing.T) {
+	mockServer := buildMockServer(t)
+	visor := buildVisor(t)
+	policyFile := writePermissivePolicy(t, mockServer)
+
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start visor: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	w := bufio.NewWriter(stdin)
+	r := bufio.NewReader(stdout)
+
+	initMsg := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
+		},
+	}
+	_ = sendMessage(w, initMsg)
+	_, _ = readMessage(r)
+
+	initDone := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
+	_ = sendMessage(w, initDone)
+
+	notifCall := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "file_read",
+			"arguments": map[string]any{"path": "/tmp/bypass-attempt"},
+		},
+	}
+	if err := sendMessage(w, notifCall); err != nil {
+		t.Fatalf("send notification tools/call: %v", err)
+	}
+
+	stdoutFile, ok := stdout.(*os.File)
+	if !ok {
+		t.Fatalf("stdout pipe is not *os.File")
+	}
+	if err := stdoutFile.SetReadDeadline(time.Now().Add(750 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	_, err = readMessage(r)
+	_ = stdoutFile.SetReadDeadline(time.Time{})
+	if err == nil {
+		t.Fatal("notification tools/call must not produce a client response")
+	}
+
+	toolCall := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "file_read",
+			"arguments": map[string]any{"path": "/tmp/ok"},
+		},
+	}
+	if err := sendMessage(w, toolCall); err != nil {
+		t.Fatalf("send request tools/call: %v", err)
+	}
+
+	resp, err := readMessage(r)
+	if err != nil {
+		t.Fatalf("read request tools/call response: %v", err)
+	}
+	if resp["error"] != nil {
+		t.Fatalf("unexpected error on valid tools/call: %v", resp["error"])
+	}
 }
 
 func TestProxyIntegrationPing(t *testing.T) {

@@ -43,7 +43,10 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 - Invalid deny/chain/redaction regexes and unknown rule types are not fully fail-closed at `serve` time
 - Declared destination fields are not enforced; path rules omit `uri`, and basename-only sensitive-file matching has gaps
 - OTLP `policy.reason`, dashboard/trace data, and pre-logger SIEM/webhook events can expose values not removed by configured redaction
-- `tools/call` notifications without IDs and malformed envelopes can bypass interception
+- Notification-form `tools/call` is blocked on stdio and remote client paths, including the post-initialize handshake slot (no relay, no JSON-RPC response).
+- Recognizable malformed `tools/call` envelopes with an `id` receive an error response and are not relayed; unrelated invalid JSON is still forwarded unchanged.
+- Duplicate `method` keys where any value resolves to `tools/call` are blocked before relay.
+- JSON-RPC batches containing a `tools/call` element are blocked before relay; non-tools batches forward unchanged.
 - Strict lint is not a complete enforcement gate; the linter-only composite rule passes, and `--no-warnings` can neutralize strict warning failures
 
 ### Hardening Recommendations

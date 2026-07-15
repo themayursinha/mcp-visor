@@ -109,7 +109,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Prompt injection escalates tool access | Critical | High | For intercepted request-form calls, the deterministic engine evaluates tool name, server, and arguments rather than prompt text. Protocol bypass gaps remain separate risks. |
 | Tool chain escalation | High | Medium | Chain detector identifies dangerous Read→Send sequences regardless of individual tool risk levels. |
 | Config file escalation | Critical | Low | If attacker gains write access to visor config, they can allow any tool. v1 assumes filesystem security. |
-| Approval bypass | High | Low | For intercepted request-form calls, approval is enforced by the proxy rather than delegated to the client. Notification/malformed bypasses remain open. |
+| Approval bypass | High | Low | For intercepted request-form calls, approval is enforced by the proxy rather than delegated to the client. Notification-form `tools/call` is blocked at the envelope gate. |
 | Encoding bypass of redaction | Medium | Low | Attacker might try base64-encode secrets to bypass regex detection. v1 regex scans raw strings; does not decode. |
 
 ## Control Matrix
@@ -271,9 +271,11 @@ Policy `deny_path` / `allow_path` rules do not inspect `uri`. Built-in sensitive
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
 
-### 16. Notification-Form `tools/call` Bypass
+### 16. Notification-Form `tools/call` (mitigated)
 
-Interception currently returns early for JSON-RPC notifications without an `id`, before checking the `tools/call` method. A server that executes notification-form tool calls can therefore receive them without policy, redaction, approval, taint, chain, or audit enforcement. Malformed request envelopes can also be forwarded.
+`ClassifyClientEnvelope`, `enforceHandshakeEnvelope`, and `interceptClientToServerEnvelope` block `tools/call` messages without a response `id` on stdio and remote client paths, including the post-initialize handshake slot. A denied handshake-slot message terminates the handshake. The proxy does not send a JSON-RPC response to true notifications; it records a deterministic denial via audit and metrics without relaying to the MCP server. Non-tools notifications (for example `notifications/initialized`) still forward unchanged.
+
+**Remaining limitation:** unrelated invalid JSON that cannot be recognized as a `tools/call` attempt is still forwarded unchanged. Per-item mixed-batch authorization and response aggregation are not yet implemented.
 
 ### 17. Strict Lint Is Not a Complete Gate
 

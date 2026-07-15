@@ -461,7 +461,7 @@ These patterns are built into the redaction engine and active by default:
 
 ## Decision Model
 
-Every valid JSON-RPC `tools/call` request with an `id` reaches a terminal `allow`, `deny`, or `require_approval` decision. Notification-form calls and malformed envelopes currently bypass this path. `redact_then_allow` is also used as an input-redaction audit label before the terminal policy decision:
+Every valid JSON-RPC `tools/call` request with an `id` reaches a terminal `allow`, `deny`, or `require_approval` decision. Notification-form `tools/call` is blocked at the envelope gate (no relay). Recognizable malformed `tools/call` attempts with an `id` fail closed with an error response. `redact_then_allow` is also used as an input-redaction audit label before the terminal policy decision:
 
 | Decision | Meaning |
 |----------|---------|

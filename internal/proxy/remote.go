@@ -11,7 +11,6 @@ import (
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
-	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/transport"
 )
 
@@ -157,6 +156,9 @@ func (p *Proxy) runRemoteHandshake(ctx context.Context, client *mcp.Parser, remo
 	if err != nil {
 		return fmt.Errorf("read initialized notification: %w", err)
 	}
+	if err := p.enforceHandshakeEnvelope(raw, client); err != nil {
+		return err
+	}
 	notif, err := client.DecodeNotification(raw)
 	if err != nil {
 		p.logger.Warn("decode initialized notification failed, forwarding raw", "error", err)
@@ -184,7 +186,7 @@ func (p *Proxy) relayClientToRemoteServer(ctx context.Context, client *mcp.Parse
 			return fmt.Errorf("read from client: %w", err)
 		}
 
-		modified, action := p.interceptAndModifyRemote(raw, client, remote)
+		modified, action := p.interceptAndModifyRemote(raw, client)
 		if action == "denied" {
 			continue
 		}
@@ -197,31 +199,13 @@ func (p *Proxy) relayClientToRemoteServer(ctx context.Context, client *mcp.Parse
 	}
 }
 
-func (p *Proxy) interceptAndModifyRemote(raw json.RawMessage, client *mcp.Parser, remote transport.Transport) (json.RawMessage, string) {
-	req, err := client.DecodeRequest(raw)
-	if err != nil || req.IsNotification() {
-		return raw, "forward"
-	}
-
-	if req.Method != mcp.MethodToolsCall {
-		return raw, "forward"
-	}
-
-	var callReq mcp.ToolsCallRequest
-	if err := json.Unmarshal(req.Params, &callReq); err != nil {
-		resp := mcp.NewErrorResponse(req.ID, -32000, "invalid tools/call parameters")
-		_ = encodeAndForwardToClient(resp, client)
-		p.logDenied(serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerURL), "", nil, "invalid tools/call parameters", policy.RiskUnknown)
-		return raw, "denied"
-	}
-
-	serverName := p.cfg.ServerName
+func (p *Proxy) interceptAndModifyRemote(raw json.RawMessage, client *mcp.Parser) (json.RawMessage, string) {
+	serverName := serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerURL)
 	respond := func(id any, message string) {
 		resp := mcp.NewErrorResponse(id, -32000, message)
 		_ = encodeAndForwardToClient(resp, client)
 	}
-	originalRaw := raw
-	return p.processToolsCall(req, callReq, raw, originalRaw, serverName, respond)
+	return p.interceptClientToServerEnvelope(raw, serverName, respond)
 }
 
 func (p *Proxy) relayRemoteServerToClient(ctx context.Context, remote transport.Transport, client *mcp.Parser) error {
@@ -262,5 +246,5 @@ func encodeAndForwardToClient(resp mcp.Response, client *mcp.Parser) error {
 	if err != nil {
 		return err
 	}
-	return client.EncodeRaw(data)
+	return client.EncodeRaw(append(data, '\n'))
 }
