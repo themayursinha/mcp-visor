@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -56,6 +57,33 @@ func (p *Proxy) denyToolsCallEnvelope(serverName, toolName, reason string, args 
 		"reason", reason,
 		"session", p.session.ID,
 	)
+}
+
+// enforceHandshakeEnvelope applies the shared envelope gate to the client's
+// post-initialize message. A denied message terminates the handshake.
+func (p *Proxy) enforceHandshakeEnvelope(raw json.RawMessage, client *mcp.Parser) error {
+	serverName, respond := p.handshakeEnvelopeResponder(client)
+	_, action := p.interceptClientToServerEnvelope(raw, serverName, respond)
+	if action == "denied" {
+		return fmt.Errorf("post-initialize message denied")
+	}
+	return nil
+}
+
+func (p *Proxy) handshakeEnvelopeResponder(client *mcp.Parser) (string, toolsCallResponder) {
+	if p.cfg.ServerURL != "" {
+		serverName := serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerURL)
+		respond := func(id any, message string) {
+			resp := mcp.NewErrorResponse(id, -32000, message)
+			_ = encodeAndForwardToClient(resp, client)
+		}
+		return serverName, respond
+	}
+	serverName := serverNameOrDefault(p.cfg.ServerName, p.cfg.ServerCommand)
+	respond := func(id any, message string) {
+		_ = client.EncodeResponse(mcp.NewErrorResponse(id, -32000, message))
+	}
+	return serverName, respond
 }
 
 func toolNameFromToolsCallParams(params json.RawMessage) string {

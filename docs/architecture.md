@@ -126,7 +126,7 @@ tests/
 
 ## Decision Pipeline
 
-Valid JSON-RPC `tools/call` requests with an `id` are classified in `internal/mcp/envelope.go` and enforced in `internal/proxy/client_envelope.go` → `internal/proxy/tools_call.go` (shared by stdio and remote transports). Notification-form `tools/call`, duplicate `method` keys, and JSON-RPC batches containing `tools/call` are blocked before relay. Recognizable malformed `tools/call` attempts with an `id` fail closed. [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the enforced request path:
+Valid JSON-RPC `tools/call` requests with an `id` are classified in `internal/mcp/envelope.go` and enforced in `internal/proxy/client_envelope.go` → `internal/proxy/tools_call.go` (shared by stdio and remote transports). The same envelope gate protects the post-initialize handshake slot. Notification-form `tools/call`, duplicate `method` keys, and JSON-RPC batches containing `tools/call` are blocked before relay. Recognizable malformed `tools/call` attempts with an `id` fail closed. [`docs/policy-model.md`](policy-model.md#evaluation-order) documents the enforced request path:
 
 ```
 intercepted tools/call

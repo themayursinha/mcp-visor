@@ -273,7 +273,7 @@ OTLP omits the raw argument map, but `policy.reason` is exported without redacti
 
 ### 16. Notification-Form `tools/call` (mitigated)
 
-`ClassifyClientEnvelope` and `interceptClientToServerEnvelope` block `tools/call` messages without a response `id` on stdio and remote client paths. The proxy does not send a JSON-RPC response to true notifications; it records a deterministic denial via audit and metrics without relaying to the MCP server. Non-tools notifications (for example `notifications/initialized`) still forward unchanged.
+`ClassifyClientEnvelope`, `enforceHandshakeEnvelope`, and `interceptClientToServerEnvelope` block `tools/call` messages without a response `id` on stdio and remote client paths, including the post-initialize handshake slot. A denied handshake-slot message terminates the handshake. The proxy does not send a JSON-RPC response to true notifications; it records a deterministic denial via audit and metrics without relaying to the MCP server. Non-tools notifications (for example `notifications/initialized`) still forward unchanged.
 
 **Remaining limitation:** unrelated invalid JSON that cannot be recognized as a `tools/call` attempt is still forwarded unchanged. Per-item mixed-batch authorization and response aggregation are not yet implemented.
 

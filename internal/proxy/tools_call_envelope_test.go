@@ -204,6 +204,38 @@ servers:
 	}
 }
 
+func TestInterceptDeniesHandshakeNotificationToolsCall(t *testing.T) {
+	p := New(Config{
+		ServerName: "demo",
+		ServerURL:  "https://example.invalid/mcp",
+		Policy: mustLoadPolicy(t, `version: "1.0"
+default_action: deny`),
+	})
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+
+	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
+	if err := p.enforceHandshakeEnvelope(raw, client); err == nil {
+		t.Fatal("handshake notification tools/call must terminate the handshake")
+	}
+}
+
+func TestInterceptForwardsHandshakeInitialized(t *testing.T) {
+	p := New(Config{
+		ServerName: "demo",
+		ServerURL:  "https://example.invalid/mcp",
+		Policy: mustLoadPolicy(t, `version: "1.0"
+default_action: deny`),
+	})
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+
+	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
+	if err := p.enforceHandshakeEnvelope(raw, client); err != nil {
+		t.Fatalf("handshake initialized notification must forward: %v", err)
+	}
+}
+
 func TestDenyNotificationToolsCallDoesNotLeakArgumentsInAudit(t *testing.T) {
 	auditPath := t.TempDir() + "/audit.jsonl"
 	p := New(Config{

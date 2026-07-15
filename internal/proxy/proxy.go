@@ -344,6 +344,9 @@ func (p *Proxy) runHandshake(client, server *mcp.Parser) error {
 	if err != nil {
 		return fmt.Errorf("read initialized notification: %w", err)
 	}
+	if err := p.enforceHandshakeEnvelope(raw, client); err != nil {
+		return err
+	}
 	notif, err := client.DecodeNotification(raw)
 	if err != nil {
 		p.logger.Warn("decode initialized notification failed, forwarding raw", "error", err)

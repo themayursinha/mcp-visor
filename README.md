@@ -28,7 +28,7 @@ MCP Visor adds that boundary at the MCP `tools/call` layer:
 AI agent → MCP Visor → policy decision → MCP server
 ```
 
-Valid `tools/call` requests with IDs are evaluated before relay. Notification-form `tools/call` is dropped without response; duplicate `method` keys and JSON-RPC batches containing `tools/call` are blocked before relay. Non-tools MCP notifications and batches still forward unchanged.
+Valid `tools/call` requests with IDs are evaluated before relay. Notification-form `tools/call` is dropped without response, including if sent in the post-initialize handshake slot. Duplicate `method` keys and JSON-RPC batches containing `tools/call` are blocked before relay. Non-tools MCP notifications and batches still forward unchanged.
 
 ## Install
 
