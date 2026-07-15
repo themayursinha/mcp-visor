@@ -298,7 +298,7 @@ The policy engine uses exact match, prefix/suffix, regex, and rule-chain logic. 
 
 ## Runtime Decision Examples
 
-See [docs/action-boundary-demo.md](action-boundary-demo.md) and [examples/demo-runner/](../examples/demo-runner/) for the two-minute stateful authorization proof:
+See [examples/demo-runner/](../examples/demo-runner/) for the two-minute stateful authorization proof:
 
 1. **Allow**: `file_read` on a benign path succeeds.
 2. **Taint**: `file_read` on a sensitive source marks the session `sensitive_file_accessed`.
