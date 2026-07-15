@@ -243,5 +243,5 @@ func encodeAndForwardToClient(resp mcp.Response, client *mcp.Parser) error {
 	if err != nil {
 		return err
 	}
-	return client.EncodeRaw(data)
+	return client.EncodeRaw(append(data, '\n'))
 }

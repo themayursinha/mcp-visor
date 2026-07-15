@@ -70,6 +70,22 @@ func TestClassifyClientEnvelopeDeniesTypedDuplicateNotificationToolsCall(t *test
 	}
 }
 
+func TestClassifyClientEnvelopeDeniesDuplicateMethodWhenToolsCallAppearsLast(t *testing.T) {
+	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"ping","method":"tools/call","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeToolsCallNotification {
+		t.Fatalf("kind=%v want notification deny when duplicate tools/call appears last", got.Kind)
+	}
+}
+
+func TestClassifyClientEnvelopeDeniesDuplicateMethodWhenToolsCallAppearsLastWithID(t *testing.T) {
+	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"ping","method":"tools/call","id":1,"params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeToolsCallMalformed {
+		t.Fatalf("kind=%v want malformed deny when duplicate tools/call appears last with id", got.Kind)
+	}
+}
+
 func TestClassifyClientEnvelopeDeniesDuplicateMethodWhenToolsCallAppearsFirst(t *testing.T) {
 	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"tools/call","method":"ping","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
 	got := ClassifyClientEnvelope(raw)

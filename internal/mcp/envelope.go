@@ -23,6 +23,7 @@ type ClientEnvelope struct {
 
 type clientEnvelopeScan struct {
 	hasToolsCallMethod bool
+	methodCount        int
 	id                 json.RawMessage
 }
 
@@ -46,6 +47,9 @@ func ClassifyClientEnvelope(raw json.RawMessage) ClientEnvelope {
 			if !scan.hasToolsCallMethod {
 				return ClientEnvelope{Kind: EnvelopeForward}
 			}
+			return classifyScannedToolsCall(scan)
+		}
+		if scan.methodCount > 1 {
 			return classifyScannedToolsCall(scan)
 		}
 		if req.IsNotification() {
@@ -89,6 +93,7 @@ func scanClientEnvelope(data []byte) clientEnvelopeScan {
 
 		switch key {
 		case "method":
+			scan.methodCount++
 			var method string
 			if err := json.Unmarshal(value, &method); err == nil && method == MethodToolsCall {
 				scan.hasToolsCallMethod = true

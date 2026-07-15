@@ -130,6 +130,26 @@ default_action: deny`)})
 	}
 }
 
+func TestInterceptMalformedToolsCallWithIDRemoteResponseIsLineDelimited(t *testing.T) {
+	p := New(Config{
+		ServerName: "demo",
+		ServerURL:  "https://example.invalid/mcp",
+		Policy: mustLoadPolicy(t, `version: "1.0"
+default_action: deny`),
+	})
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+
+	raw := json.RawMessage(`{"jsonrpc":"1.0","id":4,"method":"tools/call","params":{"name":"file_read"}}` + "\n")
+	_, action := p.interceptAndModifyRemote(raw, client)
+	if action != "denied" {
+		t.Fatalf("action=%q want denied", action)
+	}
+	if !bytes.HasSuffix(out.Bytes(), []byte("\n")) {
+		t.Fatalf("remote error response must be newline-delimited, got %q", out.String())
+	}
+}
+
 func TestInterceptMalformedToolsCallParamsUsesExistingPath(t *testing.T) {
 	p := New(Config{ServerName: "demo", Policy: mustLoadPolicy(t, `version: "1.0"
 default_action: deny`)})
