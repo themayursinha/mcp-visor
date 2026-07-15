@@ -51,7 +51,10 @@ func ClassifyClientEnvelope(raw json.RawMessage) ClientEnvelope {
 	}
 
 	var peek envelopePeek
-	if err := json.Unmarshal(data, &peek); err != nil || peek.Method != MethodToolsCall {
+	// Unmarshal may report an earlier type error while retaining a later duplicate
+	// method. Use the partial value only to fail closed on tools/call attempts.
+	_ = json.Unmarshal(data, &peek)
+	if peek.Method != MethodToolsCall {
 		return ClientEnvelope{Kind: EnvelopeForward}
 	}
 	if !peek.hasResponseID() {

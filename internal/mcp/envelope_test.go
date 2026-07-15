@@ -62,6 +62,14 @@ func TestClassifyClientEnvelopeMalformedToolsCallPeekWithID(t *testing.T) {
 	}
 }
 
+func TestClassifyClientEnvelopeDeniesTypedDuplicateNotificationToolsCall(t *testing.T) {
+	raw := json.RawMessage(`{"jsonrpc":"2.0","method":123,"method":"tools/call","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
+	got := ClassifyClientEnvelope(raw)
+	if got.Kind != EnvelopeToolsCallNotification {
+		t.Fatalf("kind=%v want notification deny for typed duplicate method", got.Kind)
+	}
+}
+
 func TestHasResponseID(t *testing.T) {
 	cases := []struct {
 		name string
