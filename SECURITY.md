@@ -30,16 +30,15 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 ### Known Limitations
 
 - Policy file integrity relies on host filesystem permissions
-- No complete per-call audit ledger; plain allows and output-only redaction lack standalone events
-- Audit hash linkage resets for each logger instance and on file reopen
+- Output-only redaction lacks a dedicated JSONL event; plain allows emit `tool_call_allowed`
+- Audit hash linkage recovers across reopen for healthy files; incomplete/corrupt tails fail closed for `NewLogger` (MustLogger may fall back to stderr)
 - Audit write failure can leave a later stored event referencing an event that was not persisted
-- Policy hot reload does not atomically refresh redaction and approval settings
-- Remote HTTP+SSE is experimental; post-handshake relay and complete mTLS configuration need hardening
-- Built-in TCP/UDP SIEM export is plaintext and uses a reduced pre-logger event that does not inherit JSONL logger redaction or hash-link fields
+- Built-in TCP/UDP SIEM export is plaintext and uses a reduced event envelope that omits hash-link fields and arguments; do not use it as the sole retention ledger
 - No end-to-end cryptographic attestation of all policy decisions
 - Session state is ephemeral (in-memory, lost on restart)
 - No built-in rate limiting or DoS protection
 - Approval is file-based; an attacker with write access to the approval directory can forge approvals
+- Durable approval engine persists pending/receipts under a state directory but is not yet the default serve path
 - Invalid deny/chain/redaction regexes and unknown rule types are not fully fail-closed at `serve` time
 - Declared destination fields are not enforced; path rules omit `uri`, and basename-only sensitive-file matching has gaps
 - OTLP `policy.reason`, dashboard/trace data, and pre-logger SIEM/webhook events can expose values not removed by configured redaction
