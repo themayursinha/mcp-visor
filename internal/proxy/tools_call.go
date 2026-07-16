@@ -8,6 +8,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
+	"github.com/themayursinha/mcp-visor/internal/redaction"
 )
 
 // toolsCallResponder sends JSON-RPC errors back to the MCP client.
@@ -40,17 +41,8 @@ func (p *Proxy) processToolsCall(
 			"fields", redactionResult.RedactedFields,
 			"session", p.session.ID,
 		)
-		p.logAudit(audit.Event{
-			EventType: audit.EventToolAllowed,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  "redact_then_allow",
-			Reason:    fmt.Sprintf("redacted fields: %v", redactionResult.RedactedFields),
-			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
-		})
+		// Do not audit here: emit a single terminal decision event after policy
+		// evaluation so allow/deny/approval paths stay one-event-per-call.
 		rewritten, err := p.rewriteArgs(raw, redactedArgs)
 		if err == nil {
 			raw = rewritten
@@ -72,7 +64,7 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(policy.ActionDeny),
-			Reason:    reason,
+			Reason:    withRedactionNote(reason, redactionResult),
 			RiskLevel: string(risk),
 		})
 		p.logger.Warn("sensitive file denied",
@@ -129,7 +121,7 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(decision.Action),
-			Reason:    decision.Reason,
+			Reason:    withRedactionNote(decision.Reason, redactionResult),
 			RiskLevel: string(risk),
 		}
 		if egressTriggered {
@@ -179,6 +171,7 @@ func (p *Proxy) processToolsCall(
 	case policy.ActionAllow:
 		p.metrics.IncrementAllowed()
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		reason := withRedactionNote(decision.Reason, redactionResult)
 		p.logAudit(audit.Event{
 			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
@@ -187,15 +180,16 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(policy.ActionAllow),
-			Reason:    decision.Reason,
+			Reason:    reason,
 			RiskLevel: string(risk),
 		})
-		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	default:
 		p.metrics.IncrementAllowed()
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		reason := withRedactionNote(decision.Reason, redactionResult)
 		p.logAudit(audit.Event{
 			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
@@ -204,10 +198,21 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(policy.ActionAllow),
-			Reason:    decision.Reason,
+			Reason:    reason,
 			RiskLevel: string(risk),
 		})
-		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 	}
+}
+
+func withRedactionNote(reason string, result redaction.Result) string {
+	if !result.Redacted || len(result.RedactedFields) == 0 {
+		return reason
+	}
+	note := fmt.Sprintf("redacted fields: %v", result.RedactedFields)
+	if reason == "" {
+		return note
+	}
+	return reason + "; " + note
 }
