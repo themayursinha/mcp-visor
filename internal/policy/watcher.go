@@ -10,10 +10,15 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// ReloadHook runs after a successful policy load and atomic swap of
+// Watcher.policy/registry. Hooks must not call Reload() reentrantly.
+type ReloadHook func(newPolicy *Policy)
+
 type Watcher struct {
 	mu       sync.RWMutex
 	policy   *Policy
 	registry *Registry
+	hooks    []ReloadHook
 
 	path   string
 	logger *slog.Logger
@@ -121,7 +126,14 @@ func (w *Watcher) reload() {
 	w.mu.Lock()
 	w.policy = pol
 	w.registry = NewRegistry(pol)
+	hooks := append([]ReloadHook(nil), w.hooks...)
 	w.mu.Unlock()
+
+	for _, hook := range hooks {
+		if hook != nil {
+			hook(pol)
+		}
+	}
 
 	w.logger.Info("policy hot-reloaded",
 		"path", w.path,
@@ -129,6 +141,17 @@ func (w *Watcher) reload() {
 		"servers", len(pol.Servers),
 		"chain_rules", len(pol.ToolChains),
 	)
+}
+
+// OnReload registers a hook invoked after each successful reload.
+// Hooks run outside the watcher lock so they may call Current().
+func (w *Watcher) OnReload(hook ReloadHook) {
+	if hook == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.hooks = append(w.hooks, hook)
 }
 
 func (w *Watcher) Reload() {

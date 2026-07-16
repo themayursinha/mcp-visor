@@ -60,15 +60,19 @@ func TestJSONFormat(t *testing.T) {
 	}
 
 	event := audit.Event{
-		Timestamp: "2026-05-26T10:00:00Z",
-		EventType: audit.EventToolAllowed,
-		SessionID: "sess-002",
-		AgentID:   "agent-002",
-		Server:    "filesystem",
-		Tool:      "file_read",
-		Decision:  "allow",
-		Reason:    "within allowed paths",
-		RiskLevel: "medium",
+		Timestamp:  "2026-05-26T10:00:00Z",
+		EventType:  audit.EventToolAllowed,
+		SessionID:  "sess-002",
+		AgentID:    "agent-002",
+		Server:     "filesystem",
+		Tool:       "file_read",
+		Decision:   "allow",
+		Reason:     "within allowed paths",
+		RiskLevel:  "medium",
+		Hash:       "abc",
+		PrevHash:   "def",
+		ChainIndex: 9,
+		Arguments:  map[string]any{"token": "sk-secret"},
 	}
 
 	output := exp.formatJSON(event)
@@ -84,6 +88,16 @@ func TestJSONFormat(t *testing.T) {
 	}
 	if envelope["hostname"] != "test-host" {
 		t.Errorf("hostname: got %v", envelope["hostname"])
+	}
+	// Reduced export contract: no hash-chain fields and no arguments payload.
+	for _, key := range []string{"hash", "prev_hash", "chain_index", "arguments"} {
+		if _, ok := envelope[key]; ok {
+			t.Errorf("SIEM JSON export must omit %s (reduced/pre-logger contract)", key)
+		}
+	}
+	// Reason is copied as-is; built-in SIEM does not re-redact.
+	if envelope["reason"] != "within allowed paths" {
+		t.Errorf("reason: got %v", envelope["reason"])
 	}
 }
 

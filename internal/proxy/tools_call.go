@@ -33,7 +33,7 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 	}
 
-	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
+	redactedArgs, redactionResult := p.currentRedactor().RedactArgs(argsMap)
 	if redactionResult.Redacted {
 		p.metrics.AddBytesRedacted(int64(len(raw)))
 		p.logger.Info("arguments redacted",
@@ -50,7 +50,7 @@ func (p *Proxy) processToolsCall(
 	}
 
 	sensitivePath := p.extractPath(callReq)
-	if sensitivePath != "" && p.redactor.IsSensitiveFile(sensitivePath) {
+	if sensitivePath != "" && p.currentRedactor().IsSensitiveFile(sensitivePath) {
 		reason := fmt.Sprintf("sensitive file: %s", sensitivePath)
 		respond(req.ID, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
 		p.metrics.IncrementDenied()

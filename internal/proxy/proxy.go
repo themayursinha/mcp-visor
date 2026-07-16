@@ -32,6 +32,7 @@ type Proxy struct {
 	logger         *slog.Logger
 	engine         *policy.Engine
 	audit          *audit.Logger
+	runtimeMu      sync.RWMutex
 	redactor       *redaction.Engine
 	approval       *approval.Engine
 	tracer         trace.TraceLogger
@@ -131,7 +132,7 @@ func New(cfg Config) *Proxy {
 	siemExp := cfg.buildSIEMExporter()
 	approvalSigner := cfg.buildApprovalSigner()
 
-	return &Proxy{
+	proxy := &Proxy{
 		cfg:     cfg,
 		session: NewSession(cfg.SessionID, cfg.ClientID),
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -146,6 +147,8 @@ func New(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
+	proxy.wirePolicyReload()
+	return proxy
 }
 
 func NewWithTracing(cfg Config) *Proxy {
@@ -197,8 +200,65 @@ func NewWithTracing(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
+	proxy.wirePolicyReload()
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
+}
+
+// wirePolicyReload attaches atomic runtime surface refresh to engine reloads.
+func (p *Proxy) wirePolicyReload() {
+	if p.engine == nil {
+		return
+	}
+	p.engine.OnReload(p.applyPolicyRuntime)
+}
+
+// applyPolicyRuntime atomically refreshes redactor, audit patterns, and
+// approval timeout from a newly loaded policy. Engine rules/taints/registry
+// are already live via the watcher (or Engine.Reload) before hooks run.
+func (p *Proxy) applyPolicyRuntime(pol *policy.Policy) {
+	if pol == nil {
+		return
+	}
+	newRedactor := redaction.NewEngine(pol.Redaction)
+	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
+
+	p.runtimeMu.Lock()
+	p.redactor = newRedactor
+	if p.approval != nil {
+		p.approval.SetTimeout(timeout)
+	}
+	p.runtimeMu.Unlock()
+
+	if p.audit != nil {
+		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
+	}
+
+	p.logger.Info("policy runtime surfaces reloaded",
+		"default_action", pol.DefaultAction,
+		"redaction_patterns", len(pol.Redaction.Patterns),
+		"approval_timeout_seconds", pol.Settings.ApprovalTimeoutSecs,
+	)
+	p.logAudit(audit.Event{
+		EventType: audit.EventPolicyReloaded,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    p.cfg.ServerName,
+		Message:   "policy runtime surfaces reloaded",
+		Reason:    fmt.Sprintf("default_action=%s approval_timeout_seconds=%d redaction_patterns=%d", pol.DefaultAction, pol.Settings.ApprovalTimeoutSecs, len(pol.Redaction.Patterns)),
+	})
+}
+
+func (p *Proxy) currentRedactor() *redaction.Engine {
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	return p.redactor
+}
+
+func (p *Proxy) currentApproval() *approval.Engine {
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	return p.approval
 }
 
 func (p *Proxy) Run(ctx context.Context) error {
@@ -505,9 +565,10 @@ func (p *Proxy) redactServerResponse(raw json.RawMessage) json.RawMessage {
 
 	modified := false
 	maxOutput := p.engine.Policy().Settings.MaxOutputSizeBytes
+	redactor := p.currentRedactor()
 	for i, content := range result.Content {
 		if content.Text != "" {
-			redacted := p.redactor.RedactOutput(content.Text)
+			redacted := redactor.RedactOutput(content.Text)
 			if maxOutput > 0 && len(redacted) > maxOutput {
 				redacted = redacted[:maxOutput] + fmt.Sprintf("\n[TRUNCATED: output exceeded %d bytes]", maxOutput)
 			}
@@ -777,7 +838,7 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 		ChainContextHash:     evidence.ChainContextHash,
 	})
 
-	approved, err := p.approval.RequestApproval(approvalReq)
+	approved, err := p.currentApproval().RequestApproval(approvalReq)
 	if err != nil || !approved {
 		denyReason := fmt.Sprintf("approval denied: %v", err)
 		p.logAudit(audit.Event{

@@ -19,6 +19,7 @@ type Engine struct {
 	policy   *Policy
 	registry *Registry
 	logger   *slog.Logger
+	hooks    []ReloadHook
 
 	watcher  *Watcher
 	clientID string
@@ -53,11 +54,37 @@ func (e *Engine) SetClientID(id string) {
 	e.clientID = id
 }
 
-func (e *Engine) Reload(p *Policy) {
+// OnReload registers a hook for successful policy reloads.
+// When a watcher is present, hooks attach to the watcher so filesystem
+// reloads refresh dependent runtime surfaces (redactor, audit patterns, approval).
+// Without a watcher, hooks fire from Engine.Reload.
+func (e *Engine) OnReload(hook ReloadHook) {
+	if hook == nil {
+		return
+	}
+	if e.watcher != nil {
+		e.watcher.OnReload(hook)
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.hooks = append(e.hooks, hook)
+}
+
+func (e *Engine) Reload(p *Policy) {
+	if p == nil {
+		return
+	}
+	e.mu.Lock()
 	e.policy = p
 	e.registry = NewRegistry(p)
+	hooks := append([]ReloadHook(nil), e.hooks...)
+	e.mu.Unlock()
+	for _, hook := range hooks {
+		if hook != nil {
+			hook(p)
+		}
+	}
 }
 
 func (e *Engine) Close() {

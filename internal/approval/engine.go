@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type Request struct {
 }
 
 type Engine struct {
+	mu      sync.RWMutex
 	dir     string
 	timeout time.Duration
 	cli     bool
@@ -59,6 +61,21 @@ func (e *Engine) IsEnabled() bool {
 	return e.dir != "" || e.cli
 }
 
+// SetTimeout updates the approval wait timeout for subsequent requests.
+// Safe for concurrent use with RequestApproval (hot policy reload).
+func (e *Engine) SetTimeout(d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.timeout = d
+}
+
+// Timeout returns the current approval wait timeout.
+func (e *Engine) Timeout() time.Duration {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.timeout
+}
+
 func (e *Engine) RequestApproval(req Request) (bool, error) {
 	if e.cli {
 		return e.requestCLIApproval(req)
@@ -72,13 +89,15 @@ func (e *Engine) RequestApproval(req Request) (bool, error) {
 		return false, fmt.Errorf("write approval request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
+	timeout := e.Timeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	return e.waitForDecision(ctx, req.ID)
+	return e.waitForDecision(ctx, req.ID, timeout)
 }
 
 func (e *Engine) requestCLIApproval(req Request) (bool, error) {
+	timeout := e.Timeout()
 	fmt.Fprintf(os.Stderr, "\n========================================\n")
 	fmt.Fprintf(os.Stderr, " APPROVAL REQUIRED\n")
 	fmt.Fprintf(os.Stderr, "========================================\n")
@@ -95,7 +114,7 @@ func (e *Engine) requestCLIApproval(req Request) (bool, error) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "========================================\n")
-	fmt.Fprintf(os.Stderr, " Timeout in %v. Type 'yes' to approve, anything else to deny.\n", e.timeout)
+	fmt.Fprintf(os.Stderr, " Timeout in %v. Type 'yes' to approve, anything else to deny.\n", timeout)
 	fmt.Fprintf(os.Stderr, "> ")
 
 	done := make(chan bool, 1)
@@ -112,9 +131,9 @@ func (e *Engine) requestCLIApproval(req Request) (bool, error) {
 	}()
 
 	select {
-	case <-time.After(e.timeout):
+	case <-time.After(timeout):
 		fmt.Fprintf(os.Stderr, "\nApproval timed out. Denied.\n")
-		return false, fmt.Errorf("approval timed out after %v", e.timeout)
+		return false, fmt.Errorf("approval timed out after %v", timeout)
 	case err := <-errCh:
 		return false, fmt.Errorf("read input: %w", err)
 	case approved := <-done:
@@ -136,7 +155,7 @@ func (e *Engine) writeRequest(req Request) error {
 	return os.WriteFile(reqPath, data, 0o600)
 }
 
-func (e *Engine) waitForDecision(ctx context.Context, id string) (bool, error) {
+func (e *Engine) waitForDecision(ctx context.Context, id string, timeout time.Duration) (bool, error) {
 	okPath := filepath.Join(e.dir, fmt.Sprintf("req-%s.ok", id))
 	noPath := filepath.Join(e.dir, fmt.Sprintf("req-%s.no", id))
 
@@ -147,7 +166,7 @@ func (e *Engine) waitForDecision(ctx context.Context, id string) (bool, error) {
 		select {
 		case <-ctx.Done():
 			e.cleanup(id)
-			return false, fmt.Errorf("approval timed out after %v", e.timeout)
+			return false, fmt.Errorf("approval timed out after %v", timeout)
 		case <-ticker.C:
 			if _, err := os.Stat(okPath); err == nil {
 				e.cleanup(id)
