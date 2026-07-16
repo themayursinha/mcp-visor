@@ -123,17 +123,24 @@ func (w *Watcher) reload() {
 		return
 	}
 
-	w.mu.Lock()
-	w.policy = pol
-	w.registry = NewRegistry(pol)
-	hooks := append([]ReloadHook(nil), w.hooks...)
-	w.mu.Unlock()
+	reg := NewRegistry(pol)
 
+	// Side-effect hooks run BEFORE publishing Current() so concurrent evaluators
+	// never see a new policy paired with stale redactor/audit surfaces.
+	// During hooks, Current() still returns the previous policy (fail-closed).
+	w.mu.RLock()
+	hooks := append([]ReloadHook(nil), w.hooks...)
+	w.mu.RUnlock()
 	for _, hook := range hooks {
 		if hook != nil {
 			hook(pol)
 		}
 	}
+
+	w.mu.Lock()
+	w.policy = pol
+	w.registry = reg
+	w.mu.Unlock()
 
 	w.logger.Info("policy hot-reloaded",
 		"path", w.path,

@@ -105,33 +105,27 @@ func MustLogger(path string) *Logger {
 }
 
 func recoverChainState(path string) (prevHash string, chainIndex uint64, err error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", 0, nil
 		}
-		return "", 0, fmt.Errorf("read audit log for chain recovery: %w", err)
+		return "", 0, fmt.Errorf("open audit log for chain recovery: %w", err)
 	}
-	if len(data) == 0 {
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return "", 0, fmt.Errorf("stat audit log: %w", err)
+	}
+	if st.Size() == 0 {
 		return "", 0, nil
-	}
-	if data[len(data)-1] != '\n' {
-		return "", 0, fmt.Errorf("%w: %s", ErrIncompleteAuditTail, path)
 	}
 
-	// Drop trailing newline and locate the last non-empty line.
-	content := bytes.TrimRight(data, "\n")
-	if len(content) == 0 {
-		return "", 0, nil
+	lastLine, err := readLastCompleteLine(f, st.Size())
+	if err != nil {
+		return "", 0, err
 	}
-	idx := bytes.LastIndexByte(content, '\n')
-	var lastLine []byte
-	if idx < 0 {
-		lastLine = content
-	} else {
-		lastLine = content[idx+1:]
-	}
-	lastLine = bytes.TrimSpace(lastLine)
 	if len(lastLine) == 0 {
 		return "", 0, nil
 	}
@@ -155,6 +149,57 @@ func recoverChainState(path string) (prevHash string, chainIndex uint64, err err
 		return "", 0, fmt.Errorf("%w: last record hash mismatch", ErrCorruptAuditRecord)
 	}
 	return stored, last.ChainIndex + 1, nil
+}
+
+// readLastCompleteLine seeks from EOF and returns the last newline-terminated
+// JSONL record without loading the full file into memory.
+func readLastCompleteLine(f *os.File, size int64) ([]byte, error) {
+	if size <= 0 {
+		return nil, nil
+	}
+
+	buf := make([]byte, 1)
+	if _, err := f.ReadAt(buf, size-1); err != nil {
+		return nil, fmt.Errorf("read audit log tail: %w", err)
+	}
+	if buf[0] != '\n' {
+		return nil, fmt.Errorf("%w", ErrIncompleteAuditTail)
+	}
+
+	const chunkSize int64 = 64 * 1024
+	var (
+		data      []byte
+		remaining = size
+	)
+	for remaining > 0 {
+		n := chunkSize
+		if remaining < n {
+			n = remaining
+		}
+		remaining -= n
+		chunk := make([]byte, n)
+		if _, err := f.ReadAt(chunk, remaining); err != nil {
+			return nil, fmt.Errorf("read audit log chunk: %w", err)
+		}
+		data = append(chunk, data...)
+		// Need the last line boundary: stop once we have a prior newline or hit SOF.
+		if bytes.Count(data, []byte{'\n'}) >= 2 || remaining == 0 {
+			break
+		}
+	}
+
+	// data ends with '\n' (verified above for the full file; chunks preserve the tip).
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		return nil, fmt.Errorf("%w", ErrIncompleteAuditTail)
+	}
+	content := data[:len(data)-1]
+	if len(content) == 0 {
+		return nil, nil
+	}
+	if idx := bytes.LastIndexByte(content, '\n'); idx >= 0 {
+		return bytes.TrimSpace(content[idx+1:]), nil
+	}
+	return bytes.TrimSpace(content), nil
 }
 
 func (l *Logger) SetRedactionPatterns(patterns []policy.RedactionPattern) {

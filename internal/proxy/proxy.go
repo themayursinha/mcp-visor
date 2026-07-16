@@ -213,9 +213,10 @@ func (p *Proxy) wirePolicyReload() {
 	p.engine.OnReload(p.applyPolicyRuntime)
 }
 
-// applyPolicyRuntime atomically refreshes redactor, audit patterns, and
-// approval timeout from a newly loaded policy. Engine rules/taints/registry
-// are already live via the watcher (or Engine.Reload) before hooks run.
+// applyPolicyRuntime refreshes redactor, audit patterns, and approval timeout.
+// Called from reload hooks BEFORE the new policy becomes visible via
+// Watcher.Current()/Engine.current(), under write lock so concurrent
+// tools/call evaluation (held under runtimeMu.RLock) cannot straddle the swap.
 func (p *Proxy) applyPolicyRuntime(pol *policy.Policy) {
 	if pol == nil {
 		return
@@ -228,11 +229,10 @@ func (p *Proxy) applyPolicyRuntime(pol *policy.Policy) {
 	if p.approval != nil {
 		p.approval.SetTimeout(timeout)
 	}
-	p.runtimeMu.Unlock()
-
 	if p.audit != nil {
 		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
 	}
+	p.runtimeMu.Unlock()
 
 	p.logger.Info("policy runtime surfaces reloaded",
 		"default_action", pol.DefaultAction,

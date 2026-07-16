@@ -25,6 +25,19 @@ func (p *Proxy) processToolsCall(
 	argsMap := extractArgs(callReq.Arguments)
 	p.metrics.IncrementProcessed()
 
+	// Hold a shared barrier with applyPolicyRuntime so a single call cannot
+	// redact under the old redactor and evaluate against a newly published policy.
+	p.runtimeMu.RLock()
+	held := true
+	release := func() {
+		if held {
+			p.runtimeMu.RUnlock()
+			held = false
+		}
+	}
+	defer release()
+	redactor := p.redactor
+
 	if decision := p.evaluateRuntimeLimits(callReq); decision.Action == policy.ActionDeny {
 		respond(req.ID, decision.Reason)
 		p.metrics.IncrementDenied()
@@ -33,7 +46,7 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 	}
 
-	redactedArgs, redactionResult := p.currentRedactor().RedactArgs(argsMap)
+	redactedArgs, redactionResult := redactor.RedactArgs(argsMap)
 	if redactionResult.Redacted {
 		p.metrics.AddBytesRedacted(int64(len(raw)))
 		p.logger.Info("arguments redacted",
@@ -50,7 +63,7 @@ func (p *Proxy) processToolsCall(
 	}
 
 	sensitivePath := p.extractPath(callReq)
-	if sensitivePath != "" && p.currentRedactor().IsSensitiveFile(sensitivePath) {
+	if sensitivePath != "" && redactor.IsSensitiveFile(sensitivePath) {
 		reason := fmt.Sprintf("sensitive file: %s", sensitivePath)
 		respond(req.ID, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
 		p.metrics.IncrementDenied()
@@ -140,6 +153,8 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
+		// Release barrier before blocking approval wait so reloads are not stalled.
+		release()
 		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext)
 		if !outcome.Approved {
 			reason := fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason)

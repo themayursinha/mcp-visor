@@ -359,6 +359,67 @@ func TestNewLoggerRecoversHashChainAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestRecoverChainStateReadsOnlyTailOfLargeLog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.jsonl")
+
+	// Build a multi-megabyte ledger with many prefix lines, then one real tip event.
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pad := strings.Repeat(`{"event_type":"noise","session_id":"x","policy_decision":"allow","hash":"00"}`+"\n", 50_000)
+	if _, err := f.WriteString(pad); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Append a valid tip via the real logger path by recovering then writing.
+	// First recover from noise-only file would fail hash verify — rewrite tip cleanly:
+	tipLogger, err := audit.NewLogger(filepath.Join(dir, "tip-only.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tipLogger.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "tip", Decision: "allow", Tool: "t"})
+	if err := tipLogger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tipLines := readAuditLines(t, filepath.Join(dir, "tip-only.jsonl"))
+	if len(tipLines) != 1 {
+		t.Fatalf("tip lines: %d", len(tipLines))
+	}
+	// Overwrite big file: padding + tip
+	if err := os.WriteFile(path, append([]byte(pad), tipLines[0]+"\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("recover large log: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopened.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "tip", Decision: "deny", Tool: "u"})
+
+	lines := readAuditLines(t, path)
+	last := lines[len(lines)-1]
+	var ev audit.Event
+	if err := json.Unmarshal([]byte(last), &ev); err != nil {
+		t.Fatal(err)
+	}
+	var tip audit.Event
+	if err := json.Unmarshal([]byte(tipLines[0]), &tip); err != nil {
+		t.Fatal(err)
+	}
+	if ev.PrevHash != tip.Hash {
+		t.Fatalf("large-log recovery prev_hash want %q got %q", tip.Hash, ev.PrevHash)
+	}
+	if ev.ChainIndex != tip.ChainIndex+1 {
+		t.Fatalf("large-log recovery chain_index want %d got %d", tip.ChainIndex+1, ev.ChainIndex)
+	}
+}
+
 func TestNewLoggerRejectsIncompleteTrailingLine(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")

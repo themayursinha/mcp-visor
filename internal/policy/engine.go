@@ -76,15 +76,20 @@ func (e *Engine) Reload(p *Policy) {
 		return
 	}
 	e.mu.Lock()
-	e.policy = p
-	e.registry = NewRegistry(p)
 	hooks := append([]ReloadHook(nil), e.hooks...)
 	e.mu.Unlock()
+
+	// Hooks first (refresh redactor/audit/approval), then publish engine state.
 	for _, hook := range hooks {
 		if hook != nil {
 			hook(p)
 		}
 	}
+
+	e.mu.Lock()
+	e.policy = p
+	e.registry = NewRegistry(p)
+	e.mu.Unlock()
 }
 
 func (e *Engine) Close() {
