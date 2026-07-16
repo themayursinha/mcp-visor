@@ -179,12 +179,34 @@ func (p *Proxy) processToolsCall(
 	case policy.ActionAllow:
 		p.metrics.IncrementAllowed()
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		p.logAudit(audit.Event{
+			EventType: audit.EventToolAllowed,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: redactedArgs,
+			Decision:  string(policy.ActionAllow),
+			Reason:    decision.Reason,
+			RiskLevel: string(risk),
+		})
 		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	default:
 		p.metrics.IncrementAllowed()
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		p.logAudit(audit.Event{
+			EventType: audit.EventToolAllowed,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: redactedArgs,
+			Decision:  string(policy.ActionAllow),
+			Reason:    decision.Reason,
+			RiskLevel: string(risk),
+		})
 		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 	}

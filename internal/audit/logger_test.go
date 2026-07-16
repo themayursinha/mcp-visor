@@ -310,6 +310,97 @@ func TestAuditLogHashChain(t *testing.T) {
 	}
 }
 
+func TestNewLoggerRecoversHashChainAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	first, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	first.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-restart", Server: "demo"})
+	first.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-restart", Server: "demo", Tool: "file_read", Decision: "allow"})
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first logger: %v", err)
+	}
+
+	lines := readAuditLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines before reopen, got %d", len(lines))
+	}
+	var lastBefore audit.Event
+	if err := json.Unmarshal([]byte(lines[1]), &lastBefore); err != nil {
+		t.Fatalf("decode last before reopen: %v", err)
+	}
+
+	second, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("reopen NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	second.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "sess-restart", Server: "demo", Tool: "shell_exec", Decision: "deny"})
+
+	after := readAuditLines(t, path)
+	if len(after) != 3 {
+		t.Fatalf("expected 3 lines after reopen write, got %d", len(after))
+	}
+	var continued audit.Event
+	if err := json.Unmarshal([]byte(after[2]), &continued); err != nil {
+		t.Fatalf("decode continued event: %v", err)
+	}
+	if continued.PrevHash != lastBefore.Hash {
+		t.Fatalf("restart prev_hash: want %q, got %q", lastBefore.Hash, continued.PrevHash)
+	}
+	if continued.ChainIndex != lastBefore.ChainIndex+1 {
+		t.Fatalf("restart chain_index: want %d, got %d", lastBefore.ChainIndex+1, continued.ChainIndex)
+	}
+	if got := recomputeAuditHash(t, continued); got != continued.Hash {
+		t.Fatalf("continued hash mismatch: recomputed %q stored %q", got, continued.Hash)
+	}
+}
+
+func TestNewLoggerRejectsIncompleteTrailingLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-partial", Server: "demo"})
+	if err := l.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Simulate a torn write: strip the final newline and leave a partial suffix.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Fatalf("fixture should end with newline")
+	}
+	partial := append(data[:len(data)-1], []byte(`,"torn":tru`)...)
+	if err := os.WriteFile(path, partial, 0o600); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+
+	if _, err := audit.NewLogger(path); err == nil {
+		t.Fatal("expected NewLogger to fail closed on incomplete trailing line")
+	}
+}
+
+func TestNewLoggerRejectsMalformedLastRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	if err := os.WriteFile(path, []byte("{\"event_type\":\"session_started\"}\n{not-json\n"), 0o600); err != nil {
+		t.Fatalf("write malformed: %v", err)
+	}
+	if _, err := audit.NewLogger(path); err == nil {
+		t.Fatal("expected NewLogger to fail closed on malformed last record")
+	}
+}
+
 func recomputeAuditHash(t *testing.T, e audit.Event) string {
 	t.Helper()
 	e.Hash = ""

@@ -311,9 +311,10 @@ func TestAuditLogRedaction(t *testing.T) {
 
 	sendInitMessages(w, r)
 
+	// Synthetic tokens match DefaultRedactionPatterns but are not real credentials.
 	secrets := []string{
-		"sk-abc123def456ghi789jkl012mno345",
-		"ghp_abcdefghijklmnopqrstuvwxyz1234567",
+		"sk-" + strings.Repeat("A", 48),
+		"ghp_" + strings.Repeat("B", 36),
 	}
 
 	for _, secret := range secrets {
@@ -339,10 +340,18 @@ func TestAuditLogRedaction(t *testing.T) {
 		t.Fatalf("read audit log: %v", err)
 	}
 
-	for _, secret := range []string{"sk-", "ghp_"} {
+	for _, secret := range secrets {
 		if strings.Contains(string(data), secret) {
-			t.Errorf("audit log contains unredacted secret pattern '%s'", secret)
+			t.Errorf("audit log contains unredacted secret %q", secret)
 		}
+	}
+	for _, pattern := range []string{"sk-", "ghp_"} {
+		if strings.Contains(string(data), pattern) {
+			t.Errorf("audit log contains unredacted secret pattern %q", pattern)
+		}
+	}
+	if !strings.Contains(string(data), "REDACTED") {
+		t.Error("expected redacted placeholder text in audit log")
 	}
 	t.Log("audit log correctly redacted sensitive patterns")
 }

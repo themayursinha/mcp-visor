@@ -1,9 +1,11 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -11,6 +13,13 @@ import (
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/policy"
+)
+
+var (
+	// ErrIncompleteAuditTail is returned when an existing audit log ends mid-record.
+	ErrIncompleteAuditTail = errors.New("audit log incomplete trailing line")
+	// ErrCorruptAuditRecord is returned when the last complete audit record is invalid.
+	ErrCorruptAuditRecord = errors.New("audit log corrupt last record")
 )
 
 type EventType string
@@ -67,13 +76,19 @@ type Logger struct {
 }
 
 func NewLogger(path string) (*Logger, error) {
+	prevHash, chainIndex, err := recoverChainState(path)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_SYNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
 	return &Logger{
-		path: path,
-		file: f,
+		path:       path,
+		file:       f,
+		prevHash:   prevHash,
+		chainIndex: chainIndex,
 	}, nil
 }
 
@@ -87,6 +102,59 @@ func MustLogger(path string) *Logger {
 		return &Logger{file: os.Stderr}
 	}
 	return l
+}
+
+func recoverChainState(path string) (prevHash string, chainIndex uint64, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", 0, nil
+		}
+		return "", 0, fmt.Errorf("read audit log for chain recovery: %w", err)
+	}
+	if len(data) == 0 {
+		return "", 0, nil
+	}
+	if data[len(data)-1] != '\n' {
+		return "", 0, fmt.Errorf("%w: %s", ErrIncompleteAuditTail, path)
+	}
+
+	// Drop trailing newline and locate the last non-empty line.
+	content := bytes.TrimRight(data, "\n")
+	if len(content) == 0 {
+		return "", 0, nil
+	}
+	idx := bytes.LastIndexByte(content, '\n')
+	var lastLine []byte
+	if idx < 0 {
+		lastLine = content
+	} else {
+		lastLine = content[idx+1:]
+	}
+	lastLine = bytes.TrimSpace(lastLine)
+	if len(lastLine) == 0 {
+		return "", 0, nil
+	}
+
+	var last Event
+	if err := json.Unmarshal(lastLine, &last); err != nil {
+		return "", 0, fmt.Errorf("%w: %v", ErrCorruptAuditRecord, err)
+	}
+	if last.Hash == "" {
+		return "", 0, fmt.Errorf("%w: last record missing hash", ErrCorruptAuditRecord)
+	}
+	// Verify integrity of recovered tip before continuing the chain.
+	stored := last.Hash
+	last.Hash = ""
+	payload, err := json.Marshal(last)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w: re-marshal last record: %v", ErrCorruptAuditRecord, err)
+	}
+	sum := sha256.Sum256(payload)
+	if hex.EncodeToString(sum[:]) != stored {
+		return "", 0, fmt.Errorf("%w: last record hash mismatch", ErrCorruptAuditRecord)
+	}
+	return stored, last.ChainIndex + 1, nil
 }
 
 func (l *Logger) SetRedactionPatterns(patterns []policy.RedactionPattern) {
