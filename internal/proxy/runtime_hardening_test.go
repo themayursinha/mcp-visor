@@ -644,3 +644,106 @@ redaction:
 		t.Fatal("approval goroutine did not exit after marker placed")
 	}
 }
+
+func TestChainDenyEmitsTerminalAuditEvent(t *testing.T) {
+	// Regression: chain-rule denials must emit a tool_call_denied JSONL
+	// event alongside the tool_call_chain_detected event, matching the
+	// terminal audit contract used by all other deny paths.
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+
+	p := New(Config{
+		ServerName:   "slack",
+		AuditLogPath: auditPath,
+		SessionID:    "chain-deny-audit",
+		ClientID:     "agent-test",
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+settings:
+  chain_window_size: 3
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+  - name: "slack"
+    allowed: true
+    tools:
+      - name: "slack_send_message"
+        allowed: true
+tool_chains:
+  - name: "read_then_slack_block"
+    sources:
+      - server: "filesystem"
+        tool_pattern: "file_read"
+    sinks:
+      - server: "slack"
+        tool_pattern: "slack_send_message"
+    action: deny
+    within_calls: 3
+`),
+	})
+
+	// Prime session with a file_read so the chain rule fires on the next call.
+	p.session.RecordToolCall("filesystem", mcp.ToolsCallRequest{
+		Name:      "file_read",
+		Arguments: json.RawMessage(`{"path":"/etc/passwd"}`),
+	}, "")
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(
+		toolCallRaw(1, "slack_send_message", map[string]any{"text": "exfil"}),
+		client,
+	)
+
+	if action != "denied" {
+		t.Fatalf("expected chain deny, got %s; response=%s", action, out.String())
+	}
+
+	if err := p.audit.Close(); err != nil {
+		t.Fatalf("close audit: %v", err)
+	}
+
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+
+	var (
+		hasChainDetected bool
+		hasToolDenied    bool
+		deniedEvent      audit.Event
+	)
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var ev audit.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("unmarshal audit: %v\n%s", err, line)
+		}
+		switch ev.EventType {
+		case audit.EventToolChainDetected:
+			hasChainDetected = true
+		case audit.EventToolDenied:
+			hasToolDenied = true
+			deniedEvent = ev
+		}
+	}
+
+	if !hasChainDetected {
+		t.Fatalf("expected tool_call_chain_detected event, log:\n%s", string(data))
+	}
+	if !hasToolDenied {
+		t.Fatalf("expected tool_call_denied event for chain-rule deny, log:\n%s", string(data))
+	}
+	if deniedEvent.Decision != string(policy.ActionDeny) {
+		t.Fatalf("expected decision=deny, got %s", deniedEvent.Decision)
+	}
+	if len(deniedEvent.ChainContext) == 0 {
+		t.Fatal("expected ChainContext on chain-deny event, got empty")
+	}
+	if deniedEvent.Reason == "" {
+		t.Fatal("expected Reason on chain-deny event, got empty")
+	}
+}

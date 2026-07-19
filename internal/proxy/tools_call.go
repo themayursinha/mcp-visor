@@ -125,6 +125,22 @@ func (p *Proxy) processToolsCall(
 			p.metrics.IncrementDenied()
 			p.metrics.IncrementChains()
 			respond(req.ID, "chain rule: tool sequence matches dangerous pattern")
+
+			chainDeniedEvent := audit.Event{
+				EventType:    audit.EventToolDenied,
+				SessionID:    p.session.ID,
+				AgentID:      p.cfg.ClientID,
+				Server:       serverName,
+				Tool:         callReq.Name,
+				Arguments:    redactedArgs,
+				Decision:     string(policy.ActionDeny),
+				Reason:       withRedactionNote(chainDecision.Reason, redactionResult),
+				RiskLevel:    string(risk),
+				ChainContext: previousCalls,
+			}
+			p.audit.Log(chainDeniedEvent)
+			release()
+			p.forwardAudit(chainDeniedEvent)
 			p.observeToolCall("denied", chainDecision.Reason, serverName, callReq.Name, string(risk), true, started)
 			return raw, "denied"
 		}
