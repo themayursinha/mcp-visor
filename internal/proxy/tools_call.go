@@ -158,6 +158,9 @@ func (p *Proxy) processToolsCall(
 		// before the blocking approval wait so reloads are not stalled.
 		snapshot := p.runtimeSnapshotLocked()
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
+		p.logAudit(approvalRequiredEvent(p, serverName, callReq, redactedArgs, decision.Reason, risk, chainContext, evidence))
+		// Release barrier only after the policy-dependent approval evidence and
+		// ledger record are pinned to this generation. The wait may block.
 		release()
 		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence)
 		if !outcome.Approved {

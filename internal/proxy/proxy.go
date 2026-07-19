@@ -832,6 +832,15 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 	})
 }
 
+func approvalRequiredEvent(p *Proxy, serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, chainContext []string, evidence approvalEvidence) audit.Event {
+	return audit.Event{
+		EventType: audit.EventToolApprovalRequired, SessionID: p.session.ID, AgentID: p.cfg.ClientID,
+		Server: serverName, Tool: callReq.Name, Arguments: redactedArgs, Decision: string(policy.ActionRequireApproval),
+		Reason: reason, RiskLevel: string(risk), ChainContext: chainContext, RequestHash: evidence.RequestHash,
+		RedactedArgumentHash: evidence.RedactedArgumentHash, PolicyHash: evidence.PolicyHash, ChainContextHash: evidence.ChainContextHash,
+	}
+}
+
 func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string, snapshot runtimeSnapshot, evidence approvalEvidence) approvalOutcome {
 	approvalReq := approval.Request{
 		ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
@@ -851,22 +860,6 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	)
 
 	p.metrics.IncrementApprovals()
-	p.logAudit(audit.Event{
-		EventType:            audit.EventToolApprovalRequired,
-		SessionID:            p.session.ID,
-		AgentID:              p.cfg.ClientID,
-		Server:               serverName,
-		Tool:                 callReq.Name,
-		Arguments:            redactedArgs,
-		Decision:             string(policy.ActionRequireApproval),
-		Reason:               reason,
-		RiskLevel:            string(risk),
-		ChainContext:         chainContext,
-		RequestHash:          evidence.RequestHash,
-		RedactedArgumentHash: evidence.RedactedArgumentHash,
-		PolicyHash:           evidence.PolicyHash,
-		ChainContextHash:     evidence.ChainContextHash,
-	})
 
 	if snapshot.approval == nil {
 		denyReason := "approval denied: approval backend is not configured"

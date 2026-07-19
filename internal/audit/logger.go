@@ -182,17 +182,15 @@ func readLastCompleteLine(f *os.File, size int64) ([]byte, error) {
 			return nil, fmt.Errorf("read audit log chunk: %w", err)
 		}
 		data = append(chunk, data...)
-		// Need the last line boundary: stop once we have a prior newline or hit SOF.
-		if bytes.Count(data, []byte{'\n'}) >= 2 || remaining == 0 {
+		// Skip trailing whitespace-only lines. Continue reading until the tail
+		// contains a non-empty record and its preceding boundary, or reach SOF.
+		content := bytes.TrimRight(data, " 	\r\n")
+		if remaining == 0 || (len(content) > 0 && bytes.LastIndexByte(content, '\n') >= 0) {
 			break
 		}
 	}
 
-	// data ends with '\n' (verified above for the full file; chunks preserve the tip).
-	if len(data) == 0 || data[len(data)-1] != '\n' {
-		return nil, fmt.Errorf("%w", ErrIncompleteAuditTail)
-	}
-	content := data[:len(data)-1]
+	content := bytes.TrimRight(data, " 	\r\n")
 	if len(content) == 0 {
 		return nil, nil
 	}
