@@ -232,6 +232,15 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	newRedactor := redaction.NewEngine(pol.Redaction)
 	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
 
+	reloadEvent := audit.Event{
+		EventType: audit.EventPolicyReloaded,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    p.cfg.ServerName,
+		Message:   "policy runtime surfaces reloaded",
+		Reason:    fmt.Sprintf("default_action=%s approval_timeout_seconds=%d redaction_patterns=%d", pol.DefaultAction, pol.Settings.ApprovalTimeoutSecs, len(pol.Redaction.Patterns)),
+	}
+
 	p.runtimeMu.Lock()
 	publish()
 	p.redactor = newRedactor
@@ -240,22 +249,17 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	}
 	if p.audit != nil {
 		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
+		// Record the generation transition before exposing it to tools/call.
+		p.audit.Log(reloadEvent)
 	}
 	p.runtimeMu.Unlock()
 
+	p.forwardAudit(reloadEvent)
 	p.logger.Info("policy runtime surfaces reloaded",
 		"default_action", pol.DefaultAction,
 		"redaction_patterns", len(pol.Redaction.Patterns),
 		"approval_timeout_seconds", pol.Settings.ApprovalTimeoutSecs,
 	)
-	p.logAudit(audit.Event{
-		EventType: audit.EventPolicyReloaded,
-		SessionID: p.session.ID,
-		AgentID:   p.cfg.ClientID,
-		Server:    p.cfg.ServerName,
-		Message:   "policy runtime surfaces reloaded",
-		Reason:    fmt.Sprintf("default_action=%s approval_timeout_seconds=%d redaction_patterns=%d", pol.DefaultAction, pol.Settings.ApprovalTimeoutSecs, len(pol.Redaction.Patterns)),
-	})
 }
 
 func (p *Proxy) currentRedactor() *redaction.Engine {
@@ -964,6 +968,13 @@ func (p *Proxy) attachReceiptEvidence(event *audit.Event, rec *receipt.DecisionR
 
 func (p *Proxy) logAudit(event audit.Event) {
 	p.audit.Log(event)
+	p.forwardAudit(event)
+}
+
+// forwardAudit sends an already-written event to non-ledger sinks. Callers that
+// need a specific ledger position may write p.audit while holding runtimeMu,
+// then invoke this after releasing the barrier.
+func (p *Proxy) forwardAudit(event audit.Event) {
 	if p.webhook != nil {
 		p.webhook.Emit(event)
 	}
