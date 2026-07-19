@@ -305,6 +305,104 @@ tool_chains:
 	}
 }
 
+func TestApprovedCallTaintsUseSnapshotPolicy(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	initial := `
+version: "v1"
+default_action: deny
+settings:
+  approval_timeout_seconds: 10
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        approval_required: true
+taints:
+  - name: "sensitive_file_accessed"
+    source_servers: ["filesystem"]
+    source_tools: ["file_read"]
+    source_patterns: ["**/secrets/**"]
+`
+	updated := `
+version: "v2"
+default_action: deny
+settings:
+  approval_timeout_seconds: 10
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        approval_required: true
+`
+	if err := os.WriteFile(policyPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+	p := New(Config{
+		ServerName:  "filesystem",
+		Policy:      w.Policy(),
+		Engine:      policy.NewEngineWithWatcher(w),
+		ApprovalDir: dir,
+		SessionID:   "snapshot-taint",
+		ClientID:    "agent-test",
+	})
+
+	requestSeen := make(chan string, 1)
+	approve := make(chan struct{})
+	go func() {
+		for {
+			matches, _ := filepath.Glob(filepath.Join(dir, "req-*.json"))
+			if len(matches) > 0 {
+				requestSeen <- strings.TrimSuffix(filepath.Base(matches[0]), ".json")
+				<-approve
+				_ = os.WriteFile(filepath.Join(dir, strings.TrimSuffix(filepath.Base(matches[0]), ".json")+".ok"), []byte{}, 0o600)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	result := make(chan string, 1)
+	go func() {
+		out := &bytes.Buffer{}
+		client := mcp.NewParser(nil, out)
+		_, action := p.interceptAndModify(toolCallRaw(1, "file_read", map[string]any{"path": "/workspace/secrets/token.txt"}), client)
+		result <- action
+	}()
+
+	select {
+	case <-requestSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("approval request was not created")
+	}
+	if err := os.WriteFile(policyPath, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	close(approve)
+
+	select {
+	case action := <-result:
+		if action != "forward" {
+			t.Fatalf("approved call action = %q, want forward", action)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("approved call did not complete")
+	}
+	if !p.session.HasTaint("sensitive_file_accessed") {
+		t.Fatal("approved call lost its source taint after policy reload")
+	}
+}
+
 func TestRuntimeSnapshotPairsOutputLimitAndRedactor(t *testing.T) {
 	p := New(Config{
 		ServerName: "filesystem",

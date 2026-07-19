@@ -181,7 +181,7 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		p.logAudit(allowEvent)
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
 		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
 		p.metrics.IncrementApproved()
 		p.observeToolCall("approved", "approved by human operator", serverName, callReq.Name, string(risk), chainTriggered, started)
@@ -189,7 +189,7 @@ func (p *Proxy) processToolsCall(
 
 	case policy.ActionAllow:
 		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
 		p.logAudit(audit.Event{
 			EventType: audit.EventToolAllowed,
@@ -207,7 +207,7 @@ func (p *Proxy) processToolsCall(
 
 	default:
 		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
 		p.logAudit(audit.Event{
 			EventType: audit.EventToolAllowed,

@@ -18,8 +18,10 @@ type egressTaintDecision struct {
 	taint    SessionTaint
 }
 
-func (p *Proxy) markMatchingTaints(serverName string, callReq mcp.ToolsCallRequest, args map[string]any, risk policy.RiskLevel) {
-	pol := p.engine.Policy()
+func (p *Proxy) markMatchingTaints(serverName string, callReq mcp.ToolsCallRequest, args map[string]any, risk policy.RiskLevel, pol *policy.Policy) {
+	if pol == nil {
+		return
+	}
 	for _, rule := range pol.Taints {
 		matched, sourceValue := taintSourceMatches(rule, serverName, callReq.Name, args)
 		if !matched {
