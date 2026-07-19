@@ -101,10 +101,6 @@ func (e *Engine) RequestApprovalWithTimeout(req Request, timeout time.Duration) 
 	return e.waitForDecision(ctx, req.ID, timeout)
 }
 
-func (e *Engine) requestCLIApproval(req Request) (bool, error) {
-	return e.requestCLIApprovalWithTimeout(req, e.Timeout())
-}
-
 func (e *Engine) requestCLIApprovalWithTimeout(req Request, timeout time.Duration) (bool, error) {
 	fmt.Fprintf(os.Stderr, "\n========================================\n")
 	fmt.Fprintf(os.Stderr, " APPROVAL REQUIRED\n")
