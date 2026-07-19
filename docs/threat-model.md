@@ -100,7 +100,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Large argument DDoS | Medium | Medium | `max_argument_size_bytes` setting rejects oversized calls. Default: 1 MB. |
 | Large output DDoS | Medium | Medium | `max_output_size_bytes` truncates each textual `Content[].Text` entry. It does not cap aggregate responses, structured `Data`, or JSON-RPC errors. |
 | Approval exhaustion | Low | Low | Each session queues one pending approval at a time. No approval flood path. |
-| Policy file watcher exploit | Medium | Low | `serve -policy` reloads engine-backed policy and registry state after a 2-second debounce, but the redactor, audit redaction patterns, and approval timeout remain startup snapshots. Invalid reloads keep the last valid engine policy. |
+| Policy file watcher exploit | Medium | Low | `serve -policy` reloads engine rules, registry state, the redactor, audit redaction patterns, and approval timeout as one runtime snapshot after a 2-second debounce. Invalid reloads keep the prior valid policy and runtime surfaces. |
 
 ### 6. Elevation of Privilege
 
@@ -191,7 +191,7 @@ Which controls mitigate which threats?
 **Actors**: Internal developer with filesystem access
 
 1. Attacker edits policy to add `allowed: true` for `file_delete` on `/`
-2. If visor is running with `-policy`, engine-backed rules reload after the debounce interval; redaction and approval settings do not fully refresh
+2. If visor is running with `-policy`, engine-backed rules and the corresponding redaction, audit-redaction, and approval-timeout surfaces reload atomically after the debounce interval
 3. **Limitation**: Policy file integrity relies on host filesystem permissions
 
 **Mitigation**: Run visor as a different user from developers. Keep the policy file root-owned and readable by the visor process; require reviewed deployment changes.
