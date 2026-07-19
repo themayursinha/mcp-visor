@@ -532,3 +532,46 @@ func TestLoggerConcurrency(t *testing.T) {
 		t.Errorf("expected 500 lines, got %d", lines)
 	}
 }
+
+func TestNewLoggerAcceptsLegacyRecordsWithoutHash(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	// Simulate a pre-hash-chain audit log: well-formed JSONL but missing hash/prev_hash/chain_index.
+	legacy := `{"timestamp":"2026-01-01T00:00:00Z","event_type":"session_started","session_id":"old-session","decision":"allow"}
+`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger should accept legacy records without hash: %v", err)
+	}
+	defer l.Close()
+
+	// Append a new event — must succeed and carry hash chain fields.
+	l.Log(audit.Event{
+		EventType: audit.EventToolAllowed,
+		SessionID: "new-session",
+		Tool:      "test_tool",
+		Decision:  "allow",
+	})
+
+	lines := readAuditLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines (legacy + new), got %d", len(lines))
+	}
+
+	var newEvent audit.Event
+	if err := json.Unmarshal([]byte(lines[1]), &newEvent); err != nil {
+		t.Fatalf("unmarshal new event: %v", err)
+	}
+	if newEvent.Hash == "" {
+		t.Fatal("new event should have a hash")
+	}
+	if newEvent.PrevHash != "" {
+		t.Fatalf("new event prev_hash should be empty (chain boundary), got %s", newEvent.PrevHash)
+	}
+	if newEvent.ChainIndex != 0 {
+		t.Fatalf("new event chain_index should be 0 (chain boundary), got %d", newEvent.ChainIndex)
+	}
+}

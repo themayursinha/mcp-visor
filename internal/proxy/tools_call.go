@@ -158,10 +158,14 @@ func (p *Proxy) processToolsCall(
 		// before the blocking approval wait so reloads are not stalled.
 		snapshot := p.runtimeSnapshotLocked()
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
-		p.logAudit(approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence))
-		// Release barrier only after the policy-dependent approval evidence and
-		// ledger record are pinned to this generation. The wait may block.
+		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
+		// Write the JSONL ledger record while holding runtimeMu to
+		// preserve audit ordering with respect to policy reloads.
+		p.audit.Log(approvalEvent)
+		// Release barrier before the blocking wait and before SIEM
+		// forwarding so slow SIEM/webhook sinks cannot stall reloads.
 		release()
+		p.forwardAudit(approvalEvent)
 		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence, redactionResult)
 		if !outcome.Approved {
 			reason := fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason)

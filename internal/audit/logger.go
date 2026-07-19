@@ -135,7 +135,9 @@ func recoverChainState(path string) (prevHash string, chainIndex uint64, err err
 		return "", 0, fmt.Errorf("%w: %v", ErrCorruptAuditRecord, err)
 	}
 	if last.Hash == "" {
-		return "", 0, fmt.Errorf("%w: last record missing hash", ErrCorruptAuditRecord)
+		// Legacy record without a hash chain: treat as a chain boundary
+		// so the configured audit file is preserved on upgrade.
+		return "", 0, nil
 	}
 	// Verify integrity of recovered tip before continuing the chain.
 	stored := last.Hash
