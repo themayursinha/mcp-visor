@@ -77,8 +77,14 @@ func (e *Engine) Timeout() time.Duration {
 }
 
 func (e *Engine) RequestApproval(req Request) (bool, error) {
+	return e.RequestApprovalWithTimeout(req, e.Timeout())
+}
+
+// RequestApprovalWithTimeout waits using a timeout captured by the caller.
+// It lets a policy decision pin its approval semantics across a later reload.
+func (e *Engine) RequestApprovalWithTimeout(req Request, timeout time.Duration) (bool, error) {
 	if e.cli {
-		return e.requestCLIApproval(req)
+		return e.requestCLIApprovalWithTimeout(req, timeout)
 	}
 
 	if !e.IsEnabled() {
@@ -89,7 +95,6 @@ func (e *Engine) RequestApproval(req Request) (bool, error) {
 		return false, fmt.Errorf("write approval request: %w", err)
 	}
 
-	timeout := e.Timeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -97,7 +102,10 @@ func (e *Engine) RequestApproval(req Request) (bool, error) {
 }
 
 func (e *Engine) requestCLIApproval(req Request) (bool, error) {
-	timeout := e.Timeout()
+	return e.requestCLIApprovalWithTimeout(req, e.Timeout())
+}
+
+func (e *Engine) requestCLIApprovalWithTimeout(req Request, timeout time.Duration) (bool, error) {
 	fmt.Fprintf(os.Stderr, "\n========================================\n")
 	fmt.Fprintf(os.Stderr, " APPROVAL REQUIRED\n")
 	fmt.Fprintf(os.Stderr, "========================================\n")

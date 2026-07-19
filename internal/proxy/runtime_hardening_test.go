@@ -305,6 +305,37 @@ tool_chains:
 	}
 }
 
+func TestRuntimeSnapshotPairsOutputLimitAndRedactor(t *testing.T) {
+	p := New(Config{
+		ServerName: "filesystem",
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+settings:
+  max_output_size_bytes: 5
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+redaction:
+  patterns:
+    - name: "secret"
+      regex: "SECRET[0-9]+"
+      replacement: "[REDACTED]"
+`),
+	})
+
+	snapshot := p.currentRuntimeSnapshot()
+	if snapshot.policy.Settings.MaxOutputSizeBytes != 5 {
+		t.Fatalf("snapshot max output = %d, want 5", snapshot.policy.Settings.MaxOutputSizeBytes)
+	}
+	if got := snapshot.redactor.RedactOutput("SECRET42"); got != "[REDACTED]" {
+		t.Fatalf("snapshot redactor = %q, want [REDACTED]", got)
+	}
+}
+
 func TestRedactServerResponseTruncatesOutput(t *testing.T) {
 	p := New(Config{
 		ServerName: "filesystem",

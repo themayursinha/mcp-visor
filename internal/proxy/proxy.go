@@ -88,6 +88,16 @@ type approvalOutcome struct {
 	Receipt  *receipt.DecisionReceipt
 }
 
+// runtimeSnapshot pins all policy-dependent proxy surfaces to one generation.
+// Callers that need coherence across a reload must capture it while holding
+// runtimeMu.RLock and use the returned immutable values after releasing it.
+type runtimeSnapshot struct {
+	policy          *policy.Policy
+	redactor        *redaction.Engine
+	approval        *approval.Engine
+	approvalTimeout time.Duration
+}
+
 type approvalEvidence struct {
 	RequestHash          string
 	RedactedArgumentHash string
@@ -258,6 +268,23 @@ func (p *Proxy) currentApproval() *approval.Engine {
 	p.runtimeMu.RLock()
 	defer p.runtimeMu.RUnlock()
 	return p.approval
+}
+
+func (p *Proxy) currentRuntimeSnapshot() runtimeSnapshot {
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	return p.runtimeSnapshotLocked()
+}
+
+// runtimeSnapshotLocked captures policy-dependent surfaces while runtimeMu is held.
+func (p *Proxy) runtimeSnapshotLocked() runtimeSnapshot {
+	pol := p.engine.Policy()
+	return runtimeSnapshot{
+		policy:          pol,
+		redactor:        p.redactor,
+		approval:        p.approval,
+		approvalTimeout: time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second,
+	}
 }
 
 func (p *Proxy) Run(ctx context.Context) error {
@@ -563,8 +590,9 @@ func (p *Proxy) redactServerResponse(raw json.RawMessage) json.RawMessage {
 	}
 
 	modified := false
-	maxOutput := p.engine.Policy().Settings.MaxOutputSizeBytes
-	redactor := p.currentRedactor()
+	snapshot := p.currentRuntimeSnapshot()
+	maxOutput := snapshot.policy.Settings.MaxOutputSizeBytes
+	redactor := snapshot.redactor
 	for i, content := range result.Content {
 		if content.Text != "" {
 			redacted := redactor.RedactOutput(content.Text)
@@ -800,7 +828,7 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 	})
 }
 
-func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string) approvalOutcome {
+func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string, snapshot runtimeSnapshot, evidence approvalEvidence) approvalOutcome {
 	approvalReq := approval.Request{
 		ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
 		Tool:      callReq.Name,
@@ -811,7 +839,6 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 		SessionID: p.session.ID,
 		AgentID:   p.cfg.ClientID,
 	}
-	evidence := p.buildApprovalEvidence(raw, redactedArgs, chainContext)
 
 	p.logger.Warn("approval requested",
 		"tool", callReq.Name,
@@ -837,7 +864,12 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 		ChainContextHash:     evidence.ChainContextHash,
 	})
 
-	approved, err := p.currentApproval().RequestApproval(approvalReq)
+	if snapshot.approval == nil {
+		denyReason := "approval denied: approval backend is not configured"
+		p.logDenied(serverName, callReq.Name, redactedArgs, denyReason, risk)
+		return approvalOutcome{Approved: false, Reason: denyReason}
+	}
+	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
 	if err != nil || !approved {
 		denyReason := fmt.Sprintf("approval denied: %v", err)
 		p.logAudit(audit.Event{
@@ -868,14 +900,14 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 		callReq.Name,
 		string(raw),
 		evidence.RedactedArgsJSON,
-		p.engine.Policy().Version,
+		snapshot.policy.Version,
 		evidence.PolicyJSON,
 		evidence.ChainContextJSON,
 		reason,
 		string(risk),
 		"human-operator",
 		"approve",
-		time.Duration(p.engine.Policy().Settings.ApprovalTimeoutSecs)*time.Second,
+		snapshot.approvalTimeout,
 	)
 	if err != nil {
 		errReason := fmt.Sprintf("approval receipt creation failed: %v", err)
@@ -896,9 +928,9 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	return approvalOutcome{Approved: true, Receipt: rec}
 }
 
-func (p *Proxy) buildApprovalEvidence(raw json.RawMessage, redactedArgs map[string]any, chainContext []string) approvalEvidence {
+func (p *Proxy) buildApprovalEvidence(raw json.RawMessage, redactedArgs map[string]any, chainContext []string, pol *policy.Policy) approvalEvidence {
 	argsJSON := marshalEvidence(redactedArgs)
-	policyJSON := marshalEvidence(p.engine.Policy())
+	policyJSON := marshalEvidence(pol)
 	chainJSON := marshalEvidence(chainContext)
 	return approvalEvidence{
 		RequestHash:          sha256Hex(raw),

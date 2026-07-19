@@ -153,9 +153,13 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
-		// Release barrier before blocking approval wait so reloads are not stalled.
+		// Pin evidence, receipt metadata, and approval timeout while the same
+		// runtime snapshot used for evaluation is still protected. Release only
+		// before the blocking approval wait so reloads are not stalled.
+		snapshot := p.runtimeSnapshotLocked()
+		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
 		release()
-		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext)
+		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence)
 		if !outcome.Approved {
 			reason := fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason)
 			respond(req.ID, reason)
