@@ -41,7 +41,19 @@ func (p *Proxy) processToolsCall(
 	if decision := p.evaluateRuntimeLimits(callReq); decision.Action == policy.ActionDeny {
 		respond(req.ID, decision.Reason)
 		p.metrics.IncrementDenied()
-		p.logDenied(serverName, callReq.Name, nil, decision.Reason, p.engine.GetRiskLevel(serverName, callReq.Name))
+		rtDeniedEvent := audit.Event{
+			EventType: audit.EventToolDenied,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Decision:  string(policy.ActionDeny),
+			Reason:    decision.Reason,
+			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
+		}
+		p.audit.Log(rtDeniedEvent)
+		release()
+		p.forwardAudit(rtDeniedEvent)
 		p.observeToolCall("denied", decision.Reason, serverName, callReq.Name, string(p.engine.GetRiskLevel(serverName, callReq.Name)), false, started)
 		return raw, "denied"
 	}
@@ -69,7 +81,7 @@ func (p *Proxy) processToolsCall(
 		p.metrics.IncrementDenied()
 		risk := p.engine.GetRiskLevel(serverName, callReq.Name)
 
-		p.logAudit(audit.Event{
+		sensitiveDeniedEvent := audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -79,7 +91,10 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(policy.ActionDeny),
 			Reason:    withRedactionNote(reason, redactionResult),
 			RiskLevel: string(risk),
-		})
+		}
+		p.audit.Log(sensitiveDeniedEvent)
+		release()
+		p.forwardAudit(sensitiveDeniedEvent)
 		p.logger.Warn("sensitive file denied",
 			"tool", callReq.Name,
 			"path", sensitivePath,
@@ -143,7 +158,9 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.TaintReason = egressContext.taint.Reason
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
-		p.logAudit(deniedEvent)
+		p.audit.Log(deniedEvent)
+		release()
+		p.forwardAudit(deniedEvent)
 		p.logger.Warn("policy denied",
 			"tool", callReq.Name,
 			"reason", decision.Reason,
@@ -198,7 +215,7 @@ func (p *Proxy) processToolsCall(
 		p.metrics.IncrementAllowed()
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
-		p.logAudit(audit.Event{
+		allowEvent := audit.Event{
 			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -208,7 +225,10 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(policy.ActionAllow),
 			Reason:    reason,
 			RiskLevel: string(risk),
-		})
+		}
+		p.audit.Log(allowEvent)
+		release()
+		p.forwardAudit(allowEvent)
 		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
@@ -216,7 +236,7 @@ func (p *Proxy) processToolsCall(
 		p.metrics.IncrementAllowed()
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
-		p.logAudit(audit.Event{
+		defaultAllowEvent := audit.Event{
 			EventType: audit.EventToolAllowed,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -226,7 +246,10 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(policy.ActionAllow),
 			Reason:    reason,
 			RiskLevel: string(risk),
-		})
+		}
+		p.audit.Log(defaultAllowEvent)
+		release()
+		p.forwardAudit(defaultAllowEvent)
 		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 	}

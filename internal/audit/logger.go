@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"sync"
@@ -98,6 +99,9 @@ func MustLogger(path string) *Logger {
 	}
 	l, err := NewLogger(path)
 	if err != nil {
+		if errors.Is(err, ErrIncompleteAuditTail) || errors.Is(err, ErrCorruptAuditRecord) {
+			log.Fatalf("audit: refusing to start with corrupt/incomplete audit log %q: %v", path, err)
+		}
 		fmt.Fprintf(os.Stderr, "audit logger: %v, falling back to stderr\n", err)
 		return &Logger{file: os.Stderr}
 	}
