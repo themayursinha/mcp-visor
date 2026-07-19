@@ -841,7 +841,7 @@ func approvalRequiredEvent(p *Proxy, serverName string, callReq mcp.ToolsCallReq
 	}
 }
 
-func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string, snapshot runtimeSnapshot, evidence approvalEvidence) approvalOutcome {
+func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string, snapshot runtimeSnapshot, evidence approvalEvidence, redactionResult redaction.Result) approvalOutcome {
 	approvalReq := approval.Request{
 		ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
 		Tool:      callReq.Name,
@@ -862,13 +862,13 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	p.metrics.IncrementApprovals()
 
 	if snapshot.approval == nil {
-		denyReason := "approval denied: approval backend is not configured"
+		denyReason := withRedactionNote("approval denied: approval backend is not configured", redactionResult)
 		p.logDenied(serverName, callReq.Name, redactedArgs, denyReason, risk)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
 	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
 	if err != nil || !approved {
-		denyReason := fmt.Sprintf("approval denied: %v", err)
+		denyReason := withRedactionNote(fmt.Sprintf("approval denied: %v", err), redactionResult)
 		p.logAudit(audit.Event{
 			EventType:            audit.EventToolDenied,
 			SessionID:            p.session.ID,

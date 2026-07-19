@@ -158,11 +158,11 @@ func (p *Proxy) processToolsCall(
 		// before the blocking approval wait so reloads are not stalled.
 		snapshot := p.runtimeSnapshotLocked()
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
-		p.logAudit(approvalRequiredEvent(p, serverName, callReq, redactedArgs, decision.Reason, risk, chainContext, evidence))
+		p.logAudit(approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence))
 		// Release barrier only after the policy-dependent approval evidence and
 		// ledger record are pinned to this generation. The wait may block.
 		release()
-		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence)
+		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence, redactionResult)
 		if !outcome.Approved {
 			reason := fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason)
 			respond(req.ID, reason)
@@ -179,7 +179,7 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(policy.ActionAllow),
-			Reason:    "approved by human operator",
+			Reason:    withRedactionNote("approved by human operator", redactionResult),
 			RiskLevel: string(risk),
 		}
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)

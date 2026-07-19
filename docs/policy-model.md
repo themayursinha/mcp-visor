@@ -461,14 +461,13 @@ These patterns are built into the redaction engine and active by default:
 
 ## Decision Model
 
-Every valid JSON-RPC `tools/call` request with an `id` reaches a terminal `allow`, `deny`, or `require_approval` decision. Notification-form `tools/call` is blocked at the envelope gate (no relay). Recognizable malformed `tools/call` attempts with an `id` fail closed with an error response. `redact_then_allow` is also used as an input-redaction audit label before the terminal policy decision:
+Every valid JSON-RPC `tools/call` request with an `id` reaches a terminal `allow`, `deny`, or `require_approval` decision. Notification-form `tools/call` is blocked at the envelope gate (no relay). Recognizable malformed `tools/call` attempts with an `id` fail closed with an error response. Input redaction is applied before policy evaluation; when redaction occurs the terminal audit event includes the redacted fields in its reason.
 
 | Decision | Meaning |
 |----------|---------|
 | `allow` | Tool call is permitted. Forwarded to server immediately. |
 | `deny` | Tool call is blocked. Error returned to client. |
 | `require_approval` | Tool call is held. Proceeds only on human approval. |
-| `redact_then_allow` | Sensitive data was stripped from the forwarded payload. This is not terminal; later checks can still deny the call. |
 
 Decisions include a `reason` field explaining _why_ the decision was made for auditability.
 

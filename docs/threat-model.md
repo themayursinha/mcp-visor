@@ -182,7 +182,7 @@ Which controls mitigate which threats?
    - OpenAI API key pattern `sk-[a-zA-Z0-9_-]{20,}` matches
 3. Authorization header value replaced with `[REDACTED: OpenAI API Key]`
 4. If later policy, egress, chain, and approval checks allow it, the call is forwarded with redacted arguments
-5. Input redaction emits: `{event_type: "tool_call_allowed", policy_decision: "redact_then_allow", reason: "redacted fields: [Authorization]"}`. A later deny can still produce a second deny event.
+5. A single terminal audit event is emitted (allow, deny, or approval-required) with the redaction fields noted in its reason (e.g., "allowed; redacted fields: [Authorization]").
 
 **Visor wins.** Secret never reaches the MCP server or the audit log.
 
