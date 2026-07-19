@@ -21,8 +21,10 @@ type HTTPTransport struct {
 	sseURL     string
 	sseReader  io.ReadCloser
 	sseScanner *bufio.Scanner
-	mu         sync.Mutex
-	reqID      int64
+	// Separate locks so a blocked SSE read cannot deadlock concurrent POSTs.
+	readMu  sync.Mutex
+	writeMu sync.Mutex
+	reqID   int64
 }
 
 type HTTPConfig struct {
@@ -73,6 +75,10 @@ func NewHTTPTransport(cfg HTTPConfig) (*HTTPTransport, error) {
 func buildTLSConfig(cfg *TLSConfig) (*tls.Config, error) {
 	if cfg == nil {
 		return nil, nil
+	}
+
+	if (cfg.CertFile == "") != (cfg.KeyFile == "") {
+		return nil, fmt.Errorf("incomplete TLS client key pair: both cert_file and key_file are required together")
 	}
 
 	tc := &tls.Config{
@@ -129,8 +135,8 @@ func (t *HTTPTransport) ConnectSSE() error {
 }
 
 func (t *HTTPTransport) ReadRaw() (json.RawMessage, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.readMu.Lock()
+	defer t.readMu.Unlock()
 
 	if t.sseScanner == nil {
 		return nil, fmt.Errorf("SSE not connected")
@@ -156,8 +162,8 @@ func (t *HTTPTransport) ReadRaw() (json.RawMessage, error) {
 }
 
 func (t *HTTPTransport) EncodeRaw(raw json.RawMessage) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
 
 	t.reqID++
 

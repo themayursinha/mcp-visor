@@ -1,16 +1,26 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"sync"
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/policy"
+)
+
+var (
+	// ErrIncompleteAuditTail is returned when an existing audit log ends mid-record.
+	ErrIncompleteAuditTail = errors.New("audit log incomplete trailing line")
+	// ErrCorruptAuditRecord is returned when the last complete audit record is invalid.
+	ErrCorruptAuditRecord = errors.New("audit log corrupt last record")
 )
 
 type EventType string
@@ -67,13 +77,19 @@ type Logger struct {
 }
 
 func NewLogger(path string) (*Logger, error) {
+	prevHash, chainIndex, err := recoverChainState(path)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_SYNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
 	return &Logger{
-		path: path,
-		file: f,
+		path:       path,
+		file:       f,
+		prevHash:   prevHash,
+		chainIndex: chainIndex,
 	}, nil
 }
 
@@ -83,10 +99,116 @@ func MustLogger(path string) *Logger {
 	}
 	l, err := NewLogger(path)
 	if err != nil {
+		if errors.Is(err, ErrIncompleteAuditTail) || errors.Is(err, ErrCorruptAuditRecord) {
+			log.Fatalf("audit: refusing to start with corrupt/incomplete audit log %q: %v", path, err)
+		}
 		fmt.Fprintf(os.Stderr, "audit logger: %v, falling back to stderr\n", err)
 		return &Logger{file: os.Stderr}
 	}
 	return l
+}
+
+func recoverChainState(path string) (prevHash string, chainIndex uint64, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", 0, nil
+		}
+		return "", 0, fmt.Errorf("open audit log for chain recovery: %w", err)
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return "", 0, fmt.Errorf("stat audit log: %w", err)
+	}
+	if st.Size() == 0 {
+		return "", 0, nil
+	}
+
+	lastLine, err := readLastCompleteLine(f, st.Size())
+	if err != nil {
+		return "", 0, err
+	}
+	if len(lastLine) == 0 {
+		return "", 0, nil
+	}
+
+	var last Event
+	if err := json.Unmarshal(lastLine, &last); err != nil {
+		return "", 0, fmt.Errorf("%w: %v", ErrCorruptAuditRecord, err)
+	}
+	if last.Hash == "" {
+		if last.PrevHash != "" || last.ChainIndex > 0 {
+			// Record carries chain metadata but hash was stripped:
+			// treat as tampering, not a legacy boundary.
+			return "", 0, fmt.Errorf("%w: hash stripped from chained record", ErrCorruptAuditRecord)
+		}
+		// Legacy record without a hash chain: treat as a chain boundary
+		// so the configured audit file is preserved on upgrade.
+		return "", 0, nil
+	}
+	// Verify integrity of recovered tip before continuing the chain.
+	stored := last.Hash
+	last.Hash = ""
+	payload, err := json.Marshal(last)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w: re-marshal last record: %v", ErrCorruptAuditRecord, err)
+	}
+	sum := sha256.Sum256(payload)
+	if hex.EncodeToString(sum[:]) != stored {
+		return "", 0, fmt.Errorf("%w: last record hash mismatch", ErrCorruptAuditRecord)
+	}
+	return stored, last.ChainIndex + 1, nil
+}
+
+// readLastCompleteLine seeks from EOF and returns the last newline-terminated
+// JSONL record without loading the full file into memory.
+func readLastCompleteLine(f *os.File, size int64) ([]byte, error) {
+	if size <= 0 {
+		return nil, nil
+	}
+
+	buf := make([]byte, 1)
+	if _, err := f.ReadAt(buf, size-1); err != nil {
+		return nil, fmt.Errorf("read audit log tail: %w", err)
+	}
+	if buf[0] != '\n' {
+		return nil, fmt.Errorf("%w", ErrIncompleteAuditTail)
+	}
+
+	const chunkSize int64 = 64 * 1024
+	var (
+		data      []byte
+		remaining = size
+	)
+	for remaining > 0 {
+		n := chunkSize
+		if remaining < n {
+			n = remaining
+		}
+		remaining -= n
+		chunk := make([]byte, n)
+		if _, err := f.ReadAt(chunk, remaining); err != nil {
+			return nil, fmt.Errorf("read audit log chunk: %w", err)
+		}
+		data = append(chunk, data...)
+		// Skip trailing whitespace-only lines. Continue reading until the tail
+		// contains a non-empty record and its preceding boundary, or reach SOF.
+		content := bytes.TrimRight(data, " 	\r\n")
+		if remaining == 0 || (len(content) > 0 && bytes.LastIndexByte(content, '\n') >= 0) {
+			break
+		}
+	}
+
+	content := bytes.TrimRight(data, " 	\r\n")
+	if len(content) == 0 {
+		return nil, nil
+	}
+	if idx := bytes.LastIndexByte(content, '\n'); idx >= 0 {
+		return bytes.TrimSpace(content[idx+1:]), nil
+	}
+	return bytes.TrimSpace(content), nil
 }
 
 func (l *Logger) SetRedactionPatterns(patterns []policy.RedactionPattern) {

@@ -305,6 +305,135 @@ tool_chains:
 	}
 }
 
+func TestApprovedCallTaintsUseSnapshotPolicy(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	initial := `
+version: "v1"
+default_action: deny
+settings:
+  approval_timeout_seconds: 10
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        approval_required: true
+taints:
+  - name: "sensitive_file_accessed"
+    source_servers: ["filesystem"]
+    source_tools: ["file_read"]
+    source_patterns: ["**/secrets/**"]
+`
+	updated := `
+version: "v2"
+default_action: deny
+settings:
+  approval_timeout_seconds: 10
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        approval_required: true
+`
+	if err := os.WriteFile(policyPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+	p := New(Config{
+		ServerName:  "filesystem",
+		Policy:      w.Policy(),
+		Engine:      policy.NewEngineWithWatcher(w),
+		ApprovalDir: dir,
+		SessionID:   "snapshot-taint",
+		ClientID:    "agent-test",
+	})
+
+	requestSeen := make(chan string, 1)
+	approve := make(chan struct{})
+	go func() {
+		for {
+			matches, _ := filepath.Glob(filepath.Join(dir, "req-*.json"))
+			if len(matches) > 0 {
+				requestSeen <- strings.TrimSuffix(filepath.Base(matches[0]), ".json")
+				<-approve
+				_ = os.WriteFile(filepath.Join(dir, strings.TrimSuffix(filepath.Base(matches[0]), ".json")+".ok"), []byte{}, 0o600)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	result := make(chan string, 1)
+	go func() {
+		out := &bytes.Buffer{}
+		client := mcp.NewParser(nil, out)
+		_, action := p.interceptAndModify(toolCallRaw(1, "file_read", map[string]any{"path": "/workspace/secrets/token.txt"}), client)
+		result <- action
+	}()
+
+	select {
+	case <-requestSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("approval request was not created")
+	}
+	if err := os.WriteFile(policyPath, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	close(approve)
+
+	select {
+	case action := <-result:
+		if action != "forward" {
+			t.Fatalf("approved call action = %q, want forward", action)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("approved call did not complete")
+	}
+	if !p.session.HasTaint("sensitive_file_accessed") {
+		t.Fatal("approved call lost its source taint after policy reload")
+	}
+}
+
+func TestRuntimeSnapshotPairsOutputLimitAndRedactor(t *testing.T) {
+	p := New(Config{
+		ServerName: "filesystem",
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+settings:
+  max_output_size_bytes: 5
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+redaction:
+  patterns:
+    - name: "secret"
+      regex: "SECRET[0-9]+"
+      replacement: "[REDACTED]"
+`),
+	})
+
+	snapshot := p.currentRuntimeSnapshot()
+	if snapshot.policy.Settings.MaxOutputSizeBytes != 5 {
+		t.Fatalf("snapshot max output = %d, want 5", snapshot.policy.Settings.MaxOutputSizeBytes)
+	}
+	if got := snapshot.redactor.RedactOutput("SECRET42"); got != "[REDACTED]" {
+		t.Fatalf("snapshot redactor = %q, want [REDACTED]", got)
+	}
+}
+
 func TestRedactServerResponseTruncatesOutput(t *testing.T) {
 	p := New(Config{
 		ServerName: "filesystem",
@@ -399,4 +528,119 @@ func toolCallRaw(id int, name string, args map[string]any) json.RawMessage {
 	}
 	data, _ := json.Marshal(msg)
 	return append(data, '\n')
+}
+
+func TestApprovalRequiredReleasesRuntimeBarrierBeforeWait(t *testing.T) {
+	// Verify that a hot reload can proceed while a tools/call is
+	// waiting for operator approval — i.e., the runtimeMu read lock
+	// is released before the blocking approval wait, not after SIEM
+	// forwarding.  This test does not mock SIEM; it exercises the
+	// lock discipline directly by issuing a reload from inside the
+	// approval context.
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	approvalDir := filepath.Join(dir, "approvals")
+
+	initial := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "slack"
+    allowed: true
+    tools:
+      - name: "slack_send_message"
+        allowed: true
+        approval_required: true
+redaction:
+  patterns:
+    - name: "v1"
+      regex: "v1secret"
+      replacement: "[R1]"
+`
+	if err := os.WriteFile(policyPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+
+	eng := policy.NewEngineWithWatcher(w)
+	p := New(Config{
+		ServerName:   "slack",
+		Policy:       w.Policy(),
+		Engine:       eng,
+		AuditLogPath: auditPath,
+		ApprovalDir:  approvalDir,
+	})
+
+	// Issue a tools/call that requires approval.  It will block on
+	// the channel in requestApproval because there is no operator to
+	// place an .ok marker.
+	req := toolCallRaw(1, "slack_send_message", map[string]any{"text": "hello"})
+	out := &bytes.Buffer{}
+	parser := mcp.NewParser(nil, out)
+
+	callDone := make(chan struct{})
+	go func() {
+		p.interceptAndModify(req, parser)
+		close(callDone)
+	}()
+
+	// Give the approval goroutine time to release the runtime
+	// barrier and enter the blocking wait.
+	time.Sleep(100 * time.Millisecond)
+
+	// While the call is waiting for approval, perform a hot reload.
+	// This must not deadlock and must complete before the approval
+	// wait finishes.
+	updated := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "slack"
+    allowed: true
+    tools:
+      - name: "slack_send_message"
+        allowed: true
+        approval_required: true
+redaction:
+  patterns:
+    - name: "v2"
+      regex: "v2secret"
+      replacement: "[R2]"
+`
+	if err := os.WriteFile(policyPath, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reloadDone := make(chan struct{})
+	go func() {
+		w.Reload()
+		close(reloadDone)
+	}()
+
+	select {
+	case <-reloadDone:
+		// Hot reload completed while approval is still pending — success.
+	case <-callDone:
+		t.Fatal("approval returned before hot reload completed — runtimeMu was held too long")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: hot reload likely deadlocked holding runtimeMu")
+	}
+
+	// Clean up: approve the pending call so the goroutine exits.
+	matches, _ := filepath.Glob(filepath.Join(approvalDir, "req-*.json"))
+	if len(matches) > 0 {
+		base := strings.TrimSuffix(filepath.Base(matches[0]), ".json")
+		_ = os.WriteFile(filepath.Join(approvalDir, base+".ok"), []byte{}, 0o600)
+	}
+
+	select {
+	case <-callDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("approval goroutine did not exit after marker placed")
+	}
 }

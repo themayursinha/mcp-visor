@@ -1,10 +1,12 @@
 package transport
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestPipeTransport(t *testing.T) {
@@ -159,6 +161,67 @@ func TestTLSConfigInsecure(t *testing.T) {
 	}
 	if !tc.InsecureSkipVerify {
 		t.Error("InsecureSkipVerify should be true")
+	}
+}
+
+func TestTLSConfigRejectsIncompleteClientKeyPair(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *TLSConfig
+	}{
+		{name: "cert_only", cfg: &TLSConfig{CertFile: "/tmp/client.crt"}},
+		{name: "key_only", cfg: &TLSConfig{KeyFile: "/tmp/client.key"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := buildTLSConfig(tc.cfg); err == nil {
+				t.Fatal("expected incomplete client cert/key pair to fail closed")
+			}
+		})
+	}
+}
+
+func TestHTTPTransportAllowsConcurrentReadAndWrite(t *testing.T) {
+	// Reproduce the deadlock class: a blocked ReadRaw must not prevent EncodeRaw.
+	pr, pw := io.Pipe()
+	ht := &HTTPTransport{
+		url:        "http://127.0.0.1:9",
+		client:     &http.Client{Timeout: 50 * time.Millisecond},
+		sseReader:  pr,
+		sseScanner: bufio.NewScanner(pr),
+	}
+	ht.sseScanner.Split(scanSSEEvent)
+
+	started := make(chan struct{})
+	doneRead := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := ht.ReadRaw()
+		doneRead <- err
+	}()
+	<-started
+	time.Sleep(30 * time.Millisecond) // ensure ReadRaw is waiting on SSE
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- ht.EncodeRaw(json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	}()
+
+	select {
+	case err := <-writeDone:
+		// EncodeRaw should complete (network failure is fine) without waiting for ReadRaw.
+		if err == nil {
+			t.Fatal("expected EncodeRaw network error against closed endpoint, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("EncodeRaw blocked while ReadRaw held shared lock (deadlock class)")
+	}
+
+	_ = pw.Close()
+	select {
+	case <-doneRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadRaw did not exit after SSE close")
 	}
 }
 

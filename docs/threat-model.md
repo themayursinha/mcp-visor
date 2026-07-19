@@ -100,7 +100,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Large argument DDoS | Medium | Medium | `max_argument_size_bytes` setting rejects oversized calls. Default: 1 MB. |
 | Large output DDoS | Medium | Medium | `max_output_size_bytes` truncates each textual `Content[].Text` entry. It does not cap aggregate responses, structured `Data`, or JSON-RPC errors. |
 | Approval exhaustion | Low | Low | Each session queues one pending approval at a time. No approval flood path. |
-| Policy file watcher exploit | Medium | Low | `serve -policy` reloads engine-backed policy and registry state after a 2-second debounce, but the redactor, audit redaction patterns, and approval timeout remain startup snapshots. Invalid reloads keep the last valid engine policy. |
+| Policy file watcher exploit | Medium | Low | `serve -policy` reloads engine rules, registry state, the redactor, audit redaction patterns, and approval timeout as one runtime snapshot after a 2-second debounce. Invalid reloads keep the prior valid policy and runtime surfaces. |
 
 ### 6. Elevation of Privilege
 
@@ -182,7 +182,7 @@ Which controls mitigate which threats?
    - OpenAI API key pattern `sk-[a-zA-Z0-9_-]{20,}` matches
 3. Authorization header value replaced with `[REDACTED: OpenAI API Key]`
 4. If later policy, egress, chain, and approval checks allow it, the call is forwarded with redacted arguments
-5. Input redaction emits: `{event_type: "tool_call_allowed", policy_decision: "redact_then_allow", reason: "redacted fields: [Authorization]"}`. A later deny can still produce a second deny event.
+5. A single terminal audit event is emitted (allow, deny, or approval-required) with the redaction fields noted in its reason (e.g., "allowed; redacted fields: [Authorization]").
 
 **Visor wins.** Secret never reaches the MCP server or the audit log.
 
@@ -191,7 +191,7 @@ Which controls mitigate which threats?
 **Actors**: Internal developer with filesystem access
 
 1. Attacker edits policy to add `allowed: true` for `file_delete` on `/`
-2. If visor is running with `-policy`, engine-backed rules reload after the debounce interval; redaction and approval settings do not fully refresh
+2. If visor is running with `-policy`, engine-backed rules and the corresponding redaction, audit-redaction, and approval-timeout surfaces reload atomically after the debounce interval
 3. **Limitation**: Policy file integrity relies on host filesystem permissions
 
 **Mitigation**: Run visor as a different user from developers. Keep the policy file root-owned and readable by the visor process; require reviewed deployment changes.
@@ -235,17 +235,17 @@ Visor redacts secrets in outputs but does not scan for prompt injection payloads
 
 Visor does not limit request rate from clients. A malicious or buggy agent could flood the proxy with tool calls. Mitigation: deploy behind a process supervisor with resource limits (systemd, cgroups, Docker).
 
-### 7. Plain Allowed Calls Lack a Standalone Audit Event
+### 7. Output-Only Redaction Lacks a Standalone Audit Event
 
-Forwarded calls are recorded in in-memory session history, but a plain allow with no redaction, approval, or taint does not currently emit its own JSONL audit event. Denies and the other security-relevant transitions remain audited. Closing this gap belongs in the security-verification phase before claiming a complete per-call decision ledger.
+Forwarded allows emit a standalone JSONL `tool_call_allowed` event. Output-only redaction of server responses still does not emit its own JSONL event. Use the JSONL ledger plus metrics for coverage of response-side transforms.
 
-### 8. Partial Hot Reload
+### 8. Hot Reload Refreshes Runtime Surfaces Atomically
 
-The watcher refreshes engine-backed rules, taints, egress controls, and registry state. The proxy redactor, audit redaction patterns, and approval timeout remain based on the startup policy, so hot reload is not an atomic full-policy update.
+A successful policy reload swaps engine rules/registry, rebuilds the redactor, updates audit redaction patterns, and updates approval timeout under the proxy runtime lock, then emits `policy_reloaded`. Invalid reloads keep the previous policy and prior runtime surfaces. Hooks must not reenter `Reload()`.
 
-### 9. Audit Event Ordering
+### 9. Terminal Decision Audit Path
 
-Input redaction emits a `tool_call_allowed` event before later policy, egress, chain, and approval checks. A redacted request that is later denied can therefore produce contradictory allow-labelled and deny events. Output-only redaction has no JSONL audit event.
+Input redaction no longer emits a premature allow event. Only the terminal allow/deny/approval decision is written, with redaction noted on that event when applicable. Output-only redaction remains without a dedicated JSONL event (see §7).
 
 ### 10. Basic SIEM Export Is Not Audit-Chain Retention
 

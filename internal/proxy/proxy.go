@@ -32,6 +32,7 @@ type Proxy struct {
 	logger         *slog.Logger
 	engine         *policy.Engine
 	audit          *audit.Logger
+	runtimeMu      sync.RWMutex
 	redactor       *redaction.Engine
 	approval       *approval.Engine
 	tracer         trace.TraceLogger
@@ -87,6 +88,16 @@ type approvalOutcome struct {
 	Receipt  *receipt.DecisionReceipt
 }
 
+// runtimeSnapshot pins all policy-dependent proxy surfaces to one generation.
+// Callers that need coherence across a reload must capture it while holding
+// runtimeMu.RLock and use the returned immutable values after releasing it.
+type runtimeSnapshot struct {
+	policy          *policy.Policy
+	redactor        *redaction.Engine
+	approval        *approval.Engine
+	approvalTimeout time.Duration
+}
+
 type approvalEvidence struct {
 	RequestHash          string
 	RedactedArgumentHash string
@@ -131,7 +142,7 @@ func New(cfg Config) *Proxy {
 	siemExp := cfg.buildSIEMExporter()
 	approvalSigner := cfg.buildApprovalSigner()
 
-	return &Proxy{
+	proxy := &Proxy{
 		cfg:     cfg,
 		session: NewSession(cfg.SessionID, cfg.ClientID),
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -146,6 +157,8 @@ func New(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
+	proxy.wirePolicyReload()
+	return proxy
 }
 
 func NewWithTracing(cfg Config) *Proxy {
@@ -197,8 +210,85 @@ func NewWithTracing(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
+	proxy.wirePolicyReload()
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
+}
+
+// wirePolicyReload attaches an atomic policy/runtime transaction to reloads.
+func (p *Proxy) wirePolicyReload() {
+	if p.engine == nil {
+		return
+	}
+	p.engine.SetReloadCommitter(p.commitPolicyRuntime)
+}
+
+// commitPolicyRuntime publishes the policy snapshot and refreshes redactor,
+// audit patterns, and approval timeout while tools/call is excluded by runtimeMu.
+func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
+	if pol == nil {
+		return
+	}
+	newRedactor := redaction.NewEngine(pol.Redaction)
+	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
+
+	reloadEvent := audit.Event{
+		EventType: audit.EventPolicyReloaded,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    p.cfg.ServerName,
+		Message:   "policy runtime surfaces reloaded",
+		Reason:    fmt.Sprintf("default_action=%s approval_timeout_seconds=%d redaction_patterns=%d", pol.DefaultAction, pol.Settings.ApprovalTimeoutSecs, len(pol.Redaction.Patterns)),
+	}
+
+	p.runtimeMu.Lock()
+	publish()
+	p.redactor = newRedactor
+	if p.approval != nil {
+		p.approval.SetTimeout(timeout)
+	}
+	if p.audit != nil {
+		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
+		// Record the generation transition before exposing it to tools/call.
+		p.audit.Log(reloadEvent)
+	}
+	p.runtimeMu.Unlock()
+
+	p.forwardAudit(reloadEvent)
+	p.logger.Info("policy runtime surfaces reloaded",
+		"default_action", pol.DefaultAction,
+		"redaction_patterns", len(pol.Redaction.Patterns),
+		"approval_timeout_seconds", pol.Settings.ApprovalTimeoutSecs,
+	)
+}
+
+func (p *Proxy) currentRedactor() *redaction.Engine {
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	return p.redactor
+}
+
+func (p *Proxy) currentApproval() *approval.Engine {
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	return p.approval
+}
+
+func (p *Proxy) currentRuntimeSnapshot() runtimeSnapshot {
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	return p.runtimeSnapshotLocked()
+}
+
+// runtimeSnapshotLocked captures policy-dependent surfaces while runtimeMu is held.
+func (p *Proxy) runtimeSnapshotLocked() runtimeSnapshot {
+	pol := p.engine.Policy()
+	return runtimeSnapshot{
+		policy:          pol,
+		redactor:        p.redactor,
+		approval:        p.approval,
+		approvalTimeout: time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second,
+	}
 }
 
 func (p *Proxy) Run(ctx context.Context) error {
@@ -504,10 +594,12 @@ func (p *Proxy) redactServerResponse(raw json.RawMessage) json.RawMessage {
 	}
 
 	modified := false
-	maxOutput := p.engine.Policy().Settings.MaxOutputSizeBytes
+	snapshot := p.currentRuntimeSnapshot()
+	maxOutput := snapshot.policy.Settings.MaxOutputSizeBytes
+	redactor := snapshot.redactor
 	for i, content := range result.Content {
 		if content.Text != "" {
-			redacted := p.redactor.RedactOutput(content.Text)
+			redacted := redactor.RedactOutput(content.Text)
 			if maxOutput > 0 && len(redacted) > maxOutput {
 				redacted = redacted[:maxOutput] + fmt.Sprintf("\n[TRUNCATED: output exceeded %d bytes]", maxOutput)
 			}
@@ -740,7 +832,16 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 	})
 }
 
-func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string) approvalOutcome {
+func approvalRequiredEvent(p *Proxy, serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, chainContext []string, evidence approvalEvidence) audit.Event {
+	return audit.Event{
+		EventType: audit.EventToolApprovalRequired, SessionID: p.session.ID, AgentID: p.cfg.ClientID,
+		Server: serverName, Tool: callReq.Name, Arguments: redactedArgs, Decision: string(policy.ActionRequireApproval),
+		Reason: reason, RiskLevel: string(risk), ChainContext: chainContext, RequestHash: evidence.RequestHash,
+		RedactedArgumentHash: evidence.RedactedArgumentHash, PolicyHash: evidence.PolicyHash, ChainContextHash: evidence.ChainContextHash,
+	}
+}
+
+func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string, snapshot runtimeSnapshot, evidence approvalEvidence, redactionResult redaction.Result) approvalOutcome {
 	approvalReq := approval.Request{
 		ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
 		Tool:      callReq.Name,
@@ -751,7 +852,6 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 		SessionID: p.session.ID,
 		AgentID:   p.cfg.ClientID,
 	}
-	evidence := p.buildApprovalEvidence(raw, redactedArgs, chainContext)
 
 	p.logger.Warn("approval requested",
 		"tool", callReq.Name,
@@ -760,26 +860,15 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	)
 
 	p.metrics.IncrementApprovals()
-	p.logAudit(audit.Event{
-		EventType:            audit.EventToolApprovalRequired,
-		SessionID:            p.session.ID,
-		AgentID:              p.cfg.ClientID,
-		Server:               serverName,
-		Tool:                 callReq.Name,
-		Arguments:            redactedArgs,
-		Decision:             string(policy.ActionRequireApproval),
-		Reason:               reason,
-		RiskLevel:            string(risk),
-		ChainContext:         chainContext,
-		RequestHash:          evidence.RequestHash,
-		RedactedArgumentHash: evidence.RedactedArgumentHash,
-		PolicyHash:           evidence.PolicyHash,
-		ChainContextHash:     evidence.ChainContextHash,
-	})
 
-	approved, err := p.approval.RequestApproval(approvalReq)
+	if snapshot.approval == nil {
+		denyReason := withRedactionNote("approval denied: approval backend is not configured", redactionResult)
+		p.logDenied(serverName, callReq.Name, redactedArgs, denyReason, risk)
+		return approvalOutcome{Approved: false, Reason: denyReason}
+	}
+	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
 	if err != nil || !approved {
-		denyReason := fmt.Sprintf("approval denied: %v", err)
+		denyReason := withRedactionNote(fmt.Sprintf("approval denied: %v", err), redactionResult)
 		p.logAudit(audit.Event{
 			EventType:            audit.EventToolDenied,
 			SessionID:            p.session.ID,
@@ -808,14 +897,14 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 		callReq.Name,
 		string(raw),
 		evidence.RedactedArgsJSON,
-		p.engine.Policy().Version,
+		snapshot.policy.Version,
 		evidence.PolicyJSON,
 		evidence.ChainContextJSON,
 		reason,
 		string(risk),
 		"human-operator",
 		"approve",
-		time.Duration(p.engine.Policy().Settings.ApprovalTimeoutSecs)*time.Second,
+		snapshot.approvalTimeout,
 	)
 	if err != nil {
 		errReason := fmt.Sprintf("approval receipt creation failed: %v", err)
@@ -836,9 +925,9 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	return approvalOutcome{Approved: true, Receipt: rec}
 }
 
-func (p *Proxy) buildApprovalEvidence(raw json.RawMessage, redactedArgs map[string]any, chainContext []string) approvalEvidence {
+func (p *Proxy) buildApprovalEvidence(raw json.RawMessage, redactedArgs map[string]any, chainContext []string, pol *policy.Policy) approvalEvidence {
 	argsJSON := marshalEvidence(redactedArgs)
-	policyJSON := marshalEvidence(p.engine.Policy())
+	policyJSON := marshalEvidence(pol)
 	chainJSON := marshalEvidence(chainContext)
 	return approvalEvidence{
 		RequestHash:          sha256Hex(raw),
@@ -872,6 +961,13 @@ func (p *Proxy) attachReceiptEvidence(event *audit.Event, rec *receipt.DecisionR
 
 func (p *Proxy) logAudit(event audit.Event) {
 	p.audit.Log(event)
+	p.forwardAudit(event)
+}
+
+// forwardAudit sends an already-written event to non-ledger sinks. Callers that
+// need a specific ledger position may write p.audit while holding runtimeMu,
+// then invoke this after releasing the barrier.
+func (p *Proxy) forwardAudit(event audit.Event) {
 	if p.webhook != nil {
 		p.webhook.Emit(event)
 	}

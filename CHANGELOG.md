@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Emit standalone JSONL `tool_call_allowed` for plain allow decisions (H14); recover audit hash chain on reopen and fail closed on incomplete/corrupt tails (H11).
+- Terminal-only decision audit path: remove premature redaction allow events (H15).
+- Reject incomplete TLS client cert/key pairs; split HTTP transport read/write mutexes to avoid SSE/POST deadlock class (H16).
+- Atomic policy hot reload of redactor, audit redaction patterns, and approval timeout with engine/registry swap (H17); invalid reloads keep prior runtime surfaces.
 - Block notification-form `tools/call` on stdio and remote client paths; shared envelope classification in `internal/mcp/envelope.go` and `internal/proxy/client_envelope.go`.
 - Fail closed on recognizable malformed `tools/call` envelopes that include a response `id` (error response, no relay).
 - Fail closed on duplicate `method` keys where any value resolves to `tools/call`, preventing parser differential attacks between Go (last-wins) and JavaScript (also last-wins, but first-wins servers also blocked).
@@ -14,8 +18,8 @@
 ### Documentation
 
 - Reconciled architecture, policy model, threat model, security policy, and public roadmap with the live v1.2 enforcement path.
-- Scoped audit hash linkage to healthy writes within one logger lifetime and documented incomplete per-call audit coverage.
-- Marked remote HTTP+SSE and built-in SIEM export experimental pending Phase 1 security and interoperability gates; earlier release notes overstated production readiness.
+- Documented SIEM as reduced/plaintext export (H18), not hash-linked audit retention.
+- Scoped residual risks: output-only redaction audit, durable approval not default serve path, SIEM TLS/auth still absent.
 
 ## v1.2.0 (2026-07-05)
 

@@ -1,9 +1,11 @@
 package audit_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -310,6 +312,158 @@ func TestAuditLogHashChain(t *testing.T) {
 	}
 }
 
+func TestNewLoggerRecoversHashChainAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	first, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	first.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-restart", Server: "demo"})
+	first.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-restart", Server: "demo", Tool: "file_read", Decision: "allow"})
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first logger: %v", err)
+	}
+
+	lines := readAuditLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines before reopen, got %d", len(lines))
+	}
+	var lastBefore audit.Event
+	if err := json.Unmarshal([]byte(lines[1]), &lastBefore); err != nil {
+		t.Fatalf("decode last before reopen: %v", err)
+	}
+
+	second, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("reopen NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	second.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "sess-restart", Server: "demo", Tool: "shell_exec", Decision: "deny"})
+
+	after := readAuditLines(t, path)
+	if len(after) != 3 {
+		t.Fatalf("expected 3 lines after reopen write, got %d", len(after))
+	}
+	var continued audit.Event
+	if err := json.Unmarshal([]byte(after[2]), &continued); err != nil {
+		t.Fatalf("decode continued event: %v", err)
+	}
+	if continued.PrevHash != lastBefore.Hash {
+		t.Fatalf("restart prev_hash: want %q, got %q", lastBefore.Hash, continued.PrevHash)
+	}
+	if continued.ChainIndex != lastBefore.ChainIndex+1 {
+		t.Fatalf("restart chain_index: want %d, got %d", lastBefore.ChainIndex+1, continued.ChainIndex)
+	}
+	if got := recomputeAuditHash(t, continued); got != continued.Hash {
+		t.Fatalf("continued hash mismatch: recomputed %q stored %q", got, continued.Hash)
+	}
+}
+
+func TestRecoverChainStateReadsOnlyTailOfLargeLog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.jsonl")
+
+	// Build a multi-megabyte ledger with many prefix lines, then one real tip event.
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pad := strings.Repeat(`{"event_type":"noise","session_id":"x","policy_decision":"allow","hash":"00"}`+"\n", 50_000)
+	if _, err := f.WriteString(pad); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Append a valid tip via the real logger path by recovering then writing.
+	// First recover from noise-only file would fail hash verify — rewrite tip cleanly:
+	tipLogger, err := audit.NewLogger(filepath.Join(dir, "tip-only.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tipLogger.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "tip", Decision: "allow", Tool: "t"})
+	if err := tipLogger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tipLines := readAuditLines(t, filepath.Join(dir, "tip-only.jsonl"))
+	if len(tipLines) != 1 {
+		t.Fatalf("tip lines: %d", len(tipLines))
+	}
+	// Overwrite big file: padding + tip
+	if err := os.WriteFile(path, append([]byte(pad), tipLines[0]+"\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("recover large log: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopened.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "tip", Decision: "deny", Tool: "u"})
+
+	lines := readAuditLines(t, path)
+	last := lines[len(lines)-1]
+	var ev audit.Event
+	if err := json.Unmarshal([]byte(last), &ev); err != nil {
+		t.Fatal(err)
+	}
+	var tip audit.Event
+	if err := json.Unmarshal([]byte(tipLines[0]), &tip); err != nil {
+		t.Fatal(err)
+	}
+	if ev.PrevHash != tip.Hash {
+		t.Fatalf("large-log recovery prev_hash want %q got %q", tip.Hash, ev.PrevHash)
+	}
+	if ev.ChainIndex != tip.ChainIndex+1 {
+		t.Fatalf("large-log recovery chain_index want %d got %d", tip.ChainIndex+1, ev.ChainIndex)
+	}
+}
+
+func TestNewLoggerRejectsIncompleteTrailingLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-partial", Server: "demo"})
+	if err := l.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Simulate a torn write: strip the final newline and leave a partial suffix.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Fatalf("fixture should end with newline")
+	}
+	partial := append(data[:len(data)-1], []byte(`,"torn":tru`)...)
+	if err := os.WriteFile(path, partial, 0o600); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+
+	if _, err := audit.NewLogger(path); err == nil {
+		t.Fatal("expected NewLogger to fail closed on incomplete trailing line")
+	}
+}
+
+func TestNewLoggerRejectsMalformedLastRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	if err := os.WriteFile(path, []byte("{\"event_type\":\"session_started\"}\n{not-json\n"), 0o600); err != nil {
+		t.Fatalf("write malformed: %v", err)
+	}
+	if _, err := audit.NewLogger(path); err == nil {
+		t.Fatal("expected NewLogger to fail closed on malformed last record")
+	}
+}
+
 func recomputeAuditHash(t *testing.T, e audit.Event) string {
 	t.Helper()
 	e.Hash = ""
@@ -378,5 +532,99 @@ func TestLoggerConcurrency(t *testing.T) {
 	}
 	if lines != 500 {
 		t.Errorf("expected 500 lines, got %d", lines)
+	}
+}
+
+func TestNewLoggerAcceptsLegacyRecordsWithoutHash(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	// Simulate a pre-hash-chain audit log: well-formed JSONL but missing hash/prev_hash/chain_index.
+	legacy := `{"timestamp":"2026-01-01T00:00:00Z","event_type":"session_started","session_id":"old-session","decision":"allow"}
+`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger should accept legacy records without hash: %v", err)
+	}
+	defer l.Close()
+
+	// Append a new event — must succeed and carry hash chain fields.
+	l.Log(audit.Event{
+		EventType: audit.EventToolAllowed,
+		SessionID: "new-session",
+		Tool:      "test_tool",
+		Decision:  "allow",
+	})
+
+	lines := readAuditLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines (legacy + new), got %d", len(lines))
+	}
+
+	var newEvent audit.Event
+	if err := json.Unmarshal([]byte(lines[1]), &newEvent); err != nil {
+		t.Fatalf("unmarshal new event: %v", err)
+	}
+	if newEvent.Hash == "" {
+		t.Fatal("new event should have a hash")
+	}
+	if newEvent.PrevHash != "" {
+		t.Fatalf("new event prev_hash should be empty (chain boundary), got %s", newEvent.PrevHash)
+	}
+	if newEvent.ChainIndex != 0 {
+		t.Fatalf("new event chain_index should be 0 (chain boundary), got %d", newEvent.ChainIndex)
+	}
+}
+
+func TestNewLoggerRejectsHashStrippedChainRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	// First, write a valid hash-chain log with two events.
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-strip", Server: "test"})
+	l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-strip", Server: "test", Tool: "read", Decision: "allow"})
+	if err := l.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Read the last line (second event) and tamper by removing its hash.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(raw), []byte("\n"))
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	}
+
+	var tampered audit.Event
+	if err := json.Unmarshal(lines[1], &tampered); err != nil {
+		t.Fatalf("unmarshal last event: %v", err)
+	}
+	// Strip the hash but leave PrevHash and ChainIndex intact.
+	tampered.Hash = ""
+	tamperedLine, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines[1] = tamperedLine
+	tamperedData := append(bytes.Join(lines, []byte("\n")), '\n')
+	if err := os.WriteFile(path, tamperedData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopening should detect the stripped hash and fail.
+	_, err = audit.NewLogger(path)
+	if err == nil {
+		t.Fatal("expected error for hash-stripped chained record, got nil")
+	}
+	if !errors.Is(err, audit.ErrCorruptAuditRecord) {
+		t.Fatalf("expected ErrCorruptAuditRecord, got %v", err)
 	}
 }

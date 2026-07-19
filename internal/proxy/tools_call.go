@@ -8,6 +8,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
+	"github.com/themayursinha/mcp-visor/internal/redaction"
 )
 
 // toolsCallResponder sends JSON-RPC errors back to the MCP client.
@@ -24,15 +25,40 @@ func (p *Proxy) processToolsCall(
 	argsMap := extractArgs(callReq.Arguments)
 	p.metrics.IncrementProcessed()
 
+	// Hold a shared barrier with applyPolicyRuntime so a single call cannot
+	// redact under the old redactor and evaluate against a newly published policy.
+	p.runtimeMu.RLock()
+	held := true
+	release := func() {
+		if held {
+			p.runtimeMu.RUnlock()
+			held = false
+		}
+	}
+	defer release()
+	redactor := p.redactor
+
 	if decision := p.evaluateRuntimeLimits(callReq); decision.Action == policy.ActionDeny {
 		respond(req.ID, decision.Reason)
 		p.metrics.IncrementDenied()
-		p.logDenied(serverName, callReq.Name, nil, decision.Reason, p.engine.GetRiskLevel(serverName, callReq.Name))
+		rtDeniedEvent := audit.Event{
+			EventType: audit.EventToolDenied,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Decision:  string(policy.ActionDeny),
+			Reason:    decision.Reason,
+			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
+		}
+		p.audit.Log(rtDeniedEvent)
+		release()
+		p.forwardAudit(rtDeniedEvent)
 		p.observeToolCall("denied", decision.Reason, serverName, callReq.Name, string(p.engine.GetRiskLevel(serverName, callReq.Name)), false, started)
 		return raw, "denied"
 	}
 
-	redactedArgs, redactionResult := p.redactor.RedactArgs(argsMap)
+	redactedArgs, redactionResult := redactor.RedactArgs(argsMap)
 	if redactionResult.Redacted {
 		p.metrics.AddBytesRedacted(int64(len(raw)))
 		p.logger.Info("arguments redacted",
@@ -40,17 +66,8 @@ func (p *Proxy) processToolsCall(
 			"fields", redactionResult.RedactedFields,
 			"session", p.session.ID,
 		)
-		p.logAudit(audit.Event{
-			EventType: audit.EventToolAllowed,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  "redact_then_allow",
-			Reason:    fmt.Sprintf("redacted fields: %v", redactionResult.RedactedFields),
-			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
-		})
+		// Do not audit here: emit a single terminal decision event after policy
+		// evaluation so allow/deny/approval paths stay one-event-per-call.
 		rewritten, err := p.rewriteArgs(raw, redactedArgs)
 		if err == nil {
 			raw = rewritten
@@ -58,13 +75,13 @@ func (p *Proxy) processToolsCall(
 	}
 
 	sensitivePath := p.extractPath(callReq)
-	if sensitivePath != "" && p.redactor.IsSensitiveFile(sensitivePath) {
+	if sensitivePath != "" && redactor.IsSensitiveFile(sensitivePath) {
 		reason := fmt.Sprintf("sensitive file: %s", sensitivePath)
 		respond(req.ID, fmt.Sprintf("access to sensitive file denied: %s", sensitivePath))
 		p.metrics.IncrementDenied()
 		risk := p.engine.GetRiskLevel(serverName, callReq.Name)
 
-		p.logAudit(audit.Event{
+		sensitiveDeniedEvent := audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: p.session.ID,
 			AgentID:   p.cfg.ClientID,
@@ -72,9 +89,12 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(policy.ActionDeny),
-			Reason:    reason,
+			Reason:    withRedactionNote(reason, redactionResult),
 			RiskLevel: string(risk),
-		})
+		}
+		p.audit.Log(sensitiveDeniedEvent)
+		release()
+		p.forwardAudit(sensitiveDeniedEvent)
 		p.logger.Warn("sensitive file denied",
 			"tool", callReq.Name,
 			"path", sensitivePath,
@@ -129,7 +149,7 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(decision.Action),
-			Reason:    decision.Reason,
+			Reason:    withRedactionNote(decision.Reason, redactionResult),
 			RiskLevel: string(risk),
 		}
 		if egressTriggered {
@@ -138,7 +158,9 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.TaintReason = egressContext.taint.Reason
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
-		p.logAudit(deniedEvent)
+		p.audit.Log(deniedEvent)
+		release()
+		p.forwardAudit(deniedEvent)
 		p.logger.Warn("policy denied",
 			"tool", callReq.Name,
 			"reason", decision.Reason,
@@ -148,7 +170,20 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
-		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext)
+		// Pin evidence, receipt metadata, and approval timeout while the same
+		// runtime snapshot used for evaluation is still protected. Release only
+		// before the blocking approval wait so reloads are not stalled.
+		snapshot := p.runtimeSnapshotLocked()
+		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
+		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
+		// Write the JSONL ledger record while holding runtimeMu to
+		// preserve audit ordering with respect to policy reloads.
+		p.audit.Log(approvalEvent)
+		// Release barrier before the blocking wait and before SIEM
+		// forwarding so slow SIEM/webhook sinks cannot stall reloads.
+		release()
+		p.forwardAudit(approvalEvent)
+		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence, redactionResult)
 		if !outcome.Approved {
 			reason := fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason)
 			respond(req.ID, reason)
@@ -165,12 +200,12 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Arguments: redactedArgs,
 			Decision:  string(policy.ActionAllow),
-			Reason:    "approved by human operator",
+			Reason:    withRedactionNote("approved by human operator", redactionResult),
 			RiskLevel: string(risk),
 		}
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		p.logAudit(allowEvent)
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
 		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
 		p.metrics.IncrementApproved()
 		p.observeToolCall("approved", "approved by human operator", serverName, callReq.Name, string(risk), chainTriggered, started)
@@ -178,14 +213,55 @@ func (p *Proxy) processToolsCall(
 
 	case policy.ActionAllow:
 		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
-		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
+		reason := withRedactionNote(decision.Reason, redactionResult)
+		allowEvent := audit.Event{
+			EventType: audit.EventToolAllowed,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: redactedArgs,
+			Decision:  string(policy.ActionAllow),
+			Reason:    reason,
+			RiskLevel: string(risk),
+		}
+		p.audit.Log(allowEvent)
+		release()
+		p.forwardAudit(allowEvent)
+		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	default:
 		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk)
-		p.observeToolCall("allowed", decision.Reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
+		reason := withRedactionNote(decision.Reason, redactionResult)
+		defaultAllowEvent := audit.Event{
+			EventType: audit.EventToolAllowed,
+			SessionID: p.session.ID,
+			AgentID:   p.cfg.ClientID,
+			Server:    serverName,
+			Tool:      callReq.Name,
+			Arguments: redactedArgs,
+			Decision:  string(policy.ActionAllow),
+			Reason:    reason,
+			RiskLevel: string(risk),
+		}
+		p.audit.Log(defaultAllowEvent)
+		release()
+		p.forwardAudit(defaultAllowEvent)
+		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 	}
+}
+
+func withRedactionNote(reason string, result redaction.Result) string {
+	if !result.Redacted || len(result.RedactedFields) == 0 {
+		return reason
+	}
+	note := fmt.Sprintf("redacted fields: %v", result.RedactedFields)
+	if reason == "" {
+		return note
+	}
+	return reason + "; " + note
 }

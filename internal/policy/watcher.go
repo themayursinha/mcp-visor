@@ -10,10 +10,20 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// ReloadHook observes a policy after a successful atomic reload.
+// Hooks must not call Reload() reentrantly.
+type ReloadHook func(newPolicy *Policy)
+
+// ReloadCommitter atomically publishes a policy with dependent runtime surfaces.
+// It must invoke publish before returning. At most one committer may be registered.
+type ReloadCommitter func(newPolicy *Policy, publish func())
+
 type Watcher struct {
-	mu       sync.RWMutex
-	policy   *Policy
-	registry *Registry
+	mu        sync.RWMutex
+	policy    *Policy
+	registry  *Registry
+	hooks     []ReloadHook
+	committer ReloadCommitter
 
 	path   string
 	logger *slog.Logger
@@ -118,10 +128,37 @@ func (w *Watcher) reload() {
 		return
 	}
 
-	w.mu.Lock()
-	w.policy = pol
-	w.registry = NewRegistry(pol)
-	w.mu.Unlock()
+	reg := NewRegistry(pol)
+
+	w.mu.RLock()
+	committer := w.committer
+	hooks := append([]ReloadHook(nil), w.hooks...)
+	w.mu.RUnlock()
+
+	var publishOnce sync.Once
+	publish := func() {
+		publishOnce.Do(func() {
+			w.mu.Lock()
+			w.policy = pol
+			w.registry = reg
+			w.mu.Unlock()
+		})
+	}
+
+	// A committer holds the proxy's call barrier while it publishes this policy
+	// and refreshes its dependent runtime surfaces. Without one, publish first so
+	// observers always see a complete watcher snapshot.
+	if committer != nil {
+		committer(pol, publish)
+	} else {
+		publish()
+	}
+
+	for _, hook := range hooks {
+		if hook != nil {
+			hook(pol)
+		}
+	}
 
 	w.logger.Info("policy hot-reloaded",
 		"path", w.path,
@@ -129,6 +166,26 @@ func (w *Watcher) reload() {
 		"servers", len(pol.Servers),
 		"chain_rules", len(pol.ToolChains),
 	)
+}
+
+// OnReload registers a hook invoked after each successful reload.
+// Hooks run outside the watcher lock so they may call Current().
+func (w *Watcher) OnReload(hook ReloadHook) {
+	if hook == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.hooks = append(w.hooks, hook)
+}
+
+// SetReloadCommitter installs the single transaction responsible for publishing
+// the watcher snapshot with dependent runtime surfaces. It is configured during
+// proxy construction, before the watcher is used for live reloads.
+func (w *Watcher) SetReloadCommitter(committer ReloadCommitter) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.committer = committer
 }
 
 func (w *Watcher) Reload() {

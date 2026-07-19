@@ -15,10 +15,12 @@ import (
 )
 
 type Engine struct {
-	mu       sync.RWMutex
-	policy   *Policy
-	registry *Registry
-	logger   *slog.Logger
+	mu        sync.RWMutex
+	policy    *Policy
+	registry  *Registry
+	logger    *slog.Logger
+	hooks     []ReloadHook
+	committer ReloadCommitter
 
 	watcher  *Watcher
 	clientID string
@@ -53,11 +55,63 @@ func (e *Engine) SetClientID(id string) {
 	e.clientID = id
 }
 
-func (e *Engine) Reload(p *Policy) {
+// OnReload registers a hook for successful policy reloads.
+// When a watcher is present, hooks attach to the watcher so filesystem
+// reloads refresh dependent runtime surfaces (redactor, audit patterns, approval).
+// Without a watcher, hooks fire from Engine.Reload.
+func (e *Engine) OnReload(hook ReloadHook) {
+	if hook == nil {
+		return
+	}
+	if e.watcher != nil {
+		e.watcher.OnReload(hook)
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.policy = p
-	e.registry = NewRegistry(p)
+	e.hooks = append(e.hooks, hook)
+}
+
+// SetReloadCommitter installs the transaction that publishes an engine policy
+// with dependent runtime surfaces. With a watcher, it delegates to the watcher.
+func (e *Engine) SetReloadCommitter(committer ReloadCommitter) {
+	if e.watcher != nil {
+		e.watcher.SetReloadCommitter(committer)
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.committer = committer
+}
+
+func (e *Engine) Reload(p *Policy) {
+	if p == nil {
+		return
+	}
+	e.mu.RLock()
+	committer := e.committer
+	hooks := append([]ReloadHook(nil), e.hooks...)
+	e.mu.RUnlock()
+
+	var publishOnce sync.Once
+	publish := func() {
+		publishOnce.Do(func() {
+			e.mu.Lock()
+			e.policy = p
+			e.registry = NewRegistry(p)
+			e.mu.Unlock()
+		})
+	}
+	if committer != nil {
+		committer(p, publish)
+	} else {
+		publish()
+	}
+	for _, hook := range hooks {
+		if hook != nil {
+			hook(p)
+		}
+	}
 }
 
 func (e *Engine) Close() {

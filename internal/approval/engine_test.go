@@ -103,6 +103,27 @@ func TestApprovalTimeout(t *testing.T) {
 	t.Logf("timeout error: %v", err)
 }
 
+func TestApprovalUsesExplicitPinnedTimeout(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := approval.NewEngine(dir, 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	start := time.Now()
+	approved, err := eng.RequestApprovalWithTimeout(approval.Request{
+		ID:     "pinned-timeout",
+		Tool:   "slow_tool",
+		Server: "test",
+	}, 40*time.Millisecond)
+	if err == nil || approved {
+		t.Fatalf("expected explicit timeout denial, approved=%v err=%v", approved, err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("explicit timeout was not honored promptly: %v", elapsed)
+	}
+}
+
 func TestApprovalRequestFileCreated(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := approval.NewEngine(dir, 2*time.Second)
