@@ -139,6 +139,11 @@ func recoverChainState(path string) (prevHash string, chainIndex uint64, err err
 		return "", 0, fmt.Errorf("%w: %v", ErrCorruptAuditRecord, err)
 	}
 	if last.Hash == "" {
+		if last.PrevHash != "" || last.ChainIndex > 0 {
+			// Record carries chain metadata but hash was stripped:
+			// treat as tampering, not a legacy boundary.
+			return "", 0, fmt.Errorf("%w: hash stripped from chained record", ErrCorruptAuditRecord)
+		}
 		// Legacy record without a hash chain: treat as a chain boundary
 		// so the configured audit file is preserved on upgrade.
 		return "", 0, nil

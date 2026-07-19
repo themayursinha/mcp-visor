@@ -1,9 +1,11 @@
 package audit_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -573,5 +575,56 @@ func TestNewLoggerAcceptsLegacyRecordsWithoutHash(t *testing.T) {
 	}
 	if newEvent.ChainIndex != 0 {
 		t.Fatalf("new event chain_index should be 0 (chain boundary), got %d", newEvent.ChainIndex)
+	}
+}
+
+func TestNewLoggerRejectsHashStrippedChainRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	// First, write a valid hash-chain log with two events.
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-strip", Server: "test"})
+	l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-strip", Server: "test", Tool: "read", Decision: "allow"})
+	if err := l.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Read the last line (second event) and tamper by removing its hash.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(raw), []byte("\n"))
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	}
+
+	var tampered audit.Event
+	if err := json.Unmarshal(lines[1], &tampered); err != nil {
+		t.Fatalf("unmarshal last event: %v", err)
+	}
+	// Strip the hash but leave PrevHash and ChainIndex intact.
+	tampered.Hash = ""
+	tamperedLine, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines[1] = tamperedLine
+	tamperedData := append(bytes.Join(lines, []byte("\n")), '\n')
+	if err := os.WriteFile(path, tamperedData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopening should detect the stripped hash and fail.
+	_, err = audit.NewLogger(path)
+	if err == nil {
+		t.Fatal("expected error for hash-stripped chained record, got nil")
+	}
+	if !errors.Is(err, audit.ErrCorruptAuditRecord) {
+		t.Fatalf("expected ErrCorruptAuditRecord, got %v", err)
 	}
 }
