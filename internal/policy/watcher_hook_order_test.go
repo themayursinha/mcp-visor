@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWatcherHooksRunBeforePolicyPublish(t *testing.T) {
+func TestWatcherHooksRunAfterPolicyPublish(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "policy.yaml")
 	initial := `
@@ -29,12 +29,12 @@ servers:
 	}
 	defer w.Close()
 
-	var sawNewDuringHook atomic.Bool
+	var sawPublishedPolicyDuringHook atomic.Bool
 	w.OnReload(func(pol *Policy) {
-		// During the hook, Current() must still expose the previous policy.
+		// Observers run after publication and receive the same policy snapshot.
 		cur, _ := w.Current()
-		if cur.DefaultAction != ActionDeny {
-			sawNewDuringHook.Store(true)
+		if cur == pol && cur.DefaultAction == ActionAllow {
+			sawPublishedPolicyDuringHook.Store(true)
 		}
 		if pol.DefaultAction != ActionAllow {
 			t.Errorf("hook should receive the new policy document")
@@ -56,8 +56,8 @@ servers:
 	}
 	w.Reload()
 
-	if sawNewDuringHook.Load() {
-		t.Fatal("Current() published new policy before hooks finished")
+	if !sawPublishedPolicyDuringHook.Load() {
+		t.Fatal("Current() did not publish the new policy before observers ran")
 	}
 	cur, _ := w.Current()
 	if cur.DefaultAction != ActionAllow {

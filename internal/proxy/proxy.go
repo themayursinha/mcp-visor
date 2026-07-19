@@ -205,19 +205,17 @@ func NewWithTracing(cfg Config) *Proxy {
 	return proxy
 }
 
-// wirePolicyReload attaches atomic runtime surface refresh to engine reloads.
+// wirePolicyReload attaches an atomic policy/runtime transaction to reloads.
 func (p *Proxy) wirePolicyReload() {
 	if p.engine == nil {
 		return
 	}
-	p.engine.OnReload(p.applyPolicyRuntime)
+	p.engine.SetReloadCommitter(p.commitPolicyRuntime)
 }
 
-// applyPolicyRuntime refreshes redactor, audit patterns, and approval timeout.
-// Called from reload hooks BEFORE the new policy becomes visible via
-// Watcher.Current()/Engine.current(), under write lock so concurrent
-// tools/call evaluation (held under runtimeMu.RLock) cannot straddle the swap.
-func (p *Proxy) applyPolicyRuntime(pol *policy.Policy) {
+// commitPolicyRuntime publishes the policy snapshot and refreshes redactor,
+// audit patterns, and approval timeout while tools/call is excluded by runtimeMu.
+func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	if pol == nil {
 		return
 	}
@@ -225,6 +223,7 @@ func (p *Proxy) applyPolicyRuntime(pol *policy.Policy) {
 	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
 
 	p.runtimeMu.Lock()
+	publish()
 	p.redactor = newRedactor
 	if p.approval != nil {
 		p.approval.SetTimeout(timeout)

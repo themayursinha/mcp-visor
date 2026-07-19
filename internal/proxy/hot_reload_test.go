@@ -91,7 +91,20 @@ redaction:
 	if err := os.WriteFile(policyPath, []byte(updated), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
+	// A reload observer must never see a new runtime redactor paired with the
+	// old policy snapshot. The proxy registers its runtime transaction first;
+	// this observer runs after that transaction and therefore requires the
+	// matching policy to be published already.
+	policyPublishedDuringObserver := false
+	w.OnReload(func(pol *policy.Policy) {
+		current, _ := w.Current()
+		policyPublishedDuringObserver = current == pol
+	})
 	w.Reload()
+	if !policyPublishedDuringObserver {
+		t.Fatal("reload observer saw runtime refresh before matching policy publication")
+	}
 
 	after := p.currentRedactor()
 	if after == before {
