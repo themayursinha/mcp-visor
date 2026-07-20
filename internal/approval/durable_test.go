@@ -151,6 +151,137 @@ func TestDurableEngineMalformedReceiptFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDurableEngineRejectsUnsignedReceiptAndRetainsPendingRequest(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	de, err := approval.NewDurableEngine(nil, t.TempDir(), pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := de.RequestApproval(approval.Request{
+		ID: "unsigned", Tool: "shell_exec", Server: "shell", SessionID: "sess-a", AgentID: "agent-a",
+		Reason: "high risk", RiskLevel: "high", Arguments: map[string]any{"cmd": "id"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	forged, err := receipt.NewReceipt(
+		pending.ExecutionID, "sess-a", "agent-a", "shell", "shell_exec",
+		"high risk", "{}", "1.0", "policy", "chain", "high risk", "high", "operator", "approve", time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := forged.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := de.SubmitReceipt(raw); err == nil {
+		t.Fatal("unsigned receipt must not approve a pending request")
+	}
+	if _, err := de.GetPendingRequest(pending.ExecutionID); err != nil {
+		t.Fatalf("invalid receipt consumed pending request: %v", err)
+	}
+}
+
+func TestDurableEngineRejectsSignedReceiptWithMismatchedRequestIdentity(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	de, err := approval.NewDurableEngine(nil, t.TempDir(), pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := de.RequestApproval(approval.Request{
+		ID: "identity", Tool: "shell_exec", Server: "shell", SessionID: "sess-a", AgentID: "agent-a",
+		Reason: "high risk", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongIdentity, err := receipt.NewReceipt(
+		pending.ExecutionID, "sess-b", "agent-a", "shell", "shell_exec",
+		"high risk", "{}", "1.0", "policy", "chain", "high risk", "high", "operator", "approve", time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wrongIdentity.Sign(pair); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := wrongIdentity.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := de.SubmitReceipt(raw); err == nil {
+		t.Fatal("receipt for a different session must not approve the pending request")
+	}
+	if _, err := de.GetPendingRequest(pending.ExecutionID); err != nil {
+		t.Fatalf("mismatched receipt consumed pending request: %v", err)
+	}
+}
+
+func TestDurableEngineReceiptCompletionDoesNotResurrectPendingAfterRestart(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	de, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := de.RequestApproval(approval.Request{
+		ID: "complete", Tool: "shell_exec", Server: "shell", SessionID: "sess-a", AgentID: "agent-a",
+		Reason: "high risk", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approved, err := receipt.NewReceipt(
+		pending.ExecutionID, "sess-a", "agent-a", "shell", "shell_exec",
+		"high risk", "{}", "1.0", "policy", "chain", "high risk", "high", "operator", "approve", time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approved.Sign(pair); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := approved.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := de.SubmitReceipt(raw)
+	if err != nil || !decision.Approved {
+		t.Fatalf("signed matching receipt should approve: decision=%+v err=%v", decision, err)
+	}
+
+	reopened, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.GetPendingRequest(pending.ExecutionID); err == nil {
+		t.Fatal("completed pending request must not be restored after restart")
+	}
+}
+
+func TestNewDurableEngineRejectsMalformedPersistedState(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pending-corrupt.json"), []byte(`{not-json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approval.NewDurableEngine(nil, dir, nil); err == nil {
+		t.Fatal("malformed durable approval state must prevent startup")
+	}
+}
+
 func TestDurableEngineCleanupSkipsExpiredPendingOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	expired := []byte(`{
