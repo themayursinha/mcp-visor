@@ -1,8 +1,10 @@
 package approval_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -511,6 +513,54 @@ func TestDurableEngineRejectsUnpersistableRequestIdentities(t *testing.T) {
 			}
 			if len(entries) != 0 {
 				t.Fatalf("invalid request must not be persisted: %v", entries)
+			}
+		})
+	}
+}
+
+func TestDurableEngineRejectsUnsafeRequestIDs(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "state")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(parent, "canary.txt")
+	if err := os.WriteFile(canary, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{
+		"foo/../../bar",
+		`foo\..\..\bar`,
+		"foo\x00bar",
+		"..",
+		".",
+	} {
+		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
+			de, err := approval.NewDurableEngine(nil, dir, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = de.RequestApproval(approval.Request{
+				ID: id, Tool: "shell_exec", Server: "shell", SessionID: "session-a", AgentID: "agent-a",
+				Reason: "high risk", RiskLevel: "high",
+			})
+			if err == nil {
+				t.Fatal("unsafe request ID was accepted")
+			}
+			if !strings.Contains(err.Error(), "unsafe request ID") {
+				t.Fatalf("unexpected error for unsafe request ID: %v", err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("unsafe request ID created durable state: %v", entries)
+			}
+			data, err := os.ReadFile(canary)
+			if err != nil || string(data) != "keep" {
+				t.Fatalf("parent directory was affected by unsafe request ID: err=%v data=%q", err, data)
 			}
 		})
 	}
