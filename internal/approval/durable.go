@@ -77,7 +77,7 @@ func (de *DurableEngine) RequestApproval(req Request) (*DurableDecision, error) 
 	if req.Tool == "" || req.Server == "" || req.SessionID == "" || req.AgentID == "" {
 		return nil, fmt.Errorf("approval request requires tool, server, session ID, and agent ID")
 	}
-	if err := validateDurableFileID(req.ID); err != nil {
+	if err := validateApprovalFileID(req.ID); err != nil {
 		return nil, err
 	}
 
@@ -356,7 +356,7 @@ func (de *DurableEngine) loadState() error {
 			if dr.ID == "" || dr.Tool == "" || dr.Server == "" || dr.SessionID == "" || dr.AgentID == "" || dr.ExpiresAt.IsZero() {
 				return fmt.Errorf("invalid pending request %q", name)
 			}
-			if err := validateDurableFileID(dr.ID); err != nil {
+			if err := validateApprovalFileID(dr.ID); err != nil {
 				return fmt.Errorf("invalid pending request %q: %w", name, err)
 			}
 			if name != fmt.Sprintf("pending-%s.json", dr.ID) {
@@ -383,7 +383,7 @@ func (de *DurableEngine) loadState() error {
 			if rec.ExecutionID == "" || rec.Server == "" || rec.Tool == "" || rec.SessionID == "" || rec.AgentID == "" {
 				return fmt.Errorf("invalid receipt %q", name)
 			}
-			if err := validateDurableFileID(rec.ExecutionID); err != nil {
+			if err := validateApprovalFileID(rec.ExecutionID); err != nil {
 				return fmt.Errorf("invalid receipt %q: %w", name, err)
 			}
 			if rec.Decision != "approve" && rec.Decision != "deny" {
@@ -447,9 +447,9 @@ type DurableDecision struct {
 	Receipt          *receipt.DecisionReceipt
 }
 
-// validateDurableFileID rejects IDs that cannot safely be used as a single
-// filename component under the durable state directory.
-func validateDurableFileID(id string) error {
+// validateApprovalFileID rejects IDs that cannot safely be used as a single
+// filename component under an approval state directory.
+func validateApprovalFileID(id string) error {
 	if id == "" {
 		return nil
 	}
@@ -471,7 +471,7 @@ func validateDurableFileID(id string) error {
 // stateFilePath builds pending-/receipt- paths and fails closed if the ID would
 // resolve outside the configured durable state directory.
 func (de *DurableEngine) stateFilePath(kind, id string) (string, error) {
-	if err := validateDurableFileID(id); err != nil {
+	if err := validateApprovalFileID(id); err != nil {
 		return "", err
 	}
 	name := fmt.Sprintf("%s-%s.json", kind, id)

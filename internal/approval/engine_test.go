@@ -1,8 +1,10 @@
 package approval_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,6 +197,44 @@ func TestApprovalFilesCleanedUp(t *testing.T) {
 	}
 	if _, err := os.Stat(noPath); !os.IsNotExist(err) {
 		t.Error("no file should be cleaned up")
+	}
+}
+
+func TestApprovalEngineRejectsUnsafeRequestIDs(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "state")
+	eng, err := approval.NewEngine(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(parent, "canary.txt")
+	if err := os.WriteFile(canary, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"foo/../../bar", `foo\..\..\bar`, "foo\x00bar", "..", "."} {
+		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
+			approved, err := eng.RequestApprovalWithTimeout(approval.Request{
+				ID: id, Tool: "shell_exec", Server: "shell",
+			}, 10*time.Millisecond)
+			if err == nil || approved {
+				t.Fatalf("unsafe request ID was accepted: approved=%v err=%v", approved, err)
+			}
+			if !strings.Contains(err.Error(), "unsafe request ID") {
+				t.Fatalf("unsafe request ID reached file I/O: %v", err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("unsafe request ID created approval state: %v", entries)
+			}
+			data, err := os.ReadFile(canary)
+			if err != nil || string(data) != "keep" {
+				t.Fatalf("parent directory was affected: err=%v data=%q", err, data)
+			}
+		})
 	}
 }
 
