@@ -306,8 +306,12 @@ func TestNewDurableEngineSkipsExpiredPersistedReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := approval.NewDurableEngine(nil, dir, pair.PublicKey); err != nil {
-		t.Fatalf("expired persisted receipt must not prevent startup: %v", err)
+	rotatedPair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approval.NewDurableEngine(nil, dir, rotatedPair.PublicKey); err != nil {
+		t.Fatalf("expired persisted receipt must not prevent startup after key rotation: %v", err)
 	}
 }
 

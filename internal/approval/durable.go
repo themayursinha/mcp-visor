@@ -352,14 +352,14 @@ func (de *DurableEngine) loadState() error {
 			if err != nil {
 				return fmt.Errorf("decode receipt %q: %w", name, err)
 			}
+			if rec.IsExpired() {
+				continue
+			}
 			if len(de.pubKey) != ed25519.PublicKeySize {
 				return fmt.Errorf("durable receipt verification key is not configured")
 			}
 			if err := rec.Verify(ed25519.PublicKey(de.pubKey)); err != nil {
 				return fmt.Errorf("verify receipt %q: %w", name, err)
-			}
-			if rec.IsExpired() {
-				continue
 			}
 			if rec.ExecutionID == "" || rec.Server == "" || rec.Tool == "" || rec.SessionID == "" || rec.AgentID == "" {
 				return fmt.Errorf("invalid receipt %q", name)
