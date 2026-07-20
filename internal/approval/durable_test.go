@@ -430,6 +430,51 @@ func TestDurableEngineReconcilesReceiptPersistedBeforePendingRemoval(t *testing.
 	if got := len(reopened.PendingRequests()); got != 0 {
 		t.Fatalf("completed request remained in pending queue after recovery: %d", got)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "pending-"+pending.ExecutionID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("stale pending file should be removed during recovery: %v", err)
+	}
+}
+
+func TestNewDurableEngineFailsClosedOnReceiptPendingIdentityMismatch(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	execID := "exec-mismatch"
+	pending := []byte(`{
+  "id": "exec-mismatch",
+  "tool": "shell_exec",
+  "server": "shell",
+  "session_id": "sess-a",
+  "agent_id": "agent-a",
+  "created_at": "2030-01-01T00:00:00Z",
+  "expires_at": "2030-01-01T01:00:00Z",
+  "request_hash": "5:shell:10:shell_exec:6:sess-a:7:agent-a"
+}`)
+	if err := os.WriteFile(filepath.Join(dir, "pending-"+execID+".json"), pending, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := receipt.NewReceipt(
+		execID, "sess-b", "agent-a", "shell", "shell_exec",
+		"high risk", "{}", "1.0", "policy", "chain", "high risk", "high", "operator", "approve", time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Sign(pair); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := rec.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "receipt-"+execID+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approval.NewDurableEngine(nil, dir, pair.PublicKey); err == nil {
+		t.Fatal("receipt/pending identity mismatch must fail closed on startup")
+	}
 }
 
 func TestNewDurableEngineRejectsMalformedPersistedState(t *testing.T) {

@@ -330,78 +330,99 @@ func (de *DurableEngine) loadState() error {
 	if err != nil {
 		return fmt.Errorf("read state directory: %w", err)
 	}
+
+	var pendingNames, receiptNames []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasPrefix(name, "pending-") && !strings.HasPrefix(name, "receipt-") {
-			continue
+		switch {
+		case strings.HasPrefix(name, "pending-"):
+			if filepath.Ext(name) != ".json" {
+				return fmt.Errorf("invalid durable state filename: %q", name)
+			}
+			pendingNames = append(pendingNames, name)
+		case strings.HasPrefix(name, "receipt-"):
+			if filepath.Ext(name) != ".json" {
+				return fmt.Errorf("invalid durable state filename: %q", name)
+			}
+			receiptNames = append(receiptNames, name)
 		}
-		if filepath.Ext(name) != ".json" {
-			return fmt.Errorf("invalid durable state filename: %q", name)
-		}
+	}
+
+	// Load receipts first so a completed approval wins over a leftover pending
+	// file from the persist-receipt / remove-pending crash window, independent
+	// of filesystem directory order.
+	for _, name := range receiptNames {
 		path := filepath.Join(de.stateDir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read %q: %w", name, err)
 		}
+		rec, err := receipt.Unmarshal(data)
+		if err != nil {
+			return fmt.Errorf("decode receipt %q: %w", name, err)
+		}
+		if rec.IsExpired() {
+			continue
+		}
+		if len(de.pubKey) != ed25519.PublicKeySize {
+			return fmt.Errorf("durable receipt verification key is not configured")
+		}
+		if err := rec.Verify(ed25519.PublicKey(de.pubKey)); err != nil {
+			return fmt.Errorf("verify receipt %q: %w", name, err)
+		}
+		if rec.ExecutionID == "" || rec.Server == "" || rec.Tool == "" || rec.SessionID == "" || rec.AgentID == "" {
+			return fmt.Errorf("invalid receipt %q", name)
+		}
+		if err := validateApprovalFileID(rec.ExecutionID); err != nil {
+			return fmt.Errorf("invalid receipt %q: %w", name, err)
+		}
+		if rec.Decision != "approve" && rec.Decision != "deny" {
+			return fmt.Errorf("invalid receipt decision in %q", name)
+		}
+		if name != fmt.Sprintf("receipt-%s.json", rec.ExecutionID) {
+			return fmt.Errorf("receipt filename does not match execution ID: %q", name)
+		}
+		de.receipts[hashRequest(rec.Server, rec.Tool, rec.SessionID, rec.AgentID)] = rec
+	}
 
-		switch {
-		case strings.HasPrefix(name, "pending-"):
-			var dr durableRequest
-			if err := json.Unmarshal(data, &dr); err != nil {
-				return fmt.Errorf("decode pending request %q: %w", name, err)
-			}
-			if dr.ID == "" || dr.Tool == "" || dr.Server == "" || dr.SessionID == "" || dr.AgentID == "" || dr.ExpiresAt.IsZero() {
-				return fmt.Errorf("invalid pending request %q", name)
-			}
-			if err := validateApprovalFileID(dr.ID); err != nil {
-				return fmt.Errorf("invalid pending request %q: %w", name, err)
-			}
-			if name != fmt.Sprintf("pending-%s.json", dr.ID) {
-				return fmt.Errorf("pending request filename does not match ID: %q", name)
-			}
-			if time.Now().Before(dr.ExpiresAt) {
-				de.pending[dr.ID] = &dr
-			}
+	completedByExec := make(map[string]*receipt.DecisionReceipt, len(de.receipts))
+	for _, rec := range de.receipts {
+		completedByExec[rec.ExecutionID] = rec
+	}
 
-		case strings.HasPrefix(name, "receipt-"):
-			rec, err := receipt.Unmarshal(data)
-			if err != nil {
-				return fmt.Errorf("decode receipt %q: %w", name, err)
+	for _, name := range pendingNames {
+		path := filepath.Join(de.stateDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %q: %w", name, err)
+		}
+		var dr durableRequest
+		if err := json.Unmarshal(data, &dr); err != nil {
+			return fmt.Errorf("decode pending request %q: %w", name, err)
+		}
+		if dr.ID == "" || dr.Tool == "" || dr.Server == "" || dr.SessionID == "" || dr.AgentID == "" || dr.ExpiresAt.IsZero() {
+			return fmt.Errorf("invalid pending request %q", name)
+		}
+		if err := validateApprovalFileID(dr.ID); err != nil {
+			return fmt.Errorf("invalid pending request %q: %w", name, err)
+		}
+		if name != fmt.Sprintf("pending-%s.json", dr.ID) {
+			return fmt.Errorf("pending request filename does not match ID: %q", name)
+		}
+		if rec, ok := completedByExec[dr.ID]; ok {
+			if !receiptMatchesPending(rec, &dr) {
+				return fmt.Errorf("receipt for %q does not match pending request", dr.ID)
 			}
-			if rec.IsExpired() {
-				continue
+			if err := de.removePending(dr.ID); err != nil {
+				return fmt.Errorf("remove completed pending request %q: %w", name, err)
 			}
-			if len(de.pubKey) != ed25519.PublicKeySize {
-				return fmt.Errorf("durable receipt verification key is not configured")
-			}
-			if err := rec.Verify(ed25519.PublicKey(de.pubKey)); err != nil {
-				return fmt.Errorf("verify receipt %q: %w", name, err)
-			}
-			if rec.ExecutionID == "" || rec.Server == "" || rec.Tool == "" || rec.SessionID == "" || rec.AgentID == "" {
-				return fmt.Errorf("invalid receipt %q", name)
-			}
-			if err := validateApprovalFileID(rec.ExecutionID); err != nil {
-				return fmt.Errorf("invalid receipt %q: %w", name, err)
-			}
-			if rec.Decision != "approve" && rec.Decision != "deny" {
-				return fmt.Errorf("invalid receipt decision in %q", name)
-			}
-			if name != fmt.Sprintf("receipt-%s.json", rec.ExecutionID) {
-				return fmt.Errorf("receipt filename does not match execution ID: %q", name)
-			}
-			if pending, ok := de.pending[rec.ExecutionID]; ok {
-				if !receiptMatchesPending(rec, pending) {
-					return fmt.Errorf("receipt %q does not match pending request", name)
-				}
-				if err := de.removePending(rec.ExecutionID); err != nil {
-					return fmt.Errorf("remove completed pending request %q: %w", name, err)
-				}
-				delete(de.pending, rec.ExecutionID)
-			}
-			de.receipts[hashRequest(rec.Server, rec.Tool, rec.SessionID, rec.AgentID)] = rec
+			continue
+		}
+		if time.Now().Before(dr.ExpiresAt) {
+			de.pending[dr.ID] = &dr
 		}
 	}
 	return nil
