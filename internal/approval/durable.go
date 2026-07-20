@@ -351,6 +351,7 @@ func (de *DurableEngine) loadState() error {
 		}
 	}
 
+	completedByExec := make(map[string]*receipt.DecisionReceipt, len(receiptNames))
 	// Load receipts first so a completed approval wins over a leftover pending
 	// file from the persist-receipt / remove-pending crash window, independent
 	// of filesystem directory order.
@@ -386,10 +387,6 @@ func (de *DurableEngine) loadState() error {
 			return fmt.Errorf("receipt filename does not match execution ID: %q", name)
 		}
 		de.receipts[hashRequest(rec.Server, rec.Tool, rec.SessionID, rec.AgentID)] = rec
-	}
-
-	completedByExec := make(map[string]*receipt.DecisionReceipt, len(de.receipts))
-	for _, rec := range de.receipts {
 		completedByExec[rec.ExecutionID] = rec
 	}
 
