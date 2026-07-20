@@ -74,6 +74,10 @@ func NewDurableEngine(engine *Engine, stateDir string, pubKey []byte) (*DurableE
 }
 
 func (de *DurableEngine) RequestApproval(req Request) (*DurableDecision, error) {
+	if req.Tool == "" || req.Server == "" || req.SessionID == "" || req.AgentID == "" {
+		return nil, fmt.Errorf("approval request requires tool, server, session ID, and agent ID")
+	}
+
 	rHash := hashRequest(req.Server, req.Tool, req.SessionID)
 
 	de.mu.RLock()

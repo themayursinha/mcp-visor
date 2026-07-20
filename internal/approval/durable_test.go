@@ -315,6 +315,49 @@ func TestNewDurableEngineSkipsExpiredPersistedReceipt(t *testing.T) {
 	}
 }
 
+func TestDurableEngineRejectsUnpersistableRequestIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  approval.Request
+	}{
+		{
+			name: "empty tool",
+			req:  approval.Request{ID: "req-1", Tool: "", Server: "shell", SessionID: "session-a", AgentID: "agent-a", Reason: "high risk", RiskLevel: "high"},
+		},
+		{
+			name: "empty server",
+			req:  approval.Request{ID: "req-1", Tool: "shell_exec", Server: "", SessionID: "session-a", AgentID: "agent-a", Reason: "high risk", RiskLevel: "high"},
+		},
+		{
+			name: "empty session ID",
+			req:  approval.Request{ID: "req-1", Tool: "shell_exec", Server: "shell", SessionID: "", AgentID: "agent-a", Reason: "high risk", RiskLevel: "high"},
+		},
+		{
+			name: "empty agent ID",
+			req:  approval.Request{ID: "req-1", Tool: "shell_exec", Server: "shell", SessionID: "session-a", AgentID: "", Reason: "high risk", RiskLevel: "high"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			de, err := approval.NewDurableEngine(nil, dir, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := de.RequestApproval(tc.req); err == nil {
+				t.Fatal("RequestApproval accepted an identity that cannot be reloaded safely")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("invalid request must not be persisted: %v", entries)
+			}
+		})
+	}
+}
+
 func TestDurableEngineCleanupSkipsExpiredPendingOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	expired := []byte(`{
