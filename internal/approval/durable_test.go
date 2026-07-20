@@ -103,6 +103,116 @@ func TestDurableEngineSessionIsolation(t *testing.T) {
 	}
 }
 
+func TestDurableEngineReceiptCacheIsolatesAgents(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	de, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pendingA, err := de.RequestApproval(approval.Request{
+		ID: "agent-a", Tool: "send", Server: "http", SessionID: "shared-session", AgentID: "agent-a",
+		Reason: "needs approval", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedA, err := receipt.NewReceipt(
+		pendingA.ExecutionID, "shared-session", "agent-a", "http", "send",
+		"reason", "{}", "1.0", "policy", "chain", "approved", "high", "operator", "approve", time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approvedA.Sign(pair); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := approvedA.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := de.SubmitReceipt(raw); err != nil {
+		t.Fatal(err)
+	}
+
+	decisionB, err := de.RequestApproval(approval.Request{
+		ID: "agent-b", Tool: "send", Server: "http", SessionID: "shared-session", AgentID: "agent-b",
+		Reason: "needs separate approval", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decisionB.Approved || !decisionB.RequiresApproval {
+		t.Fatalf("agent B reused agent A's receipt: %+v", decisionB)
+	}
+
+	reopened, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisionC, err := reopened.RequestApproval(approval.Request{
+		ID: "agent-c", Tool: "send", Server: "http", SessionID: "shared-session", AgentID: "agent-c",
+		Reason: "needs separate approval after restart", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decisionC.Approved || !decisionC.RequiresApproval {
+		t.Fatalf("agent C reused agent A's reloaded receipt: %+v", decisionC)
+	}
+}
+
+func TestDurableEngineReceiptCacheKeyHasNoDelimiterCollisions(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	de, err := approval.NewDurableEngine(nil, t.TempDir(), pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pendingA, err := de.RequestApproval(approval.Request{
+		ID: "agent-a", Tool: "send", Server: "http", SessionID: "shared", AgentID: "agent:a",
+		Reason: "needs approval", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedA, err := receipt.NewReceipt(
+		pendingA.ExecutionID, "shared", "agent:a", "http", "send",
+		"reason", "{}", "1.0", "policy", "chain", "approved", "high", "operator", "approve", time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approvedA.Sign(pair); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := approvedA.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := de.SubmitReceipt(raw); err != nil {
+		t.Fatal(err)
+	}
+
+	decisionB, err := de.RequestApproval(approval.Request{
+		ID: "agent-b", Tool: "send", Server: "http", SessionID: "shared:agent", AgentID: "a",
+		Reason: "needs separate approval", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decisionB.Approved || !decisionB.RequiresApproval {
+		t.Fatalf("distinct identity tuple reused a colliding receipt cache key: %+v", decisionB)
+	}
+}
+
 func TestDurableEngineExpiredReceiptRejected(t *testing.T) {
 	dir := t.TempDir()
 	de, err := approval.NewDurableEngine(nil, dir, nil)
@@ -272,6 +382,54 @@ func TestDurableEngineReceiptCompletionDoesNotResurrectPendingAfterRestart(t *te
 	}
 }
 
+func TestDurableEngineReconcilesReceiptPersistedBeforePendingRemoval(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	de, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := de.RequestApproval(approval.Request{
+		ID: "crash-window", Tool: "shell_exec", Server: "shell", SessionID: "sess-a", AgentID: "agent-a",
+		Reason: "high risk", RiskLevel: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approved, err := receipt.NewReceipt(
+		pending.ExecutionID, "sess-a", "agent-a", "shell", "shell_exec",
+		"high risk", "{}", "1.0", "policy", "chain", "high risk", "high", "operator", "approve", time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approved.Sign(pair); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := approved.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "receipt-"+pending.ExecutionID+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.GetPendingRequest(pending.ExecutionID); err == nil {
+		t.Fatal("receipt persisted before a crash must suppress the matching pending request")
+	}
+	if got := len(reopened.PendingRequests()); got != 0 {
+		t.Fatalf("completed request remained in pending queue after recovery: %d", got)
+	}
+}
+
 func TestNewDurableEngineRejectsMalformedPersistedState(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "pending-corrupt.json"), []byte(`{not-json`), 0o600); err != nil {
@@ -368,7 +526,7 @@ func TestDurableEngineCleanupSkipsExpiredPendingOnLoad(t *testing.T) {
   "agent_id": "agent",
   "created_at": "2020-01-01T00:00:00Z",
   "expires_at": "2020-01-01T01:00:00Z",
-  "request_hash": "s:t:sess"
+  "request_hash": "1:s:1:t:4:sess:5:agent"
 }`)
 	path := filepath.Join(dir, "pending-exec-old.json")
 	if err := os.WriteFile(path, expired, 0o600); err != nil {

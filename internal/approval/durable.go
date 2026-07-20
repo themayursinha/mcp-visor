@@ -78,7 +78,7 @@ func (de *DurableEngine) RequestApproval(req Request) (*DurableDecision, error) 
 		return nil, fmt.Errorf("approval request requires tool, server, session ID, and agent ID")
 	}
 
-	rHash := hashRequest(req.Server, req.Tool, req.SessionID)
+	rHash := hashRequest(req.Server, req.Tool, req.SessionID, req.AgentID)
 
 	de.mu.RLock()
 	if rec, ok := de.receipts[rHash]; ok {
@@ -195,7 +195,7 @@ func (de *DurableEngine) SubmitReceipt(signedReceipt []byte) (*DurableDecision, 
 
 	pending, exists := de.pending[rec.ExecutionID]
 	if !exists {
-		rHash := hashRequest(rec.Server, rec.Tool, rec.SessionID)
+		rHash := hashRequest(rec.Server, rec.Tool, rec.SessionID, rec.AgentID)
 		if existing, ok := de.receipts[rHash]; ok {
 			return &DurableDecision{
 				Approved:    existing.Decision == "approve",
@@ -212,7 +212,7 @@ func (de *DurableEngine) SubmitReceipt(signedReceipt []byte) (*DurableDecision, 
 		return nil, fmt.Errorf("invalid receipt decision: %q", rec.Decision)
 	}
 
-	rHash := hashRequest(rec.Server, rec.Tool, rec.SessionID)
+	rHash := hashRequest(rec.Server, rec.Tool, rec.SessionID, rec.AgentID)
 	if err := de.persistReceipt(rec); err != nil {
 		return nil, fmt.Errorf("persist approval receipt: %w", err)
 	}
@@ -374,7 +374,16 @@ func (de *DurableEngine) loadState() error {
 			if name != fmt.Sprintf("receipt-%s.json", rec.ExecutionID) {
 				return fmt.Errorf("receipt filename does not match execution ID: %q", name)
 			}
-			de.receipts[hashRequest(rec.Server, rec.Tool, rec.SessionID)] = rec
+			if pending, ok := de.pending[rec.ExecutionID]; ok {
+				if !receiptMatchesPending(rec, pending) {
+					return fmt.Errorf("receipt %q does not match pending request", name)
+				}
+				if err := de.removePending(rec.ExecutionID); err != nil {
+					return fmt.Errorf("remove completed pending request %q: %w", name, err)
+				}
+				delete(de.pending, rec.ExecutionID)
+			}
+			de.receipts[hashRequest(rec.Server, rec.Tool, rec.SessionID, rec.AgentID)] = rec
 		}
 	}
 	return nil
@@ -416,6 +425,6 @@ type DurableDecision struct {
 	Receipt          *receipt.DecisionReceipt
 }
 
-func hashRequest(server, tool, sessionID string) string {
-	return fmt.Sprintf("%s:%s:%s", server, tool, sessionID)
+func hashRequest(server, tool, sessionID, agentID string) string {
+	return fmt.Sprintf("%d:%s:%d:%s:%d:%s:%d:%s", len(server), server, len(tool), tool, len(sessionID), sessionID, len(agentID), agentID)
 }
