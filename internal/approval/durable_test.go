@@ -282,6 +282,35 @@ func TestNewDurableEngineRejectsMalformedPersistedState(t *testing.T) {
 	}
 }
 
+func TestNewDurableEngineSkipsExpiredPersistedReceipt(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	expired, err := receipt.NewReceipt(
+		"expired-receipt", "sess", "agent", "shell", "shell_exec",
+		"high risk", "{}", "1.0", "policy", "chain", "high risk", "high", "operator", "approve", -time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := expired.Sign(pair); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := expired.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "receipt-expired-receipt.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := approval.NewDurableEngine(nil, dir, pair.PublicKey); err != nil {
+		t.Fatalf("expired persisted receipt must not prevent startup: %v", err)
+	}
+}
+
 func TestDurableEngineCleanupSkipsExpiredPendingOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	expired := []byte(`{

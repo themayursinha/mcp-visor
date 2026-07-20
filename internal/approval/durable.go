@@ -358,8 +358,11 @@ func (de *DurableEngine) loadState() error {
 			if err := rec.Verify(ed25519.PublicKey(de.pubKey)); err != nil {
 				return fmt.Errorf("verify receipt %q: %w", name, err)
 			}
-			if rec.ExecutionID == "" || rec.Server == "" || rec.Tool == "" || rec.SessionID == "" || rec.AgentID == "" || rec.IsExpired() {
-				return fmt.Errorf("invalid or expired receipt %q", name)
+			if rec.IsExpired() {
+				continue
+			}
+			if rec.ExecutionID == "" || rec.Server == "" || rec.Tool == "" || rec.SessionID == "" || rec.AgentID == "" {
+				return fmt.Errorf("invalid receipt %q", name)
 			}
 			if rec.Decision != "approve" && rec.Decision != "deny" {
 				return fmt.Errorf("invalid receipt decision in %q", name)
