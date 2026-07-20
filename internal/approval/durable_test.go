@@ -477,6 +477,53 @@ func TestNewDurableEngineFailsClosedOnReceiptPendingIdentityMismatch(t *testing.
 	}
 }
 
+func TestDurableEngineReconcilesAllCompletedExecutionsSharingCacheIdentity(t *testing.T) {
+	pair, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	de, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		pending, err := de.RequestApproval(approval.Request{
+			ID: fmt.Sprintf("shared-%d", i), Tool: "send", Server: "http", SessionID: "sess-a", AgentID: "agent-a",
+			Reason: "high risk", RiskLevel: "high",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		approved, err := receipt.NewReceipt(
+			pending.ExecutionID, "sess-a", "agent-a", "http", "send",
+			"high risk", "{}", "1.0", "policy", "chain", "high risk", "high", "operator", "approve", time.Hour,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := approved.Sign(pair); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := approved.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "receipt-"+pending.ExecutionID+".json"), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reopened, err := approval.NewDurableEngine(nil, dir, pair.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(reopened.PendingRequests()); got != 0 {
+		t.Fatalf("completed requests sharing a cache identity remained pending: %d", got)
+	}
+}
+
 func TestNewDurableEngineRejectsMalformedPersistedState(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "pending-corrupt.json"), []byte(`{not-json`), 0o600); err != nil {
