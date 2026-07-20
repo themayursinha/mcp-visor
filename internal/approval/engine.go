@@ -90,6 +90,9 @@ func (e *Engine) RequestApprovalWithTimeout(req Request, timeout time.Duration) 
 	if !e.IsEnabled() {
 		return false, fmt.Errorf("approval backend is not configured")
 	}
+	if err := validateApprovalFileID(req.ID); err != nil {
+		return false, err
+	}
 
 	if err := e.writeRequest(req); err != nil {
 		return false, fmt.Errorf("write approval request: %w", err)
