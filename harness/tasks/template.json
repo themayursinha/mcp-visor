@@ -1,0 +1,16 @@
+{
+  "task_id": "T-XXXX-short-name",
+  "invariant_ids": ["H1"],
+  "security_sensitive": true,
+  "security_problem": "What security failure exists or must be prevented.",
+  "required_behavior": "What must hold after the change.",
+  "failure_behavior": "Fail-closed / deny behavior on error.",
+  "allowed_paths": ["path/to/file.go", "path/to/file_test.go"],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./path", "-run", "TestRed", "-count=1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./path", "-run", "TestGreen", "-count=1"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ]
+}
