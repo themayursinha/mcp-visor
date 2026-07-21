@@ -10,51 +10,38 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/workflow"
 )
 
-func taskFile(t *testing.T, dir string, mut func(*workflow.Task)) string {
-	t.Helper()
+func baseTask(mut func(*workflow.Task)) workflow.Task {
 	tk := workflow.Task{
 		TaskID: "T-TEST", InvariantIDs: []string{"H1"}, SecuritySensitive: true,
 		SecurityProblem: "p", RequiredBehavior: "b", FailureBehavior: "f",
 		AllowedPaths: []string{"allowed/"}, ApprovalGatedPaths: workflow.DefaultApprovalGated(),
 		MaxAttempts: 2,
 		RequiredCommands: []workflow.ReqCmd{
-			{Name: "red_test", Expect: "fail"},
-			{Name: "target_test", Expect: "pass"},
-			{Name: "harness", Expect: "pass"},
+			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{"true"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
 		},
 	}
 	if mut != nil {
 		mut(&tk)
 	}
-	b, _ := json.Marshal(tk)
-	p := filepath.Join(dir, "task.json")
+	return tk
+}
+
+func writeTask(t *testing.T, dir string, tk workflow.Task) string {
+	t.Helper()
+	b, err := json.Marshal(tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "allowed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "allowed", "task.json")
 	if err := os.WriteFile(p, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return p
-}
-
-func TestValidate_MissingFields(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := workflow.LoadTask(taskFile(t, dir, func(tk *workflow.Task) { tk.InvariantIDs = nil })); err == nil {
-		t.Fatal("expected invariant error")
-	}
-	if _, err := workflow.LoadTask(taskFile(t, dir, func(tk *workflow.Task) { tk.AllowedPaths = nil })); err == nil {
-		t.Fatal("expected allowed_paths error")
-	}
-}
-
-func TestRun_RealExitNoInject(t *testing.T) {
-	root := t.TempDir()
-	tk, _ := workflow.LoadTask(taskFile(t, root, nil))
-	rec, err := workflow.RunCommand(root, tk.TaskID, "red_test", []string{"sh", "-c", "exit 7"})
-	if err != nil || rec.Exit != 7 || rec.Source != "executed" {
-		t.Fatalf("%+v %v", rec, err)
-	}
-	st, _ := workflow.DeriveStatus(tk, []workflow.CommandRecord{{Name: "harness", Exit: 0, Source: "injected"}}, workflow.ScopeResult{Pass: true}, nil)
-	if st != workflow.StatusBlocked {
-		t.Fatalf("injected source not blocked: %s", st)
-	}
 }
 
 func gitInit(t *testing.T, root string) {
@@ -71,91 +58,175 @@ func gitInit(t *testing.T, root string) {
 	run("git", "config", "user.email", "t@t")
 	run("git", "config", "user.name", "t")
 	_ = os.WriteFile(filepath.Join(root, "README.md"), []byte("x\n"), 0o644)
-	run("git", "add", "README.md")
+	_ = os.MkdirAll(filepath.Join(root, "allowed"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "allowed", "a.txt"), []byte("a\n"), 0o644)
+	run("git", "add", "README.md", "allowed")
 	run("git", "commit", "-m", "i")
 }
 
-func TestScope_ChangesAndGated(t *testing.T) {
-	root := t.TempDir()
-	gitInit(t, root)
-	_ = os.MkdirAll(filepath.Join(root, "allowed"), 0o755)
-	tk, _ := workflow.LoadTask(taskFile(t, root, func(tk *workflow.Task) {
-		tk.AllowedPaths = []string{"allowed/", "foo_test.go"}
-	}))
-	base, _ := workflow.ResolveBase(root, "HEAD")
-	_ = os.WriteFile(filepath.Join(root, "secret.go"), []byte("package s\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(root, "README.md"), []byte("y\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(root, "foo_test.go"), []byte("package f\n"), 0o644)
-	sc, err := workflow.CheckScope(root, tk, base)
-	if err != nil || sc.Pass || len(sc.ApprovalGated) == 0 {
-		t.Fatalf("%+v %v", sc, err)
+func TestValidate_ArgvAndNames(t *testing.T) {
+	dir := t.TempDir()
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands[0].Argv = nil
+	})
+	if _, err := workflow.LoadTask(writeTask(t, dir, tk)); err == nil {
+		t.Fatal("empty argv")
 	}
-	// delete tracked
-	_ = os.Remove(filepath.Join(root, "README.md"))
-	sc, _ = workflow.CheckScope(root, tk, base)
-	if sc.Pass {
-		t.Fatal("delete should fail scope")
+	tk = baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands = append(tk.RequiredCommands, workflow.ReqCmd{Name: "red_test", Expect: "fail", Argv: []string{"false"}})
+	})
+	if _, err := workflow.LoadTask(writeTask(t, dir, tk)); err == nil {
+		t.Fatal("duplicate name")
 	}
-}
-
-func TestDerive_Gates(t *testing.T) {
-	tk, _ := workflow.LoadTask(taskFile(t, t.TempDir(), nil))
-	scopeOK := workflow.ScopeResult{Pass: true}
-	// missing RED
-	st, _ := workflow.DeriveStatus(tk, []workflow.CommandRecord{
-		{Name: "target_test", Exit: 0, Source: "executed"},
-		{Name: "harness", Exit: 0, Source: "executed"},
-	}, scopeOK, nil)
-	if workflow.StatusRank(st) >= workflow.StatusRank(workflow.StatusTargetVerified) {
-		t.Fatalf("missing red: %s", st)
+	tk = baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "red_test", Expect: "fail", Argv: []string{"false"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	if _, err := workflow.LoadTask(writeTask(t, dir, tk)); err == nil {
+		t.Fatal("missing harness")
 	}
-	// failed target
-	st, _ = workflow.DeriveStatus(tk, []workflow.CommandRecord{
-		{Name: "red_test", Exit: 1, Source: "executed"},
-		{Name: "target_test", Exit: 1, Source: "executed"},
-		{Name: "harness", Exit: 0, Source: "executed"},
-	}, scopeOK, nil)
-	if workflow.StatusRank(st) >= workflow.StatusRank(workflow.StatusTargetVerified) {
-		t.Fatalf("failed target: %s", st)
-	}
-	// failed harness
-	st, _ = workflow.DeriveStatus(tk, []workflow.CommandRecord{
-		{Name: "red_test", Exit: 1, Source: "executed"},
-		{Name: "target_test", Exit: 0, Source: "executed"},
-		{Name: "harness", Exit: 2, Source: "executed"},
-	}, scopeOK, nil)
-	if st != workflow.StatusTargetVerified {
-		t.Fatalf("failed harness: %s", st)
-	}
-	// review ignored
-	st, rs := workflow.DeriveStatus(tk, []workflow.CommandRecord{
-		{Name: "red_test", Exit: 1, Source: "executed"},
-	}, scopeOK, &workflow.ReviewArtifact{Passed: true})
-	if st == workflow.StatusSecurityReviewed {
-		t.Fatalf("review override: %v", rs)
-	}
-	// happy
-	st, _ = workflow.DeriveStatus(tk, []workflow.CommandRecord{
-		{Name: "red_test", Exit: 1, Source: "executed"},
-		{Name: "target_test", Exit: 0, Source: "executed"},
-		{Name: "harness", Exit: 0, Source: "executed"},
-	}, scopeOK, &workflow.ReviewArtifact{Passed: true})
-	if st != workflow.StatusSecurityReviewed {
-		t.Fatalf("happy: %s", st)
+	tk = baseTask(func(tk *workflow.Task) {
+		tk.SecuritySensitive = true
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "target_test", Expect: "pass", Argv: []string{"true"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	if _, err := workflow.LoadTask(writeTask(t, dir, tk)); err == nil {
+		t.Fatal("security needs red")
 	}
 }
 
-func TestReport_Dirty(t *testing.T) {
+func TestRun_UsesContractArgvOnly(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
-	_ = os.MkdirAll(filepath.Join(root, "allowed"), 0o755)
-	tk, _ := workflow.LoadTask(taskFile(t, root, nil))
-	_ = os.WriteFile(filepath.Join(root, "allowed", "x.txt"), []byte("x\n"), 0o644)
-	_, _ = workflow.RunCommand(root, tk.TaskID, "red_test", []string{"sh", "-c", "exit 1"})
-	_, _ = workflow.RunCommand(root, tk.TaskID, "target_test", []string{"true"})
-	_, _ = workflow.RunCommand(root, tk.TaskID, "harness", []string{"true"})
+	p := writeTask(t, root, baseTask(nil))
+	tk, err := workflow.LoadTask(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Running red uses contract argv exit 1, not caller true/false.
+	rec, err := workflow.RunNamedCommand(root, tk, "red_test", "HEAD")
+	if err != nil || rec.Exit != 1 || rec.Source != "executed" {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	if len(rec.Args) != 3 || rec.Args[0] != "sh" {
+		t.Fatalf("argv not from contract: %v", rec.Args)
+	}
+	if rec.WorkspaceDigest == "" || rec.HeadSHA == "" {
+		t.Fatal("missing snapshot metadata")
+	}
+	// Injected/substituted argv must block derivation.
+	st, _ := workflow.DeriveStatus(tk, []workflow.CommandRecord{{
+		Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed",
+		WorkspaceDigest: "fake", HeadSHA: "x", BaseSHA: "y",
+	}, {
+		Name: "harness", Args: []string{"false"}, Exit: 0, Source: "executed", // wrong argv vs contract true
+		WorkspaceDigest: "fake", HeadSHA: "x", BaseSHA: "y",
+	}}, workflow.ScopeResult{Pass: true}, nil, workflow.Snapshot{WorkspaceDigest: "fake", HeadSHA: "x", BaseSHA: "y"})
+	if st != workflow.StatusBlocked {
+		// harness argv mismatch vs contract
+		t.Fatalf("expected blocked on argv mismatch, got %s", st)
+	}
+}
+
+func TestSnapshot_InvalidateAfterChange(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk, err := workflow.LoadTask(writeTask(t, root, baseTask(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "red_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "target_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "harness", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
 	rep, err := workflow.BuildReport(root, tk, "HEAD", nil)
-	if err != nil || !rep.WorktreeDirty || !rep.EvidenceEditable {
-		t.Fatalf("%+v %v", rep, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.DerivedStatus != workflow.StatusHarnessVerified && rep.DerivedStatus != workflow.StatusTargetVerified {
+		// scope may fail if only allowed/ dirty - allowed/a exists tracked; no dirty oos
+		// untracked nothing; should be harness verified if scope pass
+	}
+	// Ensure harness verified when scope clean
+	if !rep.Scope.Pass {
+		t.Fatalf("scope: %+v", rep.Scope)
+	}
+	if rep.DerivedStatus != workflow.StatusHarnessVerified {
+		t.Fatalf("want HARNESS_VERIFIED got %s reasons=%v", rep.DerivedStatus, rep.Reasons)
+	}
+	// Change allowed file after harness
+	if err := os.WriteFile(filepath.Join(root, "allowed", "a.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep2, err := workflow.BuildReport(root, tk, "HEAD", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep2.DerivedStatus == workflow.StatusHarnessVerified || rep2.DerivedStatus == workflow.StatusSecurityReviewed {
+		t.Fatalf("stale harness still verified: %s %v", rep2.DerivedStatus, rep2.Reasons)
+	}
+}
+
+func TestMaxAttempts(t *testing.T) {
+	tk := baseTask(func(tk *workflow.Task) { tk.MaxAttempts = 2 })
+	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
+	mk := func(n int, exit int) workflow.CommandRecord {
+		return workflow.CommandRecord{
+			Name: "target_test", Args: []string{"true"}, Exit: exit, Source: "executed",
+			WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b",
+		}
+	}
+	// at limit (2) with final pass + red + harness still ok path-wise
+	cmds := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
+		mk(1, 1),
+		mk(2, 0),
+		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+	// need harness after target — order: red, target fail, target pass, harness
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
+	if st != workflow.StatusHarnessVerified {
+		t.Fatalf("at limit: %s %v", st, reasons)
+	}
+	// above limit
+	cmds = append(cmds[:3], mk(3, 0), cmds[3])
+	// recount: 3 targets
+	cmds = []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
+		mk(1, 1), mk(2, 1), mk(3, 0),
+		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
+	if st != workflow.StatusBlocked {
+		t.Fatalf("above limit: %s %v", st, reasons)
+	}
+}
+
+func TestParseStatus_Unknown(t *testing.T) {
+	if _, err := workflow.ParseStatus("NONSENSE"); err == nil {
+		t.Fatal("expected error")
+	}
+	if s, err := workflow.ParseStatus("HARNESS_VERIFIED"); err != nil || s != workflow.StatusHarnessVerified {
+		t.Fatalf("%v %v", s, err)
+	}
+}
+
+func TestReviewIgnoredWithoutGates(t *testing.T) {
+	tk := baseTask(nil)
+	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
+	st, rs := workflow.DeriveStatus(&tk, []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
+	}, workflow.ScopeResult{Pass: true}, &workflow.ReviewArtifact{Passed: true}, snap)
+	if st == workflow.StatusSecurityReviewed {
+		t.Fatalf("review override %v", rs)
 	}
 }

@@ -3,6 +3,8 @@ package workflow
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,18 +30,23 @@ type Task struct {
 	RequiredCommands   []ReqCmd `json:"required_commands"`
 }
 
+// ReqCmd is a named command with fixed argv from the task contract.
 type ReqCmd struct {
-	Name   string `json:"name"`
-	Expect string `json:"expect"` // pass|fail
+	Name   string   `json:"name"`
+	Expect string   `json:"expect"` // pass|fail
+	Argv   []string `json:"argv"`
 }
 
 type CommandRecord struct {
-	Name        string    `json:"name"`
-	Args        []string  `json:"args"`
-	Exit        int       `json:"exit"`
-	Source      string    `json:"source"`
-	LogPath     string    `json:"log_path,omitempty"`
-	RecordedUTC time.Time `json:"recorded_utc"`
+	Name            string    `json:"name"`
+	Args            []string  `json:"args"`
+	Exit            int       `json:"exit"`
+	Source          string    `json:"source"`
+	BaseSHA         string    `json:"base_sha"`
+	HeadSHA         string    `json:"head_sha"`
+	WorkspaceDigest string    `json:"workspace_digest"`
+	LogPath         string    `json:"log_path,omitempty"`
+	RecordedUTC     time.Time `json:"recorded_utc"`
 }
 
 type ReviewArtifact struct {
@@ -75,6 +82,7 @@ type Report struct {
 	InvariantIDs     []string        `json:"invariant_ids"`
 	BaseSHA          string          `json:"base_sha"`
 	HeadSHA          string          `json:"head_sha"`
+	WorkspaceDigest  string          `json:"workspace_digest"`
 	WorktreeDirty    bool            `json:"worktree_dirty"`
 	DerivedStatus    Status          `json:"derived_status"`
 	Reasons          []string        `json:"reasons"`
@@ -127,15 +135,43 @@ func ValidateTask(t *Task) error {
 	if len(t.RequiredCommands) == 0 {
 		e = append(e, "required_commands must be non-empty")
 	}
+	seen := map[string]struct{}{}
+	hasHarnessPass := false
+	hasRedFail := false
 	for i := range t.RequiredCommands {
 		c := &t.RequiredCommands[i]
+		c.Name = strings.TrimSpace(c.Name)
 		c.Expect = strings.ToLower(strings.TrimSpace(c.Expect))
-		if strings.TrimSpace(c.Name) == "" {
+		if c.Name == "" {
 			e = append(e, fmt.Sprintf("required_commands[%d].name required", i))
 		}
+		if _, ok := seen[c.Name]; ok {
+			e = append(e, "duplicate command name: "+c.Name)
+		}
+		seen[c.Name] = struct{}{}
 		if c.Expect != "pass" && c.Expect != "fail" {
 			e = append(e, fmt.Sprintf("required_commands[%d].expect must be pass|fail", i))
 		}
+		if len(c.Argv) == 0 {
+			e = append(e, fmt.Sprintf("required_commands[%d].argv must be non-empty", i))
+		}
+		for j, a := range c.Argv {
+			if strings.TrimSpace(a) == "" {
+				e = append(e, fmt.Sprintf("required_commands[%d].argv[%d] empty", i, j))
+			}
+		}
+		if c.Name == "harness" && c.Expect == "pass" {
+			hasHarnessPass = true
+		}
+		if c.Expect == "fail" {
+			hasRedFail = true
+		}
+	}
+	if !hasHarnessPass {
+		e = append(e, "required_commands must include harness with expect=pass")
+	}
+	if t.SecuritySensitive && !hasRedFail {
+		e = append(e, "security_sensitive tasks require at least one expect=fail command")
 	}
 	for _, f := range []struct{ v, n string }{
 		{t.SecurityProblem, "security_problem"},
@@ -160,6 +196,15 @@ func clean(ss []string) []string {
 		}
 	}
 	return o
+}
+
+func LookupCommand(t *Task, name string) (*ReqCmd, error) {
+	for i := range t.RequiredCommands {
+		if t.RequiredCommands[i].Name == name {
+			return &t.RequiredCommands[i], nil
+		}
+	}
+	return nil, fmt.Errorf("unknown command name %q (must be defined in task required_commands)", name)
 }
 
 func EvidenceDir(root, taskID string) string {
@@ -196,11 +241,119 @@ func LoadCommands(root, taskID string) ([]CommandRecord, error) {
 	return out, nil
 }
 
-func RunCommand(root, taskID, name string, args []string) (CommandRecord, error) {
-	if len(args) == 0 {
-		return CommandRecord{}, errors.New("command args required")
+// Snapshot captures immutable-enough repo identity for binding evidence.
+type Snapshot struct {
+	BaseSHA         string
+	HeadSHA         string
+	WorkspaceDigest string
+}
+
+func CurrentSnapshot(root, base string) (Snapshot, error) {
+	baseSHA, err := ResolveBase(root, base)
+	if err != nil {
+		return Snapshot{}, err
 	}
-	dir := EvidenceDir(root, taskID)
+	head, err := git(root, "rev-parse", "HEAD")
+	if err != nil {
+		return Snapshot{}, err
+	}
+	dig, err := WorkspaceDigest(root)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{BaseSHA: baseSHA, HeadSHA: head, WorkspaceDigest: dig}, nil
+}
+
+// WorkspaceDigest hashes tracked/staged/unstaged/untracked content, excluding evidence/workflow.
+func WorkspaceDigest(root string) (string, error) {
+	head, err := git(root, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	paths := map[string]struct{}{}
+	addLines := func(s string) {
+		for _, line := range strings.Split(s, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || skipEvidence(line) {
+				continue
+			}
+			paths[filepath.ToSlash(line)] = struct{}{}
+		}
+	}
+	if s, err := git(root, "ls-files", "-c"); err == nil {
+		addLines(s)
+	} else {
+		return "", err
+	}
+	if s, _ := git(root, "ls-files", "-o", "--exclude-standard"); s != "" {
+		addLines(s)
+	}
+	// include paths deleted in the worktree vs HEAD
+	if s, _ := git(root, "diff", "--name-only", "--diff-filter=D", "HEAD"); s != "" {
+		addLines(s)
+	}
+	var list []string
+	for p := range paths {
+		list = append(list, p)
+	}
+	sort.Strings(list)
+
+	h := sha256.New()
+	fmt.Fprintf(h, "head %s\n", head)
+	for _, p := range list {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		fi, err := os.Lstat(full)
+		if err != nil {
+			fmt.Fprintf(h, "D %s\n", p)
+			continue
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			tgt, _ := os.Readlink(full)
+			fmt.Fprintf(h, "L %s %s\n", p, tgt)
+			continue
+		}
+		if !fi.Mode().IsRegular() {
+			fmt.Fprintf(h, "X %s %v\n", p, fi.Mode())
+			continue
+		}
+		sum, err := hashFile(full)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "F %s %s %d\n", p, sum, fi.Size())
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func skipEvidence(p string) bool {
+	p = filepath.ToSlash(p)
+	return p == "evidence" || strings.HasPrefix(p, "evidence/")
+}
+
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// RunNamedCommand executes the task-defined argv for name. No caller argv override.
+func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, error) {
+	req, err := LookupCommand(t, name)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	snap, err := CurrentSnapshot(root, base)
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	dir := EvidenceDir(root, t.TaskID)
 	logDir := filepath.Join(dir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return CommandRecord{}, err
@@ -211,22 +364,28 @@ func RunCommand(root, taskID, name string, args []string) (CommandRecord, error)
 		return CommandRecord{}, err
 	}
 	defer f.Close()
+
+	args := append([]string(nil), req.Argv...)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = root
 	cmd.Stdout = io.MultiWriter(f, os.Stdout)
 	cmd.Stderr = io.MultiWriter(f, os.Stderr)
-	err = cmd.Run()
+	runErr := cmd.Run()
 	exit := 0
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+	if runErr != nil {
+		if ee, ok := runErr.(*exec.ExitError); ok {
 			exit = ee.ExitCode()
 		} else {
-			return CommandRecord{}, err
+			return CommandRecord{}, runErr
 		}
 	}
-	rec := CommandRecord{Name: name, Args: append([]string(nil), args...), Exit: exit, Source: "executed", LogPath: logPath, RecordedUTC: time.Now().UTC()}
+	rec := CommandRecord{
+		Name: name, Args: args, Exit: exit, Source: "executed",
+		BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
+		LogPath: logPath, RecordedUTC: time.Now().UTC(),
+	}
 	line, _ := json.Marshal(rec)
-	out, err := os.OpenFile(commandsPath(root, taskID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	out, err := os.OpenFile(commandsPath(root, t.TaskID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return rec, err
 	}
@@ -291,15 +450,15 @@ func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
 			changed[fields[len(fields)-1]] = struct{}{}
 		}
 	}
-	if s, err := git(root, "diff", "--name-status", baseSHA); err == nil {
-		addNS(s)
-	} else {
+	s, err := git(root, "diff", "--name-status", baseSHA)
+	if err != nil {
 		return ScopeResult{}, err
 	}
-	if s, _ := git(root, "diff", "--name-status", "--cached"); s != "" {
+	addNS(s)
+	if s, _ = git(root, "diff", "--name-status", "--cached"); s != "" {
 		addNS(s)
 	}
-	if s, _ := git(root, "ls-files", "--others", "--exclude-standard"); s != "" {
+	if s, _ = git(root, "ls-files", "--others", "--exclude-standard"); s != "" {
 		for _, line := range strings.Split(s, "\n") {
 			if line = strings.TrimSpace(line); line != "" {
 				changed[line] = struct{}{}
@@ -307,7 +466,7 @@ func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
 		}
 	}
 	var dirty []string
-	if s, _ := git(root, "status", "--porcelain"); s != "" {
+	if s, _ = git(root, "status", "--porcelain"); s != "" {
 		for _, line := range strings.Split(s, "\n") {
 			if strings.TrimSpace(line) == "" {
 				continue
@@ -323,7 +482,7 @@ func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
 	}
 	var list, oos, gated []string
 	for p := range changed {
-		if strings.HasPrefix(p, "evidence/") {
+		if skipEvidence(p) {
 			continue
 		}
 		list = append(list, p)
@@ -396,17 +555,73 @@ func uniq(ss []string) []string {
 	return o
 }
 
-func lastExec(cmds []CommandRecord, name string) *CommandRecord {
-	for i := len(cmds) - 1; i >= 0; i-- {
-		if cmds[i].Name == name && cmds[i].Source == "executed" {
-			c := cmds[i]
-			return &c
+func argvEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
-func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *ReviewArtifact) (Status, []string) {
+func isTargetPassCmd(t *Task, name string) bool {
+	for _, c := range t.RequiredCommands {
+		if c.Name == name && c.Expect == "pass" && c.Name != "harness" {
+			return true
+		}
+	}
+	return false
+}
+
+func isRedFailCmd(t *Task, name string) bool {
+	for _, c := range t.RequiredCommands {
+		if c.Name == name && c.Expect == "fail" {
+			return true
+		}
+	}
+	return false
+}
+
+func countTargetAttempts(t *Task, cmds []CommandRecord) int {
+	n := 0
+	for _, c := range cmds {
+		if c.Source == "executed" && isTargetPassCmd(t, c.Name) {
+			n++
+		}
+	}
+	return n
+}
+
+func lastMatching(t *Task, cmds []CommandRecord, name string, requirePass *bool) (int, *CommandRecord) {
+	req, err := LookupCommand(t, name)
+	if err != nil {
+		return -1, nil
+	}
+	for i := len(cmds) - 1; i >= 0; i-- {
+		c := cmds[i]
+		if c.Name != name || c.Source != "executed" {
+			continue
+		}
+		if !argvEqual(c.Args, req.Argv) {
+			continue
+		}
+		if requirePass != nil {
+			ok := c.Exit == 0
+			if *requirePass != ok {
+				continue
+			}
+		}
+		cp := c
+		return i, &cp
+	}
+	return -1, nil
+}
+
+// DeriveStatus computes status from artifacts + current snapshot binding.
+func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *ReviewArtifact, snap Snapshot) (Status, []string) {
 	if err := ValidateTask(t); err != nil {
 		return StatusUnspecified, []string{"invalid_task: " + err.Error()}
 	}
@@ -415,63 +630,104 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 		if c.Source != "executed" {
 			return StatusBlocked, []string{"invalid_command_record:" + c.Name}
 		}
+		// reject records whose argv does not match the contract
+		if req, err := LookupCommand(t, c.Name); err == nil {
+			if !argvEqual(c.Args, req.Argv) {
+				return StatusBlocked, []string{"argv_mismatch:" + c.Name}
+			}
+		}
 	}
+
+	attempts := countTargetAttempts(t, cmds)
+	if attempts > t.MaxAttempts {
+		return StatusBlocked, []string{fmt.Sprintf("max_attempts_exceeded:%d>%d", attempts, t.MaxAttempts)}
+	}
+
 	st := StatusSpecified
 	reasons = append(reasons, "valid_task_contract")
 
-	redOK := !t.SecuritySensitive
+	// RED may use an earlier snapshot; must use contract argv and precede GREEN.
+	redIdx := -1
 	if t.SecuritySensitive {
-		var red *CommandRecord
-		for _, r := range t.RequiredCommands {
-			if r.Expect == "fail" {
-				if c := lastExec(cmds, r.Name); c != nil && c.Exit != 0 {
-					red = c
-					break
-				}
+		for i, c := range cmds {
+			if c.Source != "executed" || !isRedFailCmd(t, c.Name) || c.Exit == 0 {
+				continue
 			}
-		}
-		if red == nil {
-			if c := lastExec(cmds, "red_test"); c != nil && c.Exit != 0 {
-				red = c
+			if req, err := LookupCommand(t, c.Name); err != nil || !argvEqual(c.Args, req.Argv) {
+				continue
 			}
+			redIdx = i
+			break
 		}
-		if red != nil {
-			st, redOK = StatusFailureReproduced, true
+		if redIdx >= 0 {
+			st = StatusFailureReproduced
 			reasons = append(reasons, "red_failure_recorded")
 		} else {
 			reasons = append(reasons, "red_failure_missing")
 		}
 	}
 
-	targetOK := scope.Pass && redOK
+	// Targets: must match current workspace digest; all pass-expect non-harness
+	targetOK := scope.Pass
 	if !scope.Pass {
 		reasons = append(reasons, "scope_not_pass")
 	}
-	for _, r := range t.RequiredCommands {
-		if r.Name == "harness" || r.Expect == "fail" {
-			continue
-		}
-		c := lastExec(cmds, r.Name)
-		if c == nil || c.Exit != 0 {
-			targetOK = false
-			reasons = append(reasons, "required_pass_missing_or_failed:"+r.Name)
-		}
-	}
-	if targetOK {
-		st = StatusTargetVerified
-		reasons = append(reasons, "scope_and_targets_pass")
+	if t.SecuritySensitive && redIdx < 0 {
+		targetOK = false
 	}
 
+	var lastTargetIdx = -1
+	for _, r := range t.RequiredCommands {
+		if r.Name == "harness" || r.Expect != "pass" {
+			continue
+		}
+		idx, c := lastMatching(t, cmds, r.Name, boolPtr(true))
+		if c == nil {
+			targetOK = false
+			reasons = append(reasons, "required_pass_missing_or_failed:"+r.Name)
+			continue
+		}
+		if c.WorkspaceDigest != snap.WorkspaceDigest {
+			targetOK = false
+			reasons = append(reasons, "target_snapshot_mismatch:"+r.Name)
+			continue
+		}
+		if t.SecuritySensitive && redIdx >= 0 && idx <= redIdx {
+			targetOK = false
+			reasons = append(reasons, "red_must_precede_green")
+			continue
+		}
+		if idx > lastTargetIdx {
+			lastTargetIdx = idx
+		}
+	}
+
+	if targetOK && lastTargetIdx >= 0 {
+		st = StatusTargetVerified
+		reasons = append(reasons, "scope_and_targets_pass")
+	} else if targetOK && lastTargetIdx < 0 {
+		// no pass targets defined except maybe none — treat as not target verified
+		targetOK = false
+	}
+
+	// Harness: current digest, after latest successful target
 	if st == StatusTargetVerified {
-		h := lastExec(cmds, "harness")
+		hIdx, h := lastMatching(t, cmds, "harness", boolPtr(true))
 		switch {
-		case h != nil && h.Exit == 0:
+		case h == nil:
+			// failed or missing
+			if _, hf := lastMatching(t, cmds, "harness", boolPtr(false)); hf != nil {
+				reasons = append(reasons, "harness_failed")
+			} else {
+				reasons = append(reasons, "harness_missing")
+			}
+		case h.WorkspaceDigest != snap.WorkspaceDigest:
+			reasons = append(reasons, "harness_snapshot_mismatch")
+		case hIdx <= lastTargetIdx:
+			reasons = append(reasons, "harness_must_follow_target")
+		default:
 			st = StatusHarnessVerified
 			reasons = append(reasons, "harness_pass")
-		case h != nil:
-			reasons = append(reasons, "harness_failed")
-		default:
-			reasons = append(reasons, "harness_missing")
 		}
 	}
 
@@ -486,16 +742,14 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	return st, reasons
 }
 
+func boolPtr(v bool) *bool { return &v }
+
 func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Report, error) {
-	baseSHA, err := ResolveBase(root, base)
+	snap, err := CurrentSnapshot(root, base)
 	if err != nil {
 		return nil, err
 	}
-	head, err := git(root, "rev-parse", "HEAD")
-	if err != nil {
-		return nil, err
-	}
-	scope, err := CheckScope(root, t, baseSHA)
+	scope, err := CheckScope(root, t, snap.BaseSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -503,9 +757,10 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 	if err != nil {
 		return nil, err
 	}
-	st, reasons := DeriveStatus(t, cmds, scope, review)
+	st, reasons := DeriveStatus(t, cmds, scope, review, snap)
 	return &Report{
-		TaskID: t.TaskID, InvariantIDs: t.InvariantIDs, BaseSHA: baseSHA, HeadSHA: head,
+		TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
+		BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
 		WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: st, Reasons: reasons, Scope: scope,
 		Commands: cmds, Review: review, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
 		Notes: []string{
@@ -513,7 +768,8 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 			"CI-generated evidence is the planned stronger merge gate",
 			"model prose cannot override command results",
 			"Mayur merge/release approval is outside this tool",
-			"roles are operational (profiles/credentials/GitHub), not env identity",
+			"command argv is bound by the task contract",
+			"GREEN/harness evidence is bound to workspace digest",
 		},
 	}, nil
 }
@@ -528,6 +784,16 @@ func LoadReview(path string) (*ReviewArtifact, error) {
 	}
 	var r ReviewArtifact
 	return &r, json.Unmarshal(b, &r)
+}
+
+func ParseStatus(s string) (Status, error) {
+	switch Status(strings.TrimSpace(s)) {
+	case StatusUnspecified, StatusSpecified, StatusFailureReproduced, StatusTargetVerified,
+		StatusHarnessVerified, StatusSecurityReviewed, StatusBlocked:
+		return Status(strings.TrimSpace(s)), nil
+	default:
+		return "", fmt.Errorf("unknown status %q", s)
+	}
 }
 
 func StatusRank(s Status) int {

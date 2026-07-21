@@ -45,10 +45,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `visor-workflow validate|scope|run|verify|report
   validate -task f.json
   scope    -task f.json [-base ref]
-  run      -task f.json -name N -- cmd...
+  run      -task f.json -name N
   verify   -task f.json [-base ref] [-review r.json] [-min STATUS]
   report   -task f.json [-base ref] [-review r.json] [-out out.json]
-Status is derived (not stored). Local evidence is editable; CI evidence planned. Mayur approves release.`)
+run executes task-defined argv only (no -- override). Status is derived.`)
 }
 
 func cmdValidate(args []string) int {
@@ -96,14 +96,14 @@ func cmdRun(root string, args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	taskPath := fs.String("task", "", "")
 	name := fs.String("name", "", "")
-	if fs.Parse(args) != nil {
+	base := fs.String("base", "", "")
+	if fs.Parse(args) != nil || *taskPath == "" || *name == "" {
+		fmt.Fprintln(os.Stderr, "usage: run -task f.json -name NAME")
 		return 2
 	}
-	cmdArgs := fs.Args()
-	if len(cmdArgs) > 0 && cmdArgs[0] == "--" {
-		cmdArgs = cmdArgs[1:]
-	}
-	if *taskPath == "" || *name == "" || len(cmdArgs) == 0 {
+	// Reject leftover args / attempted command substitution.
+	if rest := fs.Args(); len(rest) > 0 {
+		fmt.Fprintf(os.Stderr, "error: unexpected args %v (command argv comes from the task contract)\n", rest)
 		return 2
 	}
 	t, err := workflow.LoadTask(*taskPath)
@@ -111,12 +111,12 @@ func cmdRun(root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "INVALID: %v\n", err)
 		return 1
 	}
-	rec, err := workflow.RunCommand(root, t.TaskID, *name, cmdArgs)
+	rec, err := workflow.RunNamedCommand(root, t, *name, *base)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
 	}
-	fmt.Printf("recorded name=%s exit=%d source=executed\n", rec.Name, rec.Exit)
+	fmt.Printf("recorded name=%s exit=%d source=executed digest=%s\n", rec.Name, rec.Exit, rec.WorkspaceDigest[:12])
 	return rec.Exit
 }
 
@@ -127,6 +127,11 @@ func cmdVerify(root string, args []string) int {
 	reviewPath := fs.String("review", "", "")
 	minStatus := fs.String("min", "TARGET_VERIFIED", "")
 	if fs.Parse(args) != nil || *taskPath == "" {
+		return 2
+	}
+	need, err := workflow.ParseStatus(*minStatus)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
 	}
 	t, err := workflow.LoadTask(*taskPath)
@@ -147,15 +152,17 @@ func cmdVerify(root string, args []string) int {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(map[string]any{
-		"derived_status": rep.DerivedStatus,
-		"reasons":        rep.Reasons,
-		"scope_pass":     rep.Scope.Pass,
-		"approval_gated": rep.Scope.ApprovalGated,
-		"worktree_dirty": rep.WorktreeDirty,
-		"base_sha":       rep.BaseSHA,
-		"head_sha":       rep.HeadSHA,
+		"derived_status":    rep.DerivedStatus,
+		"reasons":           rep.Reasons,
+		"scope_pass":        rep.Scope.Pass,
+		"approval_gated":    rep.Scope.ApprovalGated,
+		"worktree_dirty":    rep.WorktreeDirty,
+		"base_sha":          rep.BaseSHA,
+		"head_sha":          rep.HeadSHA,
+		"workspace_digest":  rep.WorkspaceDigest,
+		"evidence_editable": rep.EvidenceEditable,
 	})
-	if workflow.StatusRank(rep.DerivedStatus) >= workflow.StatusRank(workflow.Status(*minStatus)) {
+	if workflow.StatusRank(rep.DerivedStatus) >= workflow.StatusRank(need) {
 		return 0
 	}
 	return 1

@@ -11,11 +11,13 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 1. Read `AGENTS.md`, `harness/project-contract.md`, `harness/invariants.md`.
 2. Write a task JSON from `harness/tasks/template.json` and `validate` it.
 3. Work in an isolated git worktree when practical.
-4. **Worker:** record a failing RED command (`run -name red_test`), implement inside `allowed_paths`, record target tests.
-5. **Planner:** `scope`, then `run -name harness -- harness/check.sh`, then `verify -min HARNESS_VERIFIED`.
-6. **Reviewer:** produce `review.json` (pass/fail + findings). `verify` / `report` may include it; review **cannot** override failed deterministic gates.
+4. **Worker:** `run -name red_test` (contract argv), implement inside `allowed_paths`, `run -name target_test`.
+5. **Planner:** `scope`, `run -name harness`, `verify -min HARNESS_VERIFIED`.
+6. **Reviewer:** produce `review.json`. Review cannot override failed deterministic gates.
 7. `report` writes local evidence. Stop for **Mayur** merge/tag/release approval.
 
+`run` never accepts a replacement command; argv comes only from the task JSON.
+Target and harness records must match the current workspace digest; harness must follow the latest successful target.
 ## Derived status (from artifacts only)
 
 | Status | When |

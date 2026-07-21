@@ -17,14 +17,16 @@ Do not push/merge `main`, tag, publish releases, weaken security tests, rewrite 
 
 ```bash
 go run ./cmd/visor-workflow validate -task harness/tasks/<task>.json
-go run ./cmd/visor-workflow run      -task ... -name red_test -- go test ...
+go run ./cmd/visor-workflow run      -task ... -name red_test
 go run ./cmd/visor-workflow scope    -task ...
-go run ./cmd/visor-workflow run      -task ... -name target_test -- go test ...
-go run ./cmd/visor-workflow run      -task ... -name harness -- harness/check.sh
+go run ./cmd/visor-workflow run      -task ... -name target_test
+go run ./cmd/visor-workflow run      -task ... -name harness
 go run ./cmd/visor-workflow verify   -task ... -min HARNESS_VERIFIED
 go run ./cmd/visor-workflow report   -task ... [-review review.json]
 ```
 
+`run` executes the task contract `argv` for `-name` only (no command substitution).
+GREEN/harness evidence is bound to the current workspace digest.
 Status is **derived from artifacts** (task JSON, executed command records, git scope, optional review JSON). There is no stored workflow state machine and no env-var role identity.
 
 ## Supervised responsibilities
