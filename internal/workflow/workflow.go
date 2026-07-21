@@ -50,10 +50,12 @@ type CommandRecord struct {
 }
 
 type ReviewArtifact struct {
-	Passed   bool     `json:"passed"`
-	Findings []string `json:"findings"`
-	Reviewer string   `json:"reviewer,omitempty"`
-	Notes    string   `json:"notes,omitempty"`
+	Passed          bool     `json:"passed"`
+	Findings        []string `json:"findings"`
+	Reviewer        string   `json:"reviewer,omitempty"`
+	Notes           string   `json:"notes,omitempty"`
+	HeadSHA         string   `json:"head_sha"`
+	WorkspaceDigest string   `json:"workspace_digest"`
 }
 
 type ScopeResult struct {
@@ -729,11 +731,14 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	}
 
 	if review != nil && review.Passed {
-		if st == StatusHarnessVerified {
+		if st != StatusHarnessVerified {
+			reasons = append(reasons, "review_ignored_gates_not_met")
+		} else if review.HeadSHA != snap.HeadSHA || review.WorkspaceDigest != snap.WorkspaceDigest {
+			// Stay at HARNESS_VERIFIED; do not promote a stale review.
+			reasons = append(reasons, "review_snapshot_mismatch")
+		} else {
 			st = StatusSecurityReviewed
 			reasons = append(reasons, "review_pass")
-		} else {
-			reasons = append(reasons, "review_ignored_gates_not_met")
 		}
 	}
 	return st, reasons
@@ -766,7 +771,7 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 			"model prose cannot override command results",
 			"Mayur merge/release approval is outside this tool",
 			"command argv is bound by the task contract",
-			"GREEN/harness evidence is bound to workspace digest",
+			"GREEN/harness/review evidence is bound to workspace digest",
 		},
 	}, nil
 }
@@ -780,9 +785,25 @@ func LoadReview(path string) (*ReviewArtifact, error) {
 		return nil, err
 	}
 	var r ReviewArtifact
-	return &r, json.Unmarshal(b, &r)
+	if err := json.Unmarshal(b, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
+// ParseMinStatus accepts only progression statuses usable with verify -min.
+func ParseMinStatus(s string) (Status, error) {
+	switch Status(strings.TrimSpace(s)) {
+	case StatusSpecified, StatusFailureReproduced, StatusTargetVerified, StatusHarnessVerified, StatusSecurityReviewed:
+		return Status(strings.TrimSpace(s)), nil
+	case StatusBlocked, StatusUnspecified:
+		return "", fmt.Errorf("status %q is not a valid verify -min progression status", s)
+	default:
+		return "", fmt.Errorf("unknown status %q", s)
+	}
+}
+
+// ParseStatus accepts any known workflow status label.
 func ParseStatus(s string) (Status, error) {
 	switch Status(strings.TrimSpace(s)) {
 	case StatusUnspecified, StatusSpecified, StatusFailureReproduced, StatusTargetVerified,

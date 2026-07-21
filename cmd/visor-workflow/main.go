@@ -129,7 +129,7 @@ func cmdVerify(root string, args []string) int {
 	if fs.Parse(args) != nil || *taskPath == "" {
 		return 2
 	}
-	need, err := workflow.ParseStatus(*minStatus)
+	need, err := workflow.ParseMinStatus(*minStatus)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2

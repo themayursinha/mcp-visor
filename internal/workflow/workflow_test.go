@@ -210,6 +210,18 @@ func TestParseStatus_Unknown(t *testing.T) {
 	if s, err := workflow.ParseStatus("HARNESS_VERIFIED"); err != nil || s != workflow.StatusHarnessVerified {
 		t.Fatalf("%v %v", s, err)
 	}
+	if _, err := workflow.ParseMinStatus("BLOCKED"); err == nil {
+		t.Fatal("BLOCKED must not be valid -min")
+	}
+	if _, err := workflow.ParseMinStatus("UNSPECIFIED"); err == nil {
+		t.Fatal("UNSPECIFIED must not be valid -min")
+	}
+	if _, err := workflow.ParseMinStatus("NONSENSE"); err == nil {
+		t.Fatal("unknown must not be valid -min")
+	}
+	if s, err := workflow.ParseMinStatus("TARGET_VERIFIED"); err != nil || s != workflow.StatusTargetVerified {
+		t.Fatalf("%v %v", s, err)
+	}
 }
 
 func TestReviewIgnoredWithoutGates(t *testing.T) {
@@ -217,8 +229,68 @@ func TestReviewIgnoredWithoutGates(t *testing.T) {
 	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
 	st, rs := workflow.DeriveStatus(&tk, []workflow.CommandRecord{
 		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
-	}, workflow.ScopeResult{Pass: true}, &workflow.ReviewArtifact{Passed: true}, snap)
+	}, workflow.ScopeResult{Pass: true}, &workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d"}, snap)
 	if st == workflow.StatusSecurityReviewed {
 		t.Fatalf("review override %v", rs)
+	}
+}
+
+func TestReviewSnapshotMismatch(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk, err := workflow.LoadTask(writeTask(t, root, baseTask(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "red_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "target_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "harness", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	// Review bound to version A
+	snapA, err := workflow.CurrentSnapshot(root, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revA := &workflow.ReviewArtifact{
+		Passed: true, HeadSHA: snapA.HeadSHA, WorkspaceDigest: snapA.WorkspaceDigest, Reviewer: "r",
+	}
+	repA, err := workflow.BuildReport(root, tk, "HEAD", revA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repA.DerivedStatus != workflow.StatusSecurityReviewed {
+		t.Fatalf("version A should be SECURITY_REVIEWED: %s %v", repA.DerivedStatus, repA.Reasons)
+	}
+	// Change code (version B), rerun target+harness on new digest
+	if err := os.WriteFile(filepath.Join(root, "allowed", "a.txt"), []byte("version-B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "target_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, tk, "harness", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	// Stale review for A must not review B
+	repB, err := workflow.BuildReport(root, tk, "HEAD", revA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repB.DerivedStatus != workflow.StatusHarnessVerified {
+		t.Fatalf("stale review should leave HARNESS_VERIFIED, got %s %v", repB.DerivedStatus, repB.Reasons)
+	}
+	found := false
+	for _, r := range repB.Reasons {
+		if r == "review_snapshot_mismatch" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected review_snapshot_mismatch in %v", repB.Reasons)
 	}
 }
