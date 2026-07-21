@@ -152,11 +152,6 @@ func TestSnapshot_InvalidateAfterChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.DerivedStatus != workflow.StatusHarnessVerified && rep.DerivedStatus != workflow.StatusTargetVerified {
-		// scope may fail if only allowed/ dirty - allowed/a exists tracked; no dirty oos
-		// untracked nothing; should be harness verified if scope pass
-	}
-	// Ensure harness verified when scope clean
 	if !rep.Scope.Pass {
 		t.Fatalf("scope: %+v", rep.Scope)
 	}
@@ -179,30 +174,27 @@ func TestSnapshot_InvalidateAfterChange(t *testing.T) {
 func TestMaxAttempts(t *testing.T) {
 	tk := baseTask(func(tk *workflow.Task) { tk.MaxAttempts = 2 })
 	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
-	mk := func(n int, exit int) workflow.CommandRecord {
+	mk := func(exit int) workflow.CommandRecord {
 		return workflow.CommandRecord{
 			Name: "target_test", Args: []string{"true"}, Exit: exit, Source: "executed",
 			WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b",
 		}
 	}
-	// at limit (2) with final pass + red + harness still ok path-wise
+	// at limit (2) with final pass + red + harness
 	cmds := []workflow.CommandRecord{
 		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
-		mk(1, 1),
-		mk(2, 0),
+		mk(1),
+		mk(0),
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
-	// need harness after target — order: red, target fail, target pass, harness
 	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st != workflow.StatusHarnessVerified {
 		t.Fatalf("at limit: %s %v", st, reasons)
 	}
-	// above limit
-	cmds = append(cmds[:3], mk(3, 0), cmds[3])
-	// recount: 3 targets
+	// above limit: 3 target executions
 	cmds = []workflow.CommandRecord{
 		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
-		mk(1, 1), mk(2, 1), mk(3, 0),
+		mk(1), mk(1), mk(0),
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
 	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)

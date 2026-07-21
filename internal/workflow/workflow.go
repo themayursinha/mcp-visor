@@ -705,9 +705,6 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	if targetOK && lastTargetIdx >= 0 {
 		st = StatusTargetVerified
 		reasons = append(reasons, "scope_and_targets_pass")
-	} else if targetOK && lastTargetIdx < 0 {
-		// no pass targets defined except maybe none — treat as not target verified
-		targetOK = false
 	}
 
 	// Harness: current digest, after latest successful target
