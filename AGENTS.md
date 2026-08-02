@@ -26,7 +26,7 @@ go run ./cmd/visor-workflow report   -task ... [-review review.json]
 ```
 
 `run` executes the task contract `argv` for `-name` only (no command substitution).
-GREEN/harness evidence is bound to a snapshot digest covering the normalized task contract plus tracked, untracked, and ignored repository files (excluding self-generated `evidence/`).
+GREEN/harness evidence is bound to a snapshot digest covering the normalized task contract plus tracked, untracked, and ignored repository files (excluding self-generated `evidence/` and nested `.worktrees/`).
 Status is **derived from artifacts** (task JSON, executed command records, git scope, optional review JSON). There is no stored workflow state machine and no env-var role identity.
 
 ## Supervised responsibilities

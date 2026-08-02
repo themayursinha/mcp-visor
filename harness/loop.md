@@ -18,7 +18,7 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 
 `run` never accepts a replacement command; argv comes only from the task JSON.
 When `-base` is omitted, scope uses the merge base of `HEAD` and `origin/main`; if `origin/main` is unavailable, the tool fails closed and requires an explicit `-base`.
-Target and harness records must match the current snapshot digest, which covers the normalized task contract plus tracked, untracked, and ignored repository files except self-generated `evidence/`; harness must follow the latest successful target.
+Target and harness records must match the current snapshot digest, which covers the normalized task contract plus tracked, untracked, and ignored repository files except self-generated `evidence/` and nested `.worktrees/`; harness must follow the latest successful target.
 ## Derived status (from artifacts only)
 
 | Status | When |

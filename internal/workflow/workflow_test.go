@@ -64,6 +64,32 @@ func gitInit(t *testing.T, root string) {
 	run("git", "commit", "-m", "i")
 }
 
+func TestWorkspaceDigest_SkipsNestedWorktrees(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, ".worktrees", "other", "scratch.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("nested worktrees must not affect the current worktree snapshot")
+	}
+}
+
 func TestCurrentSnapshot_BindsTaskContract(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)

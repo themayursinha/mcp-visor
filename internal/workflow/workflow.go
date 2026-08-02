@@ -304,7 +304,7 @@ func CurrentSnapshot(root, base string, t *Task) (Snapshot, error) {
 	return Snapshot{BaseSHA: baseSHA, HeadSHA: head, WorkspaceDigest: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
-// WorkspaceDigest hashes tracked, untracked, and ignored repository content, excluding evidence/.
+// WorkspaceDigest hashes repository content, excluding generated evidence and nested worktrees.
 func WorkspaceDigest(root string) (string, error) {
 	head, err := git(root, "rev-parse", "HEAD")
 	if err != nil {
@@ -314,7 +314,7 @@ func WorkspaceDigest(root string) (string, error) {
 	addNUL := func(s string) {
 		for _, p := range strings.Split(s, "\x00") {
 			p = filepath.ToSlash(p)
-			if p != "" && !skipEvidence(p) {
+			if p != "" && !skipLocalState(p) {
 				paths[p] = struct{}{}
 			}
 		}
@@ -374,9 +374,10 @@ func WorkspaceDigest(root string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func skipEvidence(p string) bool {
+func skipLocalState(p string) bool {
 	p = filepath.ToSlash(p)
-	return p == "evidence" || strings.HasPrefix(p, "evidence/")
+	return p == "evidence" || strings.HasPrefix(p, "evidence/") ||
+		p == ".worktrees" || strings.HasPrefix(p, ".worktrees/")
 }
 
 func hashFile(path string) (string, error) {
@@ -550,7 +551,7 @@ func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
 	}
 	var list, oos, gated []string
 	for p := range changed {
-		if skipEvidence(p) {
+		if skipLocalState(p) {
 			continue
 		}
 		list = append(list, p)
