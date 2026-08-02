@@ -191,6 +191,34 @@ func TestWorkspaceDigest_TracksNewlineFilename(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDigest_SymlinkEncodingCannotCollide(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	if err := os.Symlink("x\nL z2 y", filepath.Join(root, "z1")); err != nil {
+		t.Fatal(err)
+	}
+	one, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "z1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("x", filepath.Join(root, "z1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("y", filepath.Join(root, "z2")); err != nil {
+		t.Fatal(err)
+	}
+	two, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Fatal("ambiguous snapshot framing collided for distinct symlink states")
+	}
+}
+
 func TestCheckScope_FilenameWithSpacesCannotBeMangled(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
@@ -408,6 +436,26 @@ func TestRun_UsesContractArgvOnly(t *testing.T) {
 	if st != workflow.StatusBlocked {
 		// harness argv mismatch vs contract
 		t.Fatalf("expected blocked on argv mismatch, got %s", st)
+	}
+}
+
+func TestRunNamedCommand_UsesUniqueLogPaths(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk, err := workflow.LoadTask(writeTask(t, root, baseTask(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]struct{}{}
+	for i := 0; i < 10; i++ {
+		rec, err := workflow.RunNamedCommand(root, tk, "target_test", "HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := seen[rec.LogPath]; exists {
+			t.Fatalf("command log path reused: %s", rec.LogPath)
+		}
+		seen[rec.LogPath] = struct{}{}
 	}
 }
 

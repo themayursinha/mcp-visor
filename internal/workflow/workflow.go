@@ -348,28 +348,32 @@ func WorkspaceDigest(root string) (string, error) {
 	sort.Strings(list)
 
 	h := sha256.New()
-	fmt.Fprintf(h, "head %s\n", head)
+	writeRecord := func(fields ...string) {
+		b, _ := json.Marshal(fields) // []string cannot contain unsupported JSON values.
+		_, _ = h.Write(append(b, '\n'))
+	}
+	writeRecord("head", head)
 	for _, p := range list {
 		full := filepath.Join(root, filepath.FromSlash(p))
 		fi, err := os.Lstat(full)
 		if err != nil {
-			fmt.Fprintf(h, "D %s\n", p)
+			writeRecord("D", p)
 			continue
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
 			tgt, _ := os.Readlink(full)
-			fmt.Fprintf(h, "L %s %s\n", p, tgt)
+			writeRecord("L", p, tgt)
 			continue
 		}
 		if !fi.Mode().IsRegular() {
-			fmt.Fprintf(h, "X %s %v\n", p, fi.Mode())
+			writeRecord("X", p, fi.Mode().String())
 			continue
 		}
 		sum, err := hashFile(full)
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(h, "F %s %04o %s %d\n", p, fi.Mode().Perm(), sum, fi.Size())
+		writeRecord("F", p, fmt.Sprintf("%04o", fi.Mode().Perm()), sum, fmt.Sprintf("%d", fi.Size()))
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -408,11 +412,12 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return CommandRecord{}, err
 	}
-	logPath := filepath.Join(logDir, time.Now().UTC().Format("20060102T150405Z")+"-"+sanitize(name)+".log")
-	f, err := os.Create(logPath)
+	prefix := time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + sanitize(name) + "-"
+	f, err := os.CreateTemp(logDir, prefix+"*.log")
 	if err != nil {
 		return CommandRecord{}, err
 	}
+	logPath := f.Name()
 	defer f.Close()
 
 	args := append([]string(nil), req.Argv...)
