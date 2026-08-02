@@ -40,7 +40,7 @@ go run ./cmd/visor-workflow <validate|scope|run|verify|report> ...
 
 ## Approval-gated paths
 
-Default patterns include `*_test.go`, `harness/invariants.md`, `go.mod`/`go.sum`, `README.md`, `SECURITY.md`, `.github/workflows/*`. Changes are **reported**; Mayur must explicitly accept them.
+Default patterns include `*_test.go`, `harness/invariants.md`, `go.mod`/`go.sum`, `README.md`, `SECURITY.md`, `.github/workflows/*`. Custom patterns extend these defaults; they never replace them. Changes are **reported**; Mayur must explicitly accept them.
 
 ## Evidence truth
 

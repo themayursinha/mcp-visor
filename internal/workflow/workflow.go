@@ -121,9 +121,7 @@ func LoadTask(path string) (*Task, error) {
 	if err := ValidateTask(&t); err != nil {
 		return nil, err
 	}
-	if len(t.ApprovalGatedPaths) == 0 {
-		t.ApprovalGatedPaths = DefaultApprovalGated()
-	}
+	t.ApprovalGatedPaths = uniq(append(DefaultApprovalGated(), t.ApprovalGatedPaths...))
 	return &t, nil
 }
 
@@ -901,11 +899,19 @@ func ValidateArtifactPath(root, path, kind string) error {
 	if err != nil {
 		return fmt.Errorf("resolve repository root: %w", err)
 	}
+	rootReal, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return fmt.Errorf("resolve repository root symlinks: %w", err)
+	}
 	pathAbs, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("resolve %s path: %w", kind, err)
 	}
-	rel, err := filepath.Rel(rootAbs, pathAbs)
+	pathReal, err := resolveWithMissingLeaf(pathAbs)
+	if err != nil {
+		return fmt.Errorf("resolve %s path symlinks: %w", kind, err)
+	}
+	rel, err := filepath.Rel(rootReal, pathReal)
 	if err != nil {
 		return fmt.Errorf("compare %s path to repository: %w", kind, err)
 	}
@@ -916,6 +922,32 @@ func ValidateArtifactPath(root, path, kind string) error {
 		return fmt.Errorf("%s artifact inside repository must be stored under evidence/ or outside the repository", kind)
 	}
 	return nil
+}
+
+func resolveWithMissingLeaf(path string) (string, error) {
+	current := filepath.Clean(path)
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if fi, statErr := os.Lstat(current); statErr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return "", err
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 // ParseMinStatus accepts only progression statuses usable with verify -min.

@@ -434,6 +434,28 @@ func TestLoadTask_RejectsTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestLoadTask_UnionsDefaultApprovalGates(t *testing.T) {
+	dir := t.TempDir()
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.ApprovalGatedPaths = []string{"custom/*"}
+	})
+	loaded, err := workflow.LoadTask(writeTask(t, dir, tk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(want string) bool {
+		for _, got := range loaded.ApprovalGatedPaths {
+			if got == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("custom/*") || !has("*_test.go") || !has("go.mod") || !has(".github/workflows/*") {
+		t.Fatalf("custom gates must extend mandatory defaults: %v", loaded.ApprovalGatedPaths)
+	}
+}
+
 func TestValidate_RequiresTargetPassCommand(t *testing.T) {
 	dir := t.TempDir()
 	tk := baseTask(func(tk *workflow.Task) {
@@ -664,6 +686,13 @@ func TestLoadReview_RequiresExcludedOrExternalPath(t *testing.T) {
 	}
 	if rev, err := workflow.LoadReview(root, evidencePath); err != nil || rev == nil || !rev.Passed {
 		t.Fatalf("review under excluded evidence path must load: rev=%+v err=%v", rev, err)
+	}
+	linkPath := filepath.Join(root, "evidence", "report-link.json")
+	if err := os.Symlink(filepath.Join(root, "README.md"), linkPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.ValidateArtifactPath(root, linkPath, "report"); err == nil {
+		t.Fatal("artifact path symlinked to bound repository content must be rejected")
 	}
 }
 
