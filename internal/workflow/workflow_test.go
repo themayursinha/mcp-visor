@@ -943,13 +943,15 @@ func TestWorkspaceDigest_BindsEmptyDirectories(t *testing.T) {
 		t.Fatal("removing an empty untracked directory must change the workspace digest")
 	}
 }
+
+func TestWriteReportJSON_HardLinkDoesNotTruncatePeer(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
 	peer := filepath.Join(root, "allowed", "peer.txt")
 	if err := os.WriteFile(peer, []byte("peer-original\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dest := filepath.Join(root, "evidence", "report.json")
+	dest := filepath.Join(root, "evidence", "workflow", "report.json")
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		t.Fatal(err)
 	}
