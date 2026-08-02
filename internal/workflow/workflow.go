@@ -684,7 +684,7 @@ func lastMatching(t *Task, cmds []CommandRecord, name string, requirePass *bool)
 		if requirePass != nil {
 			ok := c.Exit == 0
 			if *requirePass != ok {
-				continue
+				return -1, nil
 			}
 		}
 		cp := c

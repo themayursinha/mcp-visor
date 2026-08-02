@@ -482,6 +482,38 @@ func TestMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestDeriveStatus_LatestTargetExecutionWins(t *testing.T) {
+	tk := baseTask(nil)
+	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
+	cmds := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "target_test", Args: []string{"true"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
+	if st == workflow.StatusTargetVerified || st == workflow.StatusHarnessVerified || st == workflow.StatusSecurityReviewed {
+		t.Fatalf("latest failed target must invalidate verification, got %s %v", st, reasons)
+	}
+}
+
+func TestDeriveStatus_LatestHarnessExecutionWins(t *testing.T) {
+	tk := baseTask(nil)
+	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
+	cmds := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "harness", Args: []string{"true"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
+	if st == workflow.StatusHarnessVerified || st == workflow.StatusSecurityReviewed {
+		t.Fatalf("latest failed harness must invalidate harness verification, got %s %v", st, reasons)
+	}
+}
+
 func TestParseStatus_Unknown(t *testing.T) {
 	if _, err := workflow.ParseStatus("NONSENSE"); err == nil {
 		t.Fatal("expected error")
