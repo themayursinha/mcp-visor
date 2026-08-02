@@ -210,8 +210,8 @@ func ValidateTask(t *Task) error {
 }
 
 // argvTouchesExcludedLocalState returns a path-like argv token under trees that
-// are deliberately unbound from snapshot/scope (generated evidence + nested worktrees).
-// Scans every token substring to catch embedded paths (e.g. sh -c "cat .worktrees/...").
+// are deliberately unbound from snapshot/scope (generated evidence only).
+// Scans every token substring to catch embedded paths (e.g. sh -c "cat evidence/...").
 // This is fail-closed best-effort for interpreter strings, not a full FS taint tracker.
 func argvTouchesExcludedLocalState(argv []string) string {
 	for _, raw := range argv {
@@ -219,8 +219,8 @@ func argvTouchesExcludedLocalState(argv []string) string {
 		if s == "" {
 			continue
 		}
-		for _, prefix := range []string{"evidence/workflow", "evidence/harness", ".worktrees"} {
-			if s == prefix || strings.HasPrefix(s, prefix+"/") || strings.Contains(s, "/"+prefix+"/") || strings.Contains(s, " "+prefix) {
+		for _, prefix := range []string{"evidence/workflow", "evidence/harness"} {
+			if s == prefix || strings.HasPrefix(s, prefix+"/") || strings.Contains(s, "/"+prefix+"/") || strings.Contains(s, " "+prefix) || strings.HasPrefix(s, "--input="+prefix) || strings.Contains(s, "'"+prefix) || strings.Contains(s, "\""+prefix) {
 				return prefix
 			}
 		}
@@ -419,8 +419,6 @@ func WorkspaceDigest(root string) (string, error) {
 func skipLocalState(p string) bool {
 	p = filepath.ToSlash(p)
 	switch {
-	case p == ".worktrees", strings.HasPrefix(p, ".worktrees/"):
-		return true
 	case p == "evidence/workflow", strings.HasPrefix(p, "evidence/workflow/"):
 		return true
 	case p == "evidence/harness", strings.HasPrefix(p, "evidence/harness/"):

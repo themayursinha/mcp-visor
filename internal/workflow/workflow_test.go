@@ -65,7 +65,7 @@ func gitInit(t *testing.T, root string) {
 	run("git", "commit", "-m", "i")
 }
 
-func TestWorkspaceDigest_SkipsNestedWorktrees(t *testing.T) {
+func TestWorkspaceDigest_BindsNestedWorktrees(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
 	path := filepath.Join(root, ".worktrees", "other", "scratch.txt")
@@ -86,8 +86,8 @@ func TestWorkspaceDigest_SkipsNestedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before != after {
-		t.Fatal("nested worktrees must not affect the current worktree snapshot")
+	if before == after {
+		t.Fatal(".worktrees must be bound into the workspace digest so commands can safely read it")
 	}
 }
 
@@ -886,8 +886,8 @@ func TestValidate_RejectsArgvUnderNestedWorktrees(t *testing.T) {
 			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
 		}
 	})
-	if err := workflow.ValidateTask(&tk); err == nil {
-		t.Fatal("argv under excluded .worktrees/ must be rejected")
+	if err := workflow.ValidateTask(&tk); err != nil {
+		t.Fatalf(".worktrees is now bound into the digest, so argv referencing it is allowed: %v", err)
 	}
 }
 
@@ -895,22 +895,22 @@ func TestValidate_RejectsExcludedPathsInShellArgs(t *testing.T) {
 	tk := baseTask(func(tk *workflow.Task) {
 		tk.RequiredCommands = []workflow.ReqCmd{
 			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
-			{Name: "target_test", Expect: "pass", Argv: []string{"sh", "-c", "cat .worktrees/other/result"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{"sh", "-c", "cat evidence/workflow/T-TEST/commands.jsonl"}},
 			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
 		}
 	})
 	if err := workflow.ValidateTask(&tk); err == nil {
-		t.Fatal("excluded .worktrees/ path inside sh -c must be rejected")
+		t.Fatal("excluded evidence/workflow path inside sh -c must be rejected")
 	}
 	tk2 := baseTask(func(tk *workflow.Task) {
 		tk.RequiredCommands = []workflow.ReqCmd{
 			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
-			{Name: "target_test", Expect: "pass", Argv: []string{"bash", "-c", "./run evidence/workflow/script.sh"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{"echo", "--input=evidence/workflow/x"}},
 			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
 		}
 	})
 	if err := workflow.ValidateTask(&tk2); err == nil {
-		t.Fatal("excluded evidence/workflow/ path inside interpreter args must be rejected")
+		t.Fatal("excluded evidence/workflow in --input= form must be rejected")
 	}
 }
 
