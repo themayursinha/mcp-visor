@@ -211,18 +211,18 @@ func ValidateTask(t *Task) error {
 
 // argvTouchesExcludedLocalState returns a path-like argv token under trees that
 // are deliberately unbound from snapshot/scope (generated evidence + nested worktrees).
+// Scans every token substring to catch embedded paths (e.g. sh -c "cat .worktrees/...").
+// This is fail-closed best-effort for interpreter strings, not a full FS taint tracker.
 func argvTouchesExcludedLocalState(argv []string) string {
 	for _, raw := range argv {
-		a := filepath.ToSlash(strings.TrimSpace(raw))
-		if a == "" {
+		s := filepath.ToSlash(strings.TrimSpace(raw))
+		if s == "" {
 			continue
 		}
-		a = strings.TrimPrefix(a, "./")
-		switch {
-		case a == "evidence/workflow", strings.HasPrefix(a, "evidence/workflow/"),
-			a == "evidence/harness", strings.HasPrefix(a, "evidence/harness/"),
-			a == ".worktrees", strings.HasPrefix(a, ".worktrees/"):
-			return a
+		for _, prefix := range []string{"evidence/workflow", "evidence/harness", ".worktrees"} {
+			if s == prefix || strings.HasPrefix(s, prefix+"/") || strings.Contains(s, "/"+prefix+"/") || strings.Contains(s, " "+prefix) {
+				return prefix
+			}
 		}
 	}
 	return ""

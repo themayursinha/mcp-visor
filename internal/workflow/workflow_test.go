@@ -891,6 +891,29 @@ func TestValidate_RejectsArgvUnderNestedWorktrees(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsExcludedPathsInShellArgs(t *testing.T) {
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{"sh", "-c", "cat .worktrees/other/result"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	if err := workflow.ValidateTask(&tk); err == nil {
+		t.Fatal("excluded .worktrees/ path inside sh -c must be rejected")
+	}
+	tk2 := baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{"bash", "-c", "./run evidence/workflow/script.sh"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	if err := workflow.ValidateTask(&tk2); err == nil {
+		t.Fatal("excluded evidence/workflow/ path inside interpreter args must be rejected")
+	}
+}
+
 func TestWriteReportJSON_HardLinkDoesNotTruncatePeer(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
