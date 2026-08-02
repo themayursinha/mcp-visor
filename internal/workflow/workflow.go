@@ -57,6 +57,7 @@ type ReviewArtifact struct {
 	Notes           string   `json:"notes,omitempty"`
 	HeadSHA         string   `json:"head_sha"`
 	WorkspaceDigest string   `json:"workspace_digest"`
+	BaseSHA         string   `json:"base_sha"`
 }
 
 type ScopeResult struct {
@@ -357,6 +358,10 @@ func WorkspaceDigest(root string) (string, error) {
 		addNUL(s)
 	} else {
 		return "", err
+	}
+	// Bind untracked empty directories (git ls-files skips them without --directory).
+	if s, err := git(root, "ls-files", "-o", "--exclude-standard", "--directory", "-z"); err == nil {
+		addNUL(s)
 	}
 	// Include paths deleted in the worktree vs HEAD.
 	if s, err := git(root, "diff", "--name-only", "--diff-filter=D", "-z", "HEAD"); err == nil {
@@ -871,7 +876,7 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	if review != nil && review.Passed {
 		if st != StatusHarnessVerified {
 			reasons = append(reasons, "review_ignored_gates_not_met")
-		} else if review.HeadSHA != snap.HeadSHA || review.WorkspaceDigest != snap.WorkspaceDigest {
+		} else if review.HeadSHA != snap.HeadSHA || review.WorkspaceDigest != snap.WorkspaceDigest || review.BaseSHA != snap.BaseSHA {
 			// Stay at HARNESS_VERIFIED; do not promote a stale review.
 			reasons = append(reasons, "review_snapshot_mismatch")
 		} else {
@@ -910,6 +915,7 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 			"Mayur merge/release approval is outside this tool",
 			"command argv is bound by the task contract",
 			"GREEN/harness/review evidence is bound to base SHA and workspace digest",
+			"Repository artifacts must be under evidence/workflow/ or evidence/harness/",
 			"max_attempts is counted per pass-target name",
 		},
 	}, nil
@@ -961,9 +967,10 @@ func ValidateArtifactPath(root, path, kind string) error {
 	}
 	rel = filepath.ToSlash(rel)
 	inside := rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
-	underEvidence := rel == "evidence" || strings.HasPrefix(rel, "evidence/")
-	if inside && !underEvidence {
-		return fmt.Errorf("%s artifact inside repository must be stored under evidence/ or outside the repository", kind)
+	underExcluded := rel == "evidence/workflow" || strings.HasPrefix(rel, "evidence/workflow/") ||
+		rel == "evidence/harness" || strings.HasPrefix(rel, "evidence/harness/")
+	if inside && !underExcluded {
+		return fmt.Errorf("%s artifact inside repository must be stored under evidence/workflow/, evidence/harness/, or outside the repository", kind)
 	}
 	return nil
 }

@@ -664,31 +664,38 @@ func TestDeriveStatus_LatestHarnessExecutionWins(t *testing.T) {
 func TestLoadReview_RequiresExcludedOrExternalPath(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
-	path := filepath.Join(root, "review.json")
-	b, err := json.Marshal(workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d"})
+	evPath := filepath.Join(root, "evidence", "custom.json")
+	b, err := json.Marshal(workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(evPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := workflow.ValidateArtifactPath(root, path, "report"); err == nil {
-		t.Fatal("report output inside the bound workspace must be rejected outside evidence/")
-	}
-	if _, err := workflow.LoadReview(root, path); err == nil {
-		t.Fatal("review artifact inside the bound workspace must be rejected outside evidence/")
-	}
-	evidencePath := filepath.Join(root, "evidence", "workflow", "review.json")
-	if err := os.MkdirAll(filepath.Dir(evidencePath), 0o755); err != nil {
+	if err := os.WriteFile(evPath, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(evidencePath, b, 0o644); err != nil {
+	if err := workflow.ValidateArtifactPath(root, evPath, "report"); err == nil {
+		t.Fatal("evidence/custom.json outside workflow/harness must be rejected after exclusion model change")
+	}
+	if _, err := workflow.LoadReview(root, evPath); err == nil {
+		t.Fatal("review artifact at evidence/custom.json must be rejected")
+	}
+	wfPath := filepath.Join(root, "evidence", "workflow", "review.json")
+	if err := os.MkdirAll(filepath.Dir(wfPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if rev, err := workflow.LoadReview(root, evidencePath); err != nil || rev == nil || !rev.Passed {
-		t.Fatalf("review under excluded evidence path must load: rev=%+v err=%v", rev, err)
+	if err := os.WriteFile(wfPath, b, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	linkPath := filepath.Join(root, "evidence", "report-link.json")
+	rev, err := workflow.LoadReview(root, wfPath)
+	if err != nil {
+		t.Fatalf("review under excluded evidence/workflow must load: err=%v", err)
+	}
+	if !rev.Passed {
+		t.Fatal("review not loaded")
+	}
+	linkPath := filepath.Join(root, "evidence", "workflow", "report-link.json")
 	if err := os.Symlink(filepath.Join(root, "README.md"), linkPath); err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +730,7 @@ func TestReviewIgnoredWithoutGates(t *testing.T) {
 	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
 	st, rs := workflow.DeriveStatus(&tk, []workflow.CommandRecord{
 		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
-	}, workflow.ScopeResult{Pass: true}, &workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d"}, snap)
+	}, workflow.ScopeResult{Pass: true}, &workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b"}, snap)
 	if st == workflow.StatusSecurityReviewed {
 		t.Fatalf("review override %v", rs)
 	}
@@ -745,13 +752,13 @@ func TestReviewSnapshotMismatch(t *testing.T) {
 	if _, err := workflow.RunNamedCommand(root, tk, "harness", "HEAD"); err != nil {
 		t.Fatal(err)
 	}
-	// Review bound to version A
 	snapA, err := workflow.CurrentSnapshot(root, "HEAD", tk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	revA := &workflow.ReviewArtifact{
-		Passed: true, HeadSHA: snapA.HeadSHA, WorkspaceDigest: snapA.WorkspaceDigest, Reviewer: "r",
+		Passed: true, HeadSHA: snapA.HeadSHA, WorkspaceDigest: snapA.WorkspaceDigest,
+		BaseSHA: snapA.BaseSHA, Reviewer: "r",
 	}
 	repA, err := workflow.BuildReport(root, tk, "HEAD", revA)
 	if err != nil {
@@ -760,7 +767,7 @@ func TestReviewSnapshotMismatch(t *testing.T) {
 	if repA.DerivedStatus != workflow.StatusSecurityReviewed {
 		t.Fatalf("version A should be SECURITY_REVIEWED: %s %v", repA.DerivedStatus, repA.Reasons)
 	}
-	// Change code (version B), rerun target+harness on new digest
+	// change code, rerun on new digest
 	if err := os.WriteFile(filepath.Join(root, "allowed", "a.txt"), []byte("version-B\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -770,7 +777,7 @@ func TestReviewSnapshotMismatch(t *testing.T) {
 	if _, err := workflow.RunNamedCommand(root, tk, "harness", "HEAD"); err != nil {
 		t.Fatal(err)
 	}
-	// Stale review for A must not review B
+	// stale review for A must not review B (digest mismatch)
 	repB, err := workflow.BuildReport(root, tk, "HEAD", revA)
 	if err != nil {
 		t.Fatal(err)
@@ -914,7 +921,28 @@ func TestValidate_RejectsExcludedPathsInShellArgs(t *testing.T) {
 	}
 }
 
-func TestWriteReportJSON_HardLinkDoesNotTruncatePeer(t *testing.T) {
+func TestWorkspaceDigest_BindsEmptyDirectories(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	dir := filepath.Join(root, "allowed", "cache")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	after, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("removing an empty untracked directory must change the workspace digest")
+	}
+}
 	root := t.TempDir()
 	gitInit(t, root)
 	peer := filepath.Join(root, "allowed", "peer.txt")
