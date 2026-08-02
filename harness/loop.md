@@ -17,6 +17,7 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 7. `report` writes local evidence. Stop for **Mayur** merge/tag/release approval.
 
 `run` never accepts a replacement command; argv comes only from the task JSON.
+When `-base` is omitted, scope uses the merge base of `HEAD` and `origin/main`; if `origin/main` is unavailable, the tool fails closed and requires an explicit `-base`.
 Target and harness records must match the current workspace digest; harness must follow the latest successful target.
 ## Derived status (from artifacts only)
 
@@ -26,8 +27,8 @@ Target and harness records must match the current workspace digest; harness must
 | FAILURE_REPRODUCED | security-sensitive + executed RED fail |
 | TARGET_VERIFIED | scope pass + required pass commands + RED fail if security-sensitive |
 | HARNESS_VERIFIED | TARGET_VERIFIED + executed harness pass |
-| SECURITY_REVIEWED | HARNESS_VERIFIED + review artifact passed |
-| BLOCKED | invalid/non-executed command records |
+| SECURITY_REVIEWED | HARNESS_VERIFIED + passed review bound to the current `head_sha` and `workspace_digest` |
+| BLOCKED | invalid/non-executed command records, argv mismatch, or target attempts above `max_attempts` |
 
 No script sets these by assignment. No `.task/state.env`.
 

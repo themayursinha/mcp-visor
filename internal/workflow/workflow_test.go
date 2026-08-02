@@ -64,6 +64,146 @@ func gitInit(t *testing.T, root string) {
 	run("git", "commit", "-m", "i")
 }
 
+func TestWorkspaceDigest_TracksNewlineFilename(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, "allowed", "line\nbreak.txt")
+	if err := os.WriteFile(path, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "add", "--", "allowed/line\nbreak.txt")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	cmd = exec.Command("git", "commit", "-m", "add newline path")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	before, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("workspace digest ignored content change in newline-containing path")
+	}
+}
+
+func TestCheckScope_FilenameWithSpacesCannotBeMangled(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, "other file.txt")
+	if err := os.WriteFile(path, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "add", "other file.txt")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	cmd = exec.Command("git", "commit", "-m", "add spaced path")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	base, err := workflow.ResolveBase(root, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.AllowedPaths = []string{"file.txt"}
+	})
+	res, err := workflow.CheckScope(root, &tk, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Pass {
+		t.Fatalf("mangled spaced path passed scope: %+v", res)
+	}
+	if len(res.Changed) != 1 || res.Changed[0] != "other file.txt" {
+		t.Fatalf("spaced path parsed incorrectly: %v", res.Changed)
+	}
+}
+
+func TestCheckScope_RenameTracksOldAndNewPaths(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	base, err := workflow.ResolveBase(root, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "mv", "allowed/a.txt", "allowed/b.txt")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git mv: %v: %s", err, out)
+	}
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.AllowedPaths = []string{"allowed/b.txt"}
+	})
+	res, err := workflow.CheckScope(root, &tk, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Pass {
+		t.Fatalf("rename source outside allowed scope was ignored: %+v", res)
+	}
+	want := []string{"allowed/a.txt", "allowed/b.txt"}
+	if len(res.Changed) != len(want) || res.Changed[0] != want[0] || res.Changed[1] != want[1] {
+		t.Fatalf("rename paths parsed incorrectly: got=%v want=%v", res.Changed, want)
+	}
+}
+
+func TestCheckScope_DanglingSymlinkFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	base, err := workflow.ResolveBase(root, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "allowed", "a.txt")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "..", "missing-outside"), path); err != nil {
+		t.Fatal(err)
+	}
+	tk := baseTask(nil)
+	res, err := workflow.CheckScope(root, &tk, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Pass {
+		t.Fatalf("unresolved symlink target must fail closed: %+v", res)
+	}
+	if len(res.Dirty) != 1 || res.Dirty[0] != "allowed/a.txt" {
+		t.Fatalf("dirty path parsed incorrectly: %v", res.Dirty)
+	}
+}
+
+func TestResolveBase_RequiresExplicitBaseWithoutOriginMain(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	if _, err := workflow.ResolveBase(root, ""); err == nil {
+		t.Fatal("missing origin/main must fail closed without an explicit base")
+	}
+	if got, err := workflow.ResolveBase(root, "HEAD"); err != nil || got == "" {
+		t.Fatalf("explicit base should resolve: got=%q err=%v", got, err)
+	}
+}
+
 func TestValidate_RejectsUnsafeTaskID(t *testing.T) {
 	for _, taskID := range []string{".", "..", "../escape", "../../escape", `..\escape`, "/tmp/escape", "T safe"} {
 		t.Run(taskID, func(t *testing.T) {
@@ -75,6 +215,25 @@ func TestValidate_RejectsUnsafeTaskID(t *testing.T) {
 				t.Fatalf("unsafe task_id %q accepted", taskID)
 			}
 		})
+	}
+}
+
+func TestLoadTask_RejectsTrailingJSON(t *testing.T) {
+	dir := t.TempDir()
+	tk := baseTask(nil)
+	b, err := json.Marshal(tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "allowed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "allowed", "task.json")
+	if err := os.WriteFile(p, append(b, []byte("\n{}\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.LoadTask(p); err == nil {
+		t.Fatal("trailing JSON document must be rejected")
 	}
 }
 

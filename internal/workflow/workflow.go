@@ -111,6 +111,12 @@ func LoadTask(path string) (*Task, error) {
 	if err := dec.Decode(&t); err != nil {
 		return nil, fmt.Errorf("parse task: %w", err)
 	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("parse task: trailing JSON value")
+		}
+		return nil, fmt.Errorf("parse task trailing data: %w", err)
+	}
 	if err := ValidateTask(&t); err != nil {
 		return nil, err
 	}
@@ -288,26 +294,29 @@ func WorkspaceDigest(root string) (string, error) {
 		return "", err
 	}
 	paths := map[string]struct{}{}
-	addLines := func(s string) {
-		for _, line := range strings.Split(s, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || skipEvidence(line) {
-				continue
+	addNUL := func(s string) {
+		for _, p := range strings.Split(s, "\x00") {
+			p = filepath.ToSlash(p)
+			if p != "" && !skipEvidence(p) {
+				paths[p] = struct{}{}
 			}
-			paths[filepath.ToSlash(line)] = struct{}{}
 		}
 	}
-	if s, err := git(root, "ls-files", "-c"); err == nil {
-		addLines(s)
+	if s, err := git(root, "ls-files", "-c", "-z"); err == nil {
+		addNUL(s)
 	} else {
 		return "", err
 	}
-	if s, _ := git(root, "ls-files", "-o", "--exclude-standard"); s != "" {
-		addLines(s)
+	if s, err := git(root, "ls-files", "-o", "--exclude-standard", "-z"); err == nil {
+		addNUL(s)
+	} else {
+		return "", err
 	}
-	// include paths deleted in the worktree vs HEAD
-	if s, _ := git(root, "diff", "--name-only", "--diff-filter=D", "HEAD"); s != "" {
-		addLines(s)
+	// Include paths deleted in the worktree vs HEAD.
+	if s, err := git(root, "diff", "--name-only", "--diff-filter=D", "-z", "HEAD"); err == nil {
+		addNUL(s)
+	} else {
+		return "", err
 	}
 	var list []string
 	for p := range paths {
@@ -432,7 +441,7 @@ func git(root string, args ...string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return strings.TrimRight(stdout.String(), "\r\n"), nil
 }
 
 func ResolveBase(root, base string) (string, error) {
@@ -442,7 +451,7 @@ func ResolveBase(root, base string) (string, error) {
 	if out, err := git(root, "merge-base", "HEAD", "origin/main"); err == nil && out != "" {
 		return out, nil
 	}
-	return git(root, "rev-parse", "HEAD")
+	return "", errors.New("cannot resolve default base: origin/main is unavailable; pass -base explicitly")
 }
 
 func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
@@ -451,51 +460,70 @@ func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
 		return ScopeResult{}, err
 	}
 	changed := map[string]struct{}{}
-	addNS := func(s string) {
-		for _, line := range strings.Split(s, "\n") {
-			fields := strings.Fields(strings.TrimSpace(line))
-			if len(fields) < 2 {
-				continue
-			}
-			st := fields[0]
-			if strings.HasPrefix(st, "R") || strings.HasPrefix(st, "C") {
-				if len(fields) >= 3 {
-					changed[fields[1]], changed[fields[2]] = struct{}{}, struct{}{}
-				}
-				continue
-			}
-			changed[fields[len(fields)-1]] = struct{}{}
+	addPath := func(p string) {
+		if p != "" {
+			changed[filepath.ToSlash(p)] = struct{}{}
 		}
 	}
-	s, err := git(root, "diff", "--name-status", baseSHA)
+	addNameStatusZ := func(s string) error {
+		parts := strings.Split(s, "\x00")
+		for i := 0; i < len(parts); {
+			if parts[i] == "" {
+				i++
+				continue
+			}
+			status := parts[i]
+			i++
+			if i >= len(parts) || parts[i] == "" {
+				return errors.New("malformed git --name-status -z output")
+			}
+			addPath(parts[i])
+			i++
+			if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+				if i >= len(parts) || parts[i] == "" {
+					return errors.New("malformed git rename/copy output")
+				}
+				addPath(parts[i])
+				i++
+			}
+		}
+		return nil
+	}
+	addNULPaths := func(dst map[string]struct{}, s string) {
+		for _, p := range strings.Split(s, "\x00") {
+			if p != "" {
+				dst[filepath.ToSlash(p)] = struct{}{}
+			}
+		}
+	}
+
+	s, err := git(root, "diff", "--name-status", "-z", baseSHA)
 	if err != nil {
 		return ScopeResult{}, err
 	}
-	addNS(s)
-	if s, _ = git(root, "diff", "--name-status", "--cached"); s != "" {
-		addNS(s)
+	if err := addNameStatusZ(s); err != nil {
+		return ScopeResult{}, err
 	}
-	if s, _ = git(root, "ls-files", "--others", "--exclude-standard"); s != "" {
-		for _, line := range strings.Split(s, "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				changed[line] = struct{}{}
-			}
-		}
+	s, err = git(root, "ls-files", "-o", "--exclude-standard", "-z")
+	if err != nil {
+		return ScopeResult{}, err
 	}
+	addNULPaths(changed, s)
+
+	dirtySet := map[string]struct{}{}
+	s, err = git(root, "diff", "--name-only", "-z", "HEAD")
+	if err != nil {
+		return ScopeResult{}, err
+	}
+	addNULPaths(dirtySet, s)
+	s, err = git(root, "ls-files", "-o", "--exclude-standard", "-z")
+	if err != nil {
+		return ScopeResult{}, err
+	}
+	addNULPaths(dirtySet, s)
 	var dirty []string
-	if s, _ = git(root, "status", "--porcelain"); s != "" {
-		for _, line := range strings.Split(s, "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			p := strings.TrimSpace(line[3:])
-			if i := strings.Index(p, " -> "); i >= 0 {
-				p = p[i+4:]
-			}
-			if p != "" {
-				dirty = append(dirty, p)
-			}
-		}
+	for p := range dirtySet {
+		dirty = append(dirty, p)
 	}
 	var list, oos, gated []string
 	for p := range changed {
@@ -511,10 +539,14 @@ func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
 		}
 		full := filepath.Join(root, p)
 		if fi, err := os.Lstat(full); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			if target, err := filepath.EvalSymlinks(full); err == nil {
-				if rel, err := filepath.Rel(root, target); err != nil || strings.HasPrefix(rel, "..") {
-					oos = append(oos, p+"->SYMLINK_ESCAPE")
-				}
+			target, err := filepath.EvalSymlinks(full)
+			if err != nil {
+				oos = append(oos, p+"->SYMLINK_UNRESOLVED")
+				continue
+			}
+			rel, err := filepath.Rel(root, target)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				oos = append(oos, p+"->SYMLINK_ESCAPE")
 			}
 		}
 	}
