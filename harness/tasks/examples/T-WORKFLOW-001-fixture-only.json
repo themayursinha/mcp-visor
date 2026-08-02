@@ -1,0 +1,19 @@
+{
+  "task_id": "T-WORKFLOW-001-fixture-only",
+  "invariant_ids": ["H1"],
+  "security_sensitive": true,
+  "security_problem": "Agents must not claim verification without contract-bound commands and snapshot-bound evidence.",
+  "required_behavior": "visor-workflow runs task argv only; GREEN/harness bind to workspace digest.",
+  "failure_behavior": "Missing RED, snapshot mismatch, or attempts over max_attempts block higher status.",
+  "allowed_paths": [
+    "harness/tasks/examples/T-WORKFLOW-001-fixture-only.json",
+    "harness/fixtures/workflow-smoke.txt"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 2,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["sh", "-c", "exit 1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["true"]},
+    {"name": "harness", "expect": "pass", "argv": ["true"]}
+  ]
+}

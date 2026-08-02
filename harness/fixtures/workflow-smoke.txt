@@ -1,0 +1,2 @@
+# Synthetic fixture for workflow scope examples only.
+workflow_fixture=ok

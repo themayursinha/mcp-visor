@@ -1,29 +1,21 @@
 # MCP Visor harness
 
-Minimal **harness engineering** for this repo: contract, invariants, and one script that must pass before enforcement or doc changes are considered done.
+Contract, invariants, suite check, and a **small supervised workflow tool**.
 
 ```bash
-# From repository root
 harness/check.sh
+go test ./internal/workflow/ ./cmd/visor-workflow/
+go run ./cmd/visor-workflow validate -task harness/tasks/template.json
 ```
 
-## Contents
-
-| File | Role |
+| Path | Role |
 |------|------|
-| `project-contract.md` | Purpose and non-negotiables |
+| `project-contract.md` | Non-negotiables |
 | `invariants.md` | Security properties → tests |
-| `loop.md` | AI-assisted development loop: trigger, cycle, stop conditions, approval gates |
-| `check.sh` | fmt, vet, full test suite, evidence manifest |
+| `loop.md` | Supervised development loop |
+| `check.sh` | fmt + vet + full tests + suite evidence |
+| `tasks/*.json` | Task contracts for `visor-workflow` |
+| `../cmd/visor-workflow` | validate / scope / run / verify / report |
+| `../internal/workflow` | Implementation + tests |
 
-## Evidence
-
-`check.sh` writes `evidence/harness/<timestamp>/manifest.md` (gitignored). Use for PR notes or local audit; do not commit secrets or host paths into public artifacts.
-
-## When to run
-
-- Before opening a PR
-- After AI-assisted edits to `internal/proxy`, `internal/policy`, or CLI flags
-- After README/architecture changes that claim enforcement behavior
-
-See also `docs/complexity-budget.md`.
+Local workflow evidence: `evidence/workflow/<task_id>/` (gitignored, editable, not tamper-proof).
