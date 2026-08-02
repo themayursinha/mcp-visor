@@ -147,6 +147,7 @@ func ValidateTask(t *Task) error {
 	}
 	seen := map[string]struct{}{}
 	hasHarnessPass := false
+	hasTargetPass := false
 	hasRedFail := false
 	for i := range t.RequiredCommands {
 		c := &t.RequiredCommands[i]
@@ -173,12 +174,18 @@ func ValidateTask(t *Task) error {
 		if c.Name == "harness" && c.Expect == "pass" {
 			hasHarnessPass = true
 		}
+		if c.Name != "harness" && c.Expect == "pass" {
+			hasTargetPass = true
+		}
 		if c.Expect == "fail" {
 			hasRedFail = true
 		}
 	}
 	if !hasHarnessPass {
 		e = append(e, "required_commands must include harness with expect=pass")
+	}
+	if !hasTargetPass {
+		e = append(e, "required_commands must include a non-harness expect=pass target")
 	}
 	if t.SecuritySensitive && !hasRedFail {
 		e = append(e, "security_sensitive tasks require at least one expect=fail command")
@@ -271,7 +278,10 @@ type Snapshot struct {
 	WorkspaceDigest string
 }
 
-func CurrentSnapshot(root, base string) (Snapshot, error) {
+func CurrentSnapshot(root, base string, t *Task) (Snapshot, error) {
+	if t == nil {
+		return Snapshot{}, errors.New("task required for snapshot")
+	}
 	baseSHA, err := ResolveBase(root, base)
 	if err != nil {
 		return Snapshot{}, err
@@ -280,14 +290,21 @@ func CurrentSnapshot(root, base string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	dig, err := WorkspaceDigest(root)
+	workspace, err := WorkspaceDigest(root)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{BaseSHA: baseSHA, HeadSHA: head, WorkspaceDigest: dig}, nil
+	contract, err := json.Marshal(t)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("marshal task contract: %w", err)
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "workspace:%s\n", workspace)
+	fmt.Fprintf(h, "task:%x\n", sha256.Sum256(contract))
+	return Snapshot{BaseSHA: baseSHA, HeadSHA: head, WorkspaceDigest: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
-// WorkspaceDigest hashes tracked/staged/unstaged/untracked content, excluding evidence/workflow.
+// WorkspaceDigest hashes tracked, untracked, and ignored repository content, excluding evidence/.
 func WorkspaceDigest(root string) (string, error) {
 	head, err := git(root, "rev-parse", "HEAD")
 	if err != nil {
@@ -308,6 +325,12 @@ func WorkspaceDigest(root string) (string, error) {
 		return "", err
 	}
 	if s, err := git(root, "ls-files", "-o", "--exclude-standard", "-z"); err == nil {
+		addNUL(s)
+	} else {
+		return "", err
+	}
+	// Commands may read gitignored files; bind them too, except self-generated evidence.
+	if s, err := git(root, "ls-files", "-o", "-i", "--exclude-standard", "-z"); err == nil {
 		addNUL(s)
 	} else {
 		return "", err
@@ -375,7 +398,7 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 	if err != nil {
 		return CommandRecord{}, err
 	}
-	snap, err := CurrentSnapshot(root, base)
+	snap, err := CurrentSnapshot(root, base, t)
 	if err != nil {
 		return CommandRecord{}, err
 	}
@@ -794,7 +817,7 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 func boolPtr(v bool) *bool { return &v }
 
 func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Report, error) {
-	snap, err := CurrentSnapshot(root, base)
+	snap, err := CurrentSnapshot(root, base, t)
 	if err != nil {
 		return nil, err
 	}

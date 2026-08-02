@@ -64,6 +64,50 @@ func gitInit(t *testing.T, root string) {
 	run("git", "commit", "-m", "i")
 }
 
+func TestCurrentSnapshot_BindsTaskContract(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := baseTask(nil)
+	before, err := workflow.CurrentSnapshot(root, "HEAD", &tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk.MaxAttempts++
+	after, err := workflow.CurrentSnapshot(root, "HEAD", &tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.WorkspaceDigest == after.WorkspaceDigest {
+		t.Fatal("snapshot digest ignored task contract change")
+	}
+}
+
+func TestWorkspaceDigest_TracksIgnoredFile(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "ignored.sh")
+	if err := os.WriteFile(path, []byte("one\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("two\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("workspace digest ignored gitignored file content")
+	}
+}
+
 func TestWorkspaceDigest_TracksExecutableBit(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
@@ -260,6 +304,19 @@ func TestLoadTask_RejectsTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestValidate_RequiresTargetPassCommand(t *testing.T) {
+	dir := t.TempDir()
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	if _, err := workflow.LoadTask(writeTask(t, dir, tk)); err == nil {
+		t.Fatal("task without a non-harness pass command must be rejected")
+	}
+}
+
 func TestValidate_ArgvAndNames(t *testing.T) {
 	dir := t.TempDir()
 	tk := baseTask(func(tk *workflow.Task) {
@@ -448,7 +505,7 @@ func TestReviewSnapshotMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Review bound to version A
-	snapA, err := workflow.CurrentSnapshot(root, "HEAD")
+	snapA, err := workflow.CurrentSnapshot(root, "HEAD", tk)
 	if err != nil {
 		t.Fatal(err)
 	}
