@@ -346,7 +346,7 @@ func WorkspaceDigest(root string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(h, "F %s %s %d\n", p, sum, fi.Size())
+		fmt.Fprintf(h, "F %s %04o %s %d\n", p, fi.Mode().Perm(), sum, fi.Size())
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

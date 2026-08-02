@@ -64,6 +64,29 @@ func gitInit(t *testing.T, root string) {
 	run("git", "commit", "-m", "i")
 }
 
+func TestWorkspaceDigest_TracksExecutableBit(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, "allowed", "a.txt")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("workspace digest ignored executable-bit change")
+	}
+}
+
 func TestWorkspaceDigest_TracksNewlineFilename(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
