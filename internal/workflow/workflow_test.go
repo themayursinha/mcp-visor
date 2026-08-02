@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/themayursinha/mcp-visor/internal/workflow"
@@ -785,5 +786,165 @@ func TestReviewSnapshotMismatch(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected review_snapshot_mismatch in %v", repB.Reasons)
+	}
+}
+
+func TestDeriveStatus_BaseMismatchRejectsTarget(t *testing.T) {
+	tk := baseTask(nil)
+	// Evidence recorded against base A must not verify under selected base B.
+	cmds := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "baseA"},
+		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "baseA"},
+		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "baseA"},
+	}
+	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "baseB"}
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
+	if st == workflow.StatusTargetVerified || st == workflow.StatusHarnessVerified || st == workflow.StatusSecurityReviewed {
+		t.Fatalf("base mismatch must reject verification, got %s %v", st, reasons)
+	}
+	found := false
+	for _, r := range reasons {
+		if r == "target_base_mismatch:target_test" || r == "harness_base_mismatch" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected base mismatch reason, got %v", reasons)
+	}
+}
+
+func TestWorkspaceDigest_IncludesNonGeneratedEvidenceFile(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, "evidence", "custom-check.sh")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("non-generated evidence/ files must be bound into the workspace digest")
+	}
+}
+
+func TestWorkspaceDigest_StillSkipsGeneratedWorkflowEvidence(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, "evidence", "workflow", "T-TEST", "commands.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{changed}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("generated evidence/workflow must remain excluded from digest")
+	}
+}
+
+func TestValidate_RejectsArgvUnderGeneratedEvidence(t *testing.T) {
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{"evidence/workflow/T-TEST/bin"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	if err := workflow.ValidateTask(&tk); err == nil {
+		t.Fatal("argv under generated evidence/workflow must be rejected")
+	}
+}
+
+func TestWriteReportJSON_HardLinkDoesNotTruncatePeer(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	peer := filepath.Join(root, "allowed", "peer.txt")
+	if err := os.WriteFile(peer, []byte("peer-original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(root, "evidence", "report.json")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(peer, dest); err != nil {
+		t.Fatal(err)
+	}
+	rep := &workflow.Report{TaskID: "T-TEST", DerivedStatus: workflow.StatusHarnessVerified}
+	if err := workflow.WriteReportJSON(dest, rep); err != nil {
+		t.Fatal(err)
+	}
+	peerBytes, err := os.ReadFile(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(peerBytes) != "peer-original\n" {
+		t.Fatalf("hard-linked peer was truncated/overwritten: %q", peerBytes)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "HARNESS_VERIFIED") {
+		t.Fatalf("report not written: %s", got)
+	}
+}
+
+func TestMaxAttempts_PerTargetName(t *testing.T) {
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.MaxAttempts = 1
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
+			{Name: "target_a", Expect: "pass", Argv: []string{"true"}},
+			{Name: "target_b", Expect: "pass", Argv: []string{"true"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
+	cmds := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "target_a", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "target_b", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
+	if st != workflow.StatusHarnessVerified {
+		t.Fatalf("one execution per target with max_attempts=1 must be allowed, got %s %v", st, reasons)
+	}
+}
+
+func TestMaxAttempts_ExceededOnSingleTarget(t *testing.T) {
+	tk := baseTask(func(tk *workflow.Task) { tk.MaxAttempts = 1 })
+	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
+	cmds := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "target_test", Args: []string{"true"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
+	if st != workflow.StatusBlocked {
+		t.Fatalf("two executions of one target with max_attempts=1 must block, got %s %v", st, reasons)
 	}
 }

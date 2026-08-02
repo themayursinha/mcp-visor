@@ -198,10 +198,33 @@ func ValidateTask(t *Task) error {
 			e = append(e, f.n+" required")
 		}
 	}
+	for i := range t.RequiredCommands {
+		if hit := argvTouchesGeneratedEvidence(t.RequiredCommands[i].Argv); hit != "" {
+			e = append(e, fmt.Sprintf("required_commands[%d].argv must not depend on generated evidence path %q", i, hit))
+		}
+	}
 	if len(e) > 0 {
 		return errors.New(strings.Join(e, "; "))
 	}
 	return nil
+}
+
+// argvTouchesGeneratedEvidence returns a path-like argv token under
+// evidence/workflow or evidence/harness, which are tool-generated trees.
+func argvTouchesGeneratedEvidence(argv []string) string {
+	for _, raw := range argv {
+		a := filepath.ToSlash(strings.TrimSpace(raw))
+		if a == "" {
+			continue
+		}
+		a = strings.TrimPrefix(a, "./")
+		switch {
+		case a == "evidence/workflow", strings.HasPrefix(a, "evidence/workflow/"),
+			a == "evidence/harness", strings.HasPrefix(a, "evidence/harness/"):
+			return a
+		}
+	}
+	return ""
 }
 
 func validTaskID(s string) bool {
@@ -394,8 +417,16 @@ func WorkspaceDigest(root string) (string, error) {
 
 func skipLocalState(p string) bool {
 	p = filepath.ToSlash(p)
-	return p == "evidence" || strings.HasPrefix(p, "evidence/") ||
-		p == ".worktrees" || strings.HasPrefix(p, ".worktrees/")
+	switch {
+	case p == ".worktrees", strings.HasPrefix(p, ".worktrees/"):
+		return true
+	case p == "evidence/workflow", strings.HasPrefix(p, "evidence/workflow/"):
+		return true
+	case p == "evidence/harness", strings.HasPrefix(p, "evidence/harness/"):
+		return true
+	default:
+		return false
+	}
 }
 
 func hashFile(path string) (string, error) {
@@ -683,13 +714,19 @@ func isRedFailCmd(t *Task, name string) bool {
 }
 
 func countTargetAttempts(t *Task, cmds []CommandRecord) int {
-	n := 0
+	// max_attempts is per required pass-target name, not total executions.
+	per := map[string]int{}
+	max := 0
 	for _, c := range cmds {
-		if c.Source == "executed" && isTargetPassCmd(t, c.Name) {
-			n++
+		if c.Source != "executed" || !isTargetPassCmd(t, c.Name) {
+			continue
+		}
+		per[c.Name]++
+		if per[c.Name] > max {
+			max = per[c.Name]
 		}
 	}
-	return n
+	return max
 }
 
 func lastMatching(t *Task, cmds []CommandRecord, name string, requirePass *bool) (int, *CommandRecord) {
@@ -789,6 +826,11 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 			reasons = append(reasons, "target_snapshot_mismatch:"+r.Name)
 			continue
 		}
+		if c.BaseSHA != snap.BaseSHA {
+			targetOK = false
+			reasons = append(reasons, "target_base_mismatch:"+r.Name)
+			continue
+		}
 		if t.SecuritySensitive && redIdx >= 0 && idx <= redIdx {
 			targetOK = false
 			reasons = append(reasons, "red_must_precede_green")
@@ -817,6 +859,8 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 			}
 		case h.WorkspaceDigest != snap.WorkspaceDigest:
 			reasons = append(reasons, "harness_snapshot_mismatch")
+		case h.BaseSHA != snap.BaseSHA:
+			reasons = append(reasons, "harness_base_mismatch")
 		case hIdx <= lastTargetIdx:
 			reasons = append(reasons, "harness_must_follow_target")
 		default:
@@ -866,7 +910,8 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 			"model prose cannot override command results",
 			"Mayur merge/release approval is outside this tool",
 			"command argv is bound by the task contract",
-			"GREEN/harness/review evidence is bound to workspace digest",
+			"GREEN/harness/review evidence is bound to base SHA and workspace digest",
+			"max_attempts is counted per pass-target name",
 		},
 	}, nil
 }
@@ -998,5 +1043,33 @@ func WriteReportJSON(path string, r *Report) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	b = append(b, '\n')
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".report-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
