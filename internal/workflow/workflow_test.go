@@ -219,6 +219,52 @@ func TestWorkspaceDigest_SymlinkEncodingCannotCollide(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDigest_PreservesInvalidUTF8Bytes(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, "z-link")
+	if err := os.Symlink(string([]byte{'x', 0xff}), path); err != nil {
+		t.Fatal(err)
+	}
+	one, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(string([]byte{'x', 0xfe}), path); err != nil {
+		t.Fatal(err)
+	}
+	two, err := workflow.WorkspaceDigest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Fatal("digest framing collapsed distinct invalid UTF-8 bytes")
+	}
+}
+
+func TestWorkspaceDigest_RejectsEmbeddedRepository(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	nested := filepath.Join(root, "allowed", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = nested
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("nested git init: %v: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "check.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.WorkspaceDigest(root); err == nil {
+		t.Fatal("embedded repository must fail closed")
+	}
+}
+
 func TestCheckScope_TracksIgnoredOutOfScopeFile(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
@@ -602,6 +648,9 @@ func TestLoadReview_RequiresExcludedOrExternalPath(t *testing.T) {
 	}
 	if err := os.WriteFile(path, b, 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if err := workflow.ValidateArtifactPath(root, path, "report"); err == nil {
+		t.Fatal("report output inside the bound workspace must be rejected outside evidence/")
 	}
 	if _, err := workflow.LoadReview(root, path); err == nil {
 		t.Fatal("review artifact inside the bound workspace must be rejected outside evidence/")

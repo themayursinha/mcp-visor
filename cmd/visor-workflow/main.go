@@ -187,14 +187,18 @@ func cmdReport(root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "review: %v\n", err)
 		return 2
 	}
+	outPath := *out
+	if outPath == "" {
+		outPath = filepath.Join(workflow.EvidenceDir(root, t.TaskID), "report.json")
+	}
+	if err := workflow.ValidateArtifactPath(root, outPath, "report"); err != nil {
+		fmt.Fprintf(os.Stderr, "output: %v\n", err)
+		return 2
+	}
 	rep, err := workflow.BuildReport(root, t, *base, rev)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
-	}
-	outPath := *out
-	if outPath == "" {
-		outPath = filepath.Join(workflow.EvidenceDir(root, t.TaskID), "report.json")
 	}
 	if err := workflow.WriteReportJSON(outPath, rep); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %v\n", err)

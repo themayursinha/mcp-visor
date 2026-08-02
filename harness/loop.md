@@ -14,11 +14,11 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 4. **Worker:** `run -name red_test` (contract argv), implement inside `allowed_paths`, `run -name target_test`.
 5. **Planner:** `scope`, `run -name harness`, `verify -min HARNESS_VERIFIED`.
 6. **Reviewer:** produce `review.json` under `evidence/` or outside the repository. Review cannot override failed deterministic gates.
-7. `report` writes local evidence. Stop for **Mayur** merge/tag/release approval.
+7. `report` writes local evidence under `evidence/` by default; custom outputs must remain under `evidence/` or outside the repository. Stop for **Mayur** merge/tag/release approval.
 
 `run` never accepts a replacement command; argv comes only from the task JSON.
 When `-base` is omitted, scope uses the merge base of `HEAD` and `origin/main`; if `origin/main` is unavailable, the tool fails closed and requires an explicit `-base`.
-Target and harness records must match the current snapshot digest. The digest covers the normalized task contract plus tracked, untracked, and ignored repository files except self-generated `evidence/` and nested `.worktrees/`. Scope applies `allowed_paths` to ignored files as well. The latest target execution must pass, and the latest harness execution must pass and follow it.
+Target and harness records must match the current snapshot digest. The digest uses byte-preserving length-prefixed framing over the normalized task contract plus tracked, untracked, and ignored repository files except self-generated `evidence/` and nested `.worktrees/`. Embedded repositories are rejected. Scope applies `allowed_paths` to ignored files as well. The latest target execution must pass, and the latest harness execution must pass and follow it.
 ## Derived status (from artifacts only)
 
 | Status | When |

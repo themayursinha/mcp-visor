@@ -4,6 +4,7 @@ package workflow
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -349,8 +350,16 @@ func WorkspaceDigest(root string) (string, error) {
 
 	h := sha256.New()
 	writeRecord := func(fields ...string) {
-		b, _ := json.Marshal(fields) // []string cannot contain unsupported JSON values.
-		_, _ = h.Write(append(b, '\n'))
+		var buf [binary.MaxVarintLen64]byte
+		writeLength := func(n int) {
+			used := binary.PutUvarint(buf[:], uint64(n))
+			_, _ = h.Write(buf[:used])
+		}
+		writeLength(len(fields))
+		for _, field := range fields {
+			writeLength(len(field))
+			_, _ = h.Write([]byte(field))
+		}
 	}
 	writeRecord("head", head)
 	for _, p := range list {
@@ -364,6 +373,13 @@ func WorkspaceDigest(root string) (string, error) {
 			tgt, _ := os.Readlink(full)
 			writeRecord("L", p, tgt)
 			continue
+		}
+		if fi.IsDir() {
+			if _, err := os.Lstat(filepath.Join(full, ".git")); err == nil {
+				return "", fmt.Errorf("embedded repository is not supported: %s", p)
+			} else if !os.IsNotExist(err) {
+				return "", fmt.Errorf("inspect embedded repository marker %s: %w", p, err)
+			}
 		}
 		if !fi.Mode().IsRegular() {
 			writeRecord("X", p, fi.Mode().String())
@@ -861,23 +877,8 @@ func LoadReview(root, path string) (*ReviewArtifact, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return nil, fmt.Errorf("resolve repository root: %w", err)
-	}
-	pathAbs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve review path: %w", err)
-	}
-	rel, err := filepath.Rel(rootAbs, pathAbs)
-	if err != nil {
-		return nil, fmt.Errorf("compare review path to repository: %w", err)
-	}
-	rel = filepath.ToSlash(rel)
-	inside := rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
-	underEvidence := rel == "evidence" || strings.HasPrefix(rel, "evidence/")
-	if inside && !underEvidence {
-		return nil, errors.New("review artifact inside repository must be stored under evidence/ or outside the repository")
+	if err := ValidateArtifactPath(root, path, "review"); err != nil {
+		return nil, err
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -888,6 +889,33 @@ func LoadReview(root, path string) (*ReviewArtifact, error) {
 		return nil, err
 	}
 	return &r, nil
+}
+
+// ValidateArtifactPath ensures generated or consumed evidence cannot silently
+// invalidate the workspace snapshot it describes.
+func ValidateArtifactPath(root, path, kind string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%s artifact path required", kind)
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolve repository root: %w", err)
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve %s path: %w", kind, err)
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil {
+		return fmt.Errorf("compare %s path to repository: %w", kind, err)
+	}
+	rel = filepath.ToSlash(rel)
+	inside := rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
+	underEvidence := rel == "evidence" || strings.HasPrefix(rel, "evidence/")
+	if inside && !underEvidence {
+		return fmt.Errorf("%s artifact inside repository must be stored under evidence/ or outside the repository", kind)
+	}
+	return nil
 }
 
 // ParseMinStatus accepts only progression statuses usable with verify -min.
