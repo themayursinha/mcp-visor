@@ -199,8 +199,8 @@ func ValidateTask(t *Task) error {
 		}
 	}
 	for i := range t.RequiredCommands {
-		if hit := argvTouchesGeneratedEvidence(t.RequiredCommands[i].Argv); hit != "" {
-			e = append(e, fmt.Sprintf("required_commands[%d].argv must not depend on generated evidence path %q", i, hit))
+		if hit := argvTouchesExcludedLocalState(t.RequiredCommands[i].Argv); hit != "" {
+			e = append(e, fmt.Sprintf("required_commands[%d].argv must not depend on excluded local-state path %q", i, hit))
 		}
 	}
 	if len(e) > 0 {
@@ -209,9 +209,9 @@ func ValidateTask(t *Task) error {
 	return nil
 }
 
-// argvTouchesGeneratedEvidence returns a path-like argv token under
-// evidence/workflow or evidence/harness, which are tool-generated trees.
-func argvTouchesGeneratedEvidence(argv []string) string {
+// argvTouchesExcludedLocalState returns a path-like argv token under trees that
+// are deliberately unbound from snapshot/scope (generated evidence + nested worktrees).
+func argvTouchesExcludedLocalState(argv []string) string {
 	for _, raw := range argv {
 		a := filepath.ToSlash(strings.TrimSpace(raw))
 		if a == "" {
@@ -220,7 +220,8 @@ func argvTouchesGeneratedEvidence(argv []string) string {
 		a = strings.TrimPrefix(a, "./")
 		switch {
 		case a == "evidence/workflow", strings.HasPrefix(a, "evidence/workflow/"),
-			a == "evidence/harness", strings.HasPrefix(a, "evidence/harness/"):
+			a == "evidence/harness", strings.HasPrefix(a, "evidence/harness/"),
+			a == ".worktrees", strings.HasPrefix(a, ".worktrees/"):
 			return a
 		}
 	}

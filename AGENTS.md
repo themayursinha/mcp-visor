@@ -26,7 +26,7 @@ go run ./cmd/visor-workflow report   -task ... [-review review.json]
 ```
 
 `run` executes the task contract `argv` for `-name` only (no command substitution).
-GREEN/harness evidence is bound to the selected base SHA and a snapshot digest covering the normalized task contract plus tracked, untracked, and ignored repository files. Only generated `evidence/workflow/`, `evidence/harness/`, and nested `.worktrees/` are excluded. Contract argv must not depend on those generated trees.
+GREEN/harness evidence is bound to the selected base SHA and a snapshot digest covering the normalized task contract plus tracked, untracked, and ignored repository files. Only generated `evidence/workflow/`, `evidence/harness/`, and nested `.worktrees/` are excluded. Contract argv must not depend on those excluded trees.
 `max_attempts` is counted per required pass-target name (not total target executions across names).
 Status is **derived from artifacts** (task JSON, executed command records, git scope, optional review JSON). There is no stored workflow state machine and no env-var role identity.
 

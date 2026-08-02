@@ -18,7 +18,7 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 
 `run` never accepts a replacement command; argv comes only from the task JSON.
 When `-base` is omitted, scope uses the merge base of `HEAD` and `origin/main`; if `origin/main` is unavailable, the tool fails closed and requires an explicit `-base`.
-Target and harness records must match the selected base SHA and current snapshot digest. The digest uses byte-preserving length-prefixed framing over the normalized task contract plus tracked, untracked, and ignored repository files except generated `evidence/workflow/`, `evidence/harness/`, and nested `.worktrees/`. Contract argv must not depend on those generated trees. Embedded repositories are rejected. Scope applies `allowed_paths` to ignored files as well. The latest target execution must pass, and the latest harness execution must pass and follow it. `max_attempts` is counted per required pass-target name.
+Target and harness records must match the selected base SHA and current snapshot digest. The digest uses byte-preserving length-prefixed framing over the normalized task contract plus tracked, untracked, and ignored repository files except generated `evidence/workflow/`, `evidence/harness/`, and nested `.worktrees/`. Contract argv must not depend on those excluded trees. Embedded repositories are rejected. Scope applies `allowed_paths` to ignored files as well. The latest target execution must pass, and the latest harness execution must pass and follow it. `max_attempts` is counted per required pass-target name.
 ## Derived status (from artifacts only)
 
 | Status | When |

@@ -878,6 +878,19 @@ func TestValidate_RejectsArgvUnderGeneratedEvidence(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsArgvUnderNestedWorktrees(t *testing.T) {
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.RequiredCommands = []workflow.ReqCmd{
+			{Name: "red_test", Expect: "fail", Argv: []string{"sh", "-c", "exit 1"}},
+			{Name: "target_test", Expect: "pass", Argv: []string{".worktrees/other/result"}},
+			{Name: "harness", Expect: "pass", Argv: []string{"true"}},
+		}
+	})
+	if err := workflow.ValidateTask(&tk); err == nil {
+		t.Fatal("argv under excluded .worktrees/ must be rejected")
+	}
+}
+
 func TestWriteReportJSON_HardLinkDoesNotTruncatePeer(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
