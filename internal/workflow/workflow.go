@@ -124,6 +124,8 @@ func ValidateTask(t *Task) error {
 	var e []string
 	if strings.TrimSpace(t.TaskID) == "" {
 		e = append(e, "task_id required")
+	} else if !validTaskID(t.TaskID) {
+		e = append(e, "task_id must contain only ASCII letters, digits, '.', '-', or '_'")
 	}
 	if len(clean(t.InvariantIDs)) == 0 {
 		e = append(e, "invariant_ids must be non-empty")
@@ -188,6 +190,19 @@ func ValidateTask(t *Task) error {
 		return errors.New(strings.Join(e, "; "))
 	}
 	return nil
+}
+
+func validTaskID(s string) bool {
+	if s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func clean(ss []string) []string {

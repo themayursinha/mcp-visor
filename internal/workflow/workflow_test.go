@@ -64,6 +64,20 @@ func gitInit(t *testing.T, root string) {
 	run("git", "commit", "-m", "i")
 }
 
+func TestValidate_RejectsUnsafeTaskID(t *testing.T) {
+	for _, taskID := range []string{".", "..", "../escape", "../../escape", `..\escape`, "/tmp/escape", "T safe"} {
+		t.Run(taskID, func(t *testing.T) {
+			dir := t.TempDir()
+			tk := baseTask(func(tk *workflow.Task) {
+				tk.TaskID = taskID
+			})
+			if _, err := workflow.LoadTask(writeTask(t, dir, tk)); err == nil {
+				t.Fatalf("unsafe task_id %q accepted", taskID)
+			}
+		})
+	}
+}
+
 func TestValidate_ArgvAndNames(t *testing.T) {
 	dir := t.TempDir()
 	tk := baseTask(func(tk *workflow.Task) {
