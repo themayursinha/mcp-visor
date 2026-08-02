@@ -139,7 +139,7 @@ func cmdVerify(root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "INVALID: %v\n", err)
 		return 1
 	}
-	rev, err := workflow.LoadReview(*reviewPath)
+	rev, err := workflow.LoadReview(root, *reviewPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "review: %v\n", err)
 		return 2
@@ -182,7 +182,7 @@ func cmdReport(root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "INVALID: %v\n", err)
 		return 1
 	}
-	rev, err := workflow.LoadReview(*reviewPath)
+	rev, err := workflow.LoadReview(root, *reviewPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "review: %v\n", err)
 		return 2

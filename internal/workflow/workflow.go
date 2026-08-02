@@ -538,6 +538,11 @@ func CheckScope(root string, t *Task, base string) (ScopeResult, error) {
 		return ScopeResult{}, err
 	}
 	addNULPaths(changed, s)
+	s, err = git(root, "ls-files", "-o", "-i", "--exclude-standard", "-z")
+	if err != nil {
+		return ScopeResult{}, err
+	}
+	addNULPaths(changed, s)
 
 	dirtySet := map[string]struct{}{}
 	s, err = git(root, "diff", "--name-only", "-z", "HEAD")
@@ -852,9 +857,27 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 	}, nil
 }
 
-func LoadReview(path string) (*ReviewArtifact, error) {
+func LoadReview(root, path string) (*ReviewArtifact, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository root: %w", err)
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve review path: %w", err)
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil {
+		return nil, fmt.Errorf("compare review path to repository: %w", err)
+	}
+	rel = filepath.ToSlash(rel)
+	inside := rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
+	underEvidence := rel == "evidence" || strings.HasPrefix(rel, "evidence/")
+	if inside && !underEvidence {
+		return nil, errors.New("review artifact inside repository must be stored under evidence/ or outside the repository")
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {

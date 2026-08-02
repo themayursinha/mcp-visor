@@ -219,6 +219,36 @@ func TestWorkspaceDigest_SymlinkEncodingCannotCollide(t *testing.T) {
 	}
 }
 
+func TestCheckScope_TracksIgnoredOutOfScopeFile(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("outside.sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "add", ".gitignore")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	cmd = exec.Command("git", "commit", "-m", "ignore outside input")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(root, "outside.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tk := baseTask(nil)
+	res, err := workflow.CheckScope(root, &tk, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Pass {
+		t.Fatalf("ignored out-of-scope command input passed scope: %+v", res)
+	}
+}
+
 func TestCheckScope_FilenameWithSpacesCannotBeMangled(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
@@ -559,6 +589,32 @@ func TestDeriveStatus_LatestHarnessExecutionWins(t *testing.T) {
 	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st == workflow.StatusHarnessVerified || st == workflow.StatusSecurityReviewed {
 		t.Fatalf("latest failed harness must invalidate harness verification, got %s %v", st, reasons)
+	}
+}
+
+func TestLoadReview_RequiresExcludedOrExternalPath(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	path := filepath.Join(root, "review.json")
+	b, err := json.Marshal(workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.LoadReview(root, path); err == nil {
+		t.Fatal("review artifact inside the bound workspace must be rejected outside evidence/")
+	}
+	evidencePath := filepath.Join(root, "evidence", "workflow", "review.json")
+	if err := os.MkdirAll(filepath.Dir(evidencePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evidencePath, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rev, err := workflow.LoadReview(root, evidencePath); err != nil || rev == nil || !rev.Passed {
+		t.Fatalf("review under excluded evidence path must load: rev=%+v err=%v", rev, err)
 	}
 }
 
