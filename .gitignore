@@ -59,3 +59,4 @@ package-lock.json
 
 # Graphify analysis output
 graphify-out/
+AGENTS.md
