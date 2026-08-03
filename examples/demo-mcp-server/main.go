@@ -3,14 +3,29 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 )
 
 func main() {
+	observeLog := flag.String("observe-log", "", "path to append-only server observation JSONL log")
+	flag.Parse()
+
 	reader := bufio.NewReader(os.Stdin)
 	writer := os.Stdout
-	requestID := 0
+	requestSeq := 0
+
+	var obsFile *os.File
+	if *observeLog != "" {
+		var err error
+		obsFile, err = os.OpenFile(*observeLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mock-server: cannot open observe-log: %v\n", err)
+			os.Exit(1)
+		}
+		defer obsFile.Close()
+	}
 
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -29,8 +44,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "mock-server: decode error: %v\n", err)
 			continue
 		}
-		requestID++
-		_ = requestID
+		requestSeq++
 
 		var response []byte
 
@@ -63,9 +77,7 @@ func main() {
 							"inputSchema": map[string]any{
 								"type": "object",
 								"properties": map[string]any{
-									"path": map[string]any{
-										"type": "string",
-									},
+									"path": map[string]any{"type": "string"},
 								},
 							},
 						},
@@ -111,6 +123,20 @@ func main() {
 				Arguments json.RawMessage `json:"arguments,omitempty"`
 			}
 			_ = json.Unmarshal(req.Params, &params)
+
+			// Record observation BEFORE responding
+			if obsFile != nil {
+				obs := map[string]any{
+					"request_seq": requestSeq,
+					"tool":        params.Name,
+					"received":    true,
+				}
+				if id, ok := req.ID.(float64); ok {
+					obs["request_id"] = int(id)
+				}
+				data, _ := json.Marshal(obs)
+				obsFile.Write(append(data, '\n'))
+			}
 
 			response = mustMarshal(map[string]any{
 				"jsonrpc": "2.0",
