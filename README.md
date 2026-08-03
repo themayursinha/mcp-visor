@@ -129,7 +129,7 @@ tool_chains:
     within_calls: 3
 ```
 
-More policies: [`examples/policies/`](examples/policies/) · Schema reference: [`docs/policy-model.md`](docs/policy-model.md)
+More policies: [`examples/policies/`](examples/policies/) · Interop policies: [`examples/policies/interop/`](examples/policies/interop/) · Schema reference: [`docs/policy-model.md`](docs/policy-model.md)
 
 ## Core capabilities
 
@@ -171,7 +171,7 @@ Full reference: `mcp-visor serve -h`
 
 ## Documentation
 
-[Architecture](docs/architecture.md) · [Policy model](docs/policy-model.md) · [Threat model](docs/threat-model.md) · [Complexity budget](docs/complexity-budget.md) · [Harness](harness/README.md)
+[Architecture](docs/architecture.md) · [Policy model](docs/policy-model.md) · [Threat model](docs/threat-model.md) · [Complexity budget](docs/complexity-budget.md) · [Interoperability](docs/interoperability.md) · [Harness](harness/README.md)
 
 ## Development
 
@@ -187,7 +187,7 @@ make bench                     # benchmarks
 - [x] v1.0: Proxy, policy engine, redaction, approval, audit, chain detection
 - [x] v1.1: Identity/time policies, partial engine hot-reload, CLI approval, experimental remote transport
 - [x] v1.2: Session taints and egress controls
-- [ ] v1.3: Documentation truth, security verification, interoperability evidence, and release hardening
+- [x] v1.3: Documentation truth, security verification, interoperability evidence, and release hardening
 - [ ] Future: sandboxing, richer telemetry, optional policy engines
 
 ## Contributing

@@ -1,0 +1,36 @@
+# Interop policy: local SSE mock remote server (remote post-handshake evidence)
+#
+# Used by the remote matrix cell R1 in tests/integration/interop_real_servers_test.go
+# (TestInteropRemotePostHandshake). The "remote" MCP server is a local loopback
+# HTTP+SSE mock so the test is hermetic (no third-party hosted remote, no tokens).
+# It proves the shared enforcement gate on the remote path: initialize handshake,
+# tools/list relay, allowed tools/call reaches the server, and an unregistered
+# tool is denied before relay.
+#
+# Reproduce:
+#   mcp-visor serve -server-url http://127.0.0.1:<port> \
+#     -server-name mock-remote -policy examples/policies/interop/remote-mock.yaml
+#
+# NOTE: third-party hosted remote MCP servers remain experimental until a real
+# post-handshake parity test exists; see docs/interoperability.md.
+version: "1.0"
+description: "Interop policy: local SSE mock remote server through Visor (remote post-handshake evidence)"
+default_action: deny
+settings:
+  chain_window_size: 5
+  approval_timeout_seconds: 10
+servers:
+  - name: "mock-remote"
+    allowed: true
+    tools:
+      - name: "fetch"
+        allowed: true
+        risk: high
+      - name: "read_file"
+        allowed: true
+        risk: medium
+redaction:
+  output_redaction: true
+  patterns:
+    - regex: "SK-[A-Za-z0-9]{20,}"
+      replacement: "«redacted:sk-key»"

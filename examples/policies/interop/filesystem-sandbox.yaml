@@ -1,0 +1,116 @@
+# Interop policy: real filesystem reference server (npm @modelcontextprotocol/server-filesystem)
+#
+# Used by the stdio matrix cells S1 (allow/deny) and S3 (taint source).
+# The filesystem server is started with a single allowed root (a temp sandbox),
+# so Visor policy doubles the boundary: allow_path only permits reads under the
+# sandbox root, and sensitive reads taint the session for later egress deny.
+#
+# Reproduce:
+#   npx -y @modelcontextprotocol/server-filesystem@2026.7.10 /tmp/interop-sandbox
+#   mcp-visor serve -server npx -server-arg -y \
+#     -server-arg @modelcontextprotocol/server-filesystem@2026.7.10 \
+#     -server-arg /tmp/interop-sandbox -server-name filesystem \
+#     -policy examples/policies/interop/filesystem-sandbox.yaml
+version: "1.0"
+description: "Real filesystem MCP server through Visor: sandbox allow_path + sensitive-read taint source"
+default_action: deny
+settings:
+  chain_window_size: 5
+  approval_timeout_seconds: 10
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "read_file"
+        allowed: true
+        risk: medium
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "read_text_file"
+        allowed: true
+        risk: medium
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "read_multiple_files"
+        allowed: true
+        risk: medium
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "list_directory"
+        allowed: true
+        risk: low
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "directory_tree"
+        allowed: true
+        risk: low
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "get_file_info"
+        allowed: true
+        risk: low
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "search_files"
+        allowed: true
+        risk: low
+      - name: "write_file"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "edit_file"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+      - name: "create_directory"
+        allowed: true
+        risk: medium
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
+taints:
+  - name: "sensitive_file_accessed"
+    description: "Session has read customer secrets or credential material from the sandbox"
+    source_tools:
+      - "read_file"
+      - "read_text_file"
+      - "read_multiple_files"
+    source_patterns:
+      - "**/secrets/**"
+      - "**/*.env"
+      - "**/*.key"
+      - "**/credentials*"
+egress_controls:
+  - name: "block_egress_after_sensitive_read"
+    description: "Do not allow egress-shaped tool calls after a sensitive read in this session"
+    when_tainted: "sensitive_file_accessed"
+    sink_tools:
+      - "fetch"
+      - "http_post"
+      - "write_file"
+      - "edit_file"
+    action: deny
+redaction:
+  output_redaction: true
+  patterns:
+    - regex: "SK-[A-Za-z0-9]{20,}"
+      replacement: "«redacted:sk-key»"

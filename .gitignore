@@ -56,3 +56,6 @@ __pycache__/
 # Node (opencode)
 node_modules/
 package-lock.json
+
+# Graphify analysis output
+graphify-out/

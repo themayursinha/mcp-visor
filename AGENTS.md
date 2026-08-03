@@ -1,5 +1,29 @@
 # AGENTS.md — MCP Visor
 
+## Model routing — three-model harness loop
+
+All code changes (features, fixes, refactors) use this model assignment:
+
+| Role | Model | Provider |
+|------|-------|----------|
+| Architect (design) | `gpt-5.6-sol` | `openai-codex` |
+| Builder (implementation) | `deepseek-v4-flash` | `opencode-go` |
+| Reviewer (verification) | `qwen3.8-max` | `qwen` |
+
+**Loop:** Architect → Builder → Reviewer. FAIL → back to Architect. Max 3 iterations.
+**Skip:** Only for single-line typos or when user says "quick fix, no loop."
+**Skill:** `three-model-harness-loop`
+
+## Graphify — enforcement chain verification
+
+Before/after any change touching `internal/policy/`, `internal/proxy/`, or `internal/receipt/`:
+- Run `graphify path "Policy" "Proxy"` and `graphify path "Policy" "AuditLedger"`
+- If the path or hop count changes, flag as a reviewer concern
+- Skip for single-file changes and cosmetic changes
+- Run `graphify update .` after code changes
+
+## Pre-change checklist
+
 Before security-sensitive changes, read:
 
 1. `harness/project-contract.md`
