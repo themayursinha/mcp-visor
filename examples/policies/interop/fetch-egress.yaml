@@ -1,0 +1,51 @@
+# Interop policy: real fetch reference server (PyPI mcp-server-fetch)
+#
+# Used by the stdio matrix cells S2 (allow/deny) and S3 (egress sink).
+# The fetch server exposes a single tool `fetch(url)`. Visor policy has no
+# generic url-argument rule type today, so host/URL allowlisting is expressed
+# via taint source patterns on the url argument + an egress control that denies
+# further fetch calls after a sensitive-url fetch. default_action: deny blocks
+# any tool that is not explicitly registered.
+#
+# Reproduce:
+#   uvx --with mcp==1.26.0 mcp-server-fetch@2026.7.10
+#   mcp-visor serve -server uvx -server-arg --with -server-arg mcp==1.26.0 \
+#     -server-arg mcp-server-fetch@2026.7.10 -server-name fetch \
+#     -policy examples/policies/interop/fetch-egress.yaml
+#
+# NOTE: mcp-server-fetch's latest release imports McpError from the mcp SDK in a
+# way that is broken with mcp>=1.27; pin the SDK to mcp==1.26.0 (verified 2026-08-03).
+version: "1.0"
+description: "Real fetch MCP server through Visor: egress sink with sensitive-URL taint and deny"
+default_action: deny
+settings:
+  chain_window_size: 5
+  approval_timeout_seconds: 10
+servers:
+  - name: "fetch"
+    allowed: true
+    tools:
+      - name: "fetch"
+        allowed: true
+        risk: high
+taints:
+  - name: "sensitive_url_fetched"
+    description: "Session has fetched a sensitive/internal URL via the fetch tool"
+    source_tools:
+      - "fetch"
+    source_patterns:
+      - "**/secrets/**"
+      - "**/internal/**"
+      - "**/.env"
+egress_controls:
+  - name: "block_fetch_after_sensitive_fetch"
+    description: "Deny further fetch egress after this session fetched a sensitive URL"
+    when_tainted: "sensitive_url_fetched"
+    sink_tools:
+      - "fetch"
+    action: deny
+redaction:
+  output_redaction: true
+  patterns:
+    - regex: "SK-[A-Za-z0-9]{20,}"
+      replacement: "«redacted:sk-key»"

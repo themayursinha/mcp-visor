@@ -221,7 +221,7 @@ Audit events are hash-linked within one logger lifetime while the sink remains h
 
 ### 3. Remote Server Authentication
 
-Remote MCP over HTTP+SSE is experimental. Current evidence covers handshake, not a post-handshake `tools/call`; the transport's shared read/write mutex can block POST while SSE read waits. Incomplete certificate/key pairs are not rejected. Use stdio for the supported path until these defects and the interoperability matrix are closed.
+Remote MCP over HTTP+SSE is experimental. Post-handshake relay is proven against a local loopback SSE mock (`TestInteropRemotePostHandshake`) and uses the same enforcement gate as stdio; the transport uses separate read/write mutexes, and incomplete certificate/key pairs are rejected fail-closed. Third-party hosted remote servers are not production-supported until a real hosted-service parity test exists. Use stdio for the supported path.
 
 ### 4. Ephemeral Session State
 

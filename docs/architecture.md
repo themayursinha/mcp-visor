@@ -313,10 +313,10 @@ The default transport. The proxy starts the MCP server as a child process and co
 
 ### HTTP + SSE (Remote, experimental)
 
-Enabled via `--server-url`. The code supports SSE reads and POST writes, but Phase 1 evidence currently covers handshake only. A shared read/write mutex can block post-handshake calls while the SSE reader waits, so this path is not production-supported until the transport concurrency test and interoperability matrix pass.
+Enabled via `--server-url`. The code supports SSE reads and POST writes. Post-handshake relay is proven against a local loopback SSE mock (`TestInteropRemotePostHandshake`) and uses the same `interceptClientToServerEnvelope` → `processToolsCall` enforcement gate as stdio. Third-party hosted remote servers remain **experimental**: no real hosted-service parity test exists yet, so do not use `--server-url` against a production service without additional validation. The transport uses separate `readMu` / `writeMu` so a blocked SSE read cannot deadlock concurrent POSTs (`TestHTTPTransportAllowsConcurrentReadAndWrite`).
 - **SSE endpoint** (GET) for server-to-proxy streaming of responses and notifications
 - **Message endpoint** (POST) for proxy-to-server requests
-- Optional TLS configuration exists, but a one-sided client certificate/key configuration is not currently rejected; operators must provide both files and use HTTPS
+- Optional TLS configuration exists; an incomplete client certificate/key pair is rejected fail-closed (`TestTLSConfigRejectsIncompleteClientKeyPair`). Operators must provide both files and use HTTPS
 - `--sse-path` to customize the SSE endpoint, `--insecure-tls` for development
 
 The `Transport` interface (`ReadRaw`, `EncodeRaw`, `Close`) is implemented by both `PipeTransport` (stdio) and `HTTPTransport` (remote). A `MockTransport` provides an in-memory channel-based transport for testing.
