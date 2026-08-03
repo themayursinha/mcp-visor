@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/themayursinha/mcp-visor/internal/demoutil"
 )
 
 func TestDemoRunnerExitSuccess(t *testing.T) {
@@ -18,54 +20,98 @@ func TestDemoRunnerExitSuccess(t *testing.T) {
 	}
 	output := string(out)
 
-	// 1. Benign read allowed + server received
 	require(t, output, "1  ALLOW")
 	require(t, output, "file_read /home/user/readme.md")
-	requireSubstr(t, output, "file_read", "#100", "yes")
-
-	// 2. Sensitive read allowed + taint + server received
 	require(t, output, "2  ALLOW + TAINT")
 	require(t, output, "taint=sensitive_file_accessed")
-	requireSubstr(t, output, "file_read", "#200", "yes")
-
-	// 3. Egress denied before relay
 	require(t, output, "3  DENY")
 	require(t, output, "rule=block_sensitive_egress")
-	requireSubstr(t, output, "http_post", "#300", "no")
-
-	// 4. Session taint recorded
-	require(t, output, "DECISION EVIDENCE")
-
-	// 5. Evidence labels
 	require(t, output, "source_tool=file_read")
 	require(t, output, "sink_tool=http_post")
 	require(t, output, "decision=deny")
+	require(t, output, "Model proposed.")
+	require(t, output, "Proxy enforced.")
 
-	// 6. No secrets
 	if strings.Contains(output, "sk-") && !strings.Contains(output, "redacted") {
 		t.Error("output may contain secret-like content")
 	}
-
-	// 7. Final statement
-	require(t, output, "Model proposed.")
-	require(t, output, "Policy authorized.")
-	require(t, output, "Proxy enforced.")
 }
 
-func TestDemoRunnerFailsOnContradiction(t *testing.T) {
-	t.Log("contradiction detection verified by non-zero exit on assertion failure")
+func TestValidateObservations(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		if err := demoutil.ValidateObservations(nil); err == nil {
+			t.Error("expected error for empty observations")
+		}
+	})
+	t.Run("missing read 100", func(t *testing.T) {
+		obs := []demoutil.ObsLine{
+			{Tool: "file_read", RequestID: 200, Received: true},
+		}
+		if err := demoutil.ValidateObservations(obs); err == nil {
+			t.Error("expected error for missing file_read #100")
+		}
+	})
+	t.Run("missing read 200", func(t *testing.T) {
+		obs := []demoutil.ObsLine{
+			{Tool: "file_read", RequestID: 100, Received: true},
+		}
+		if err := demoutil.ValidateObservations(obs); err == nil {
+			t.Error("expected error for missing file_read #200")
+		}
+	})
+	t.Run("http_post 300 received", func(t *testing.T) {
+		obs := []demoutil.ObsLine{
+			{Tool: "file_read", RequestID: 100, Received: true},
+			{Tool: "file_read", RequestID: 200, Received: true},
+			{Tool: "http_post", RequestID: 300, Received: true},
+		}
+		if err := demoutil.ValidateObservations(obs); err == nil {
+			t.Error("expected error when http_post #300 received by server")
+		}
+	})
+	t.Run("valid", func(t *testing.T) {
+		obs := []demoutil.ObsLine{
+			{Tool: "file_read", RequestID: 100, Received: true},
+			{Tool: "file_read", RequestID: 200, Received: true},
+		}
+		if err := demoutil.ValidateObservations(obs); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestValidateEvidence(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		if err := demoutil.ValidateEvidence(&demoutil.DemoEvidence{}); err == nil {
+			t.Error("expected error for empty evidence")
+		}
+	})
+	t.Run("missing taint", func(t *testing.T) {
+		ev := &demoutil.DemoEvidence{SourceTool: "file_read", SinkTool: "http_post", Rule: "block", Decision: "deny"}
+		if err := demoutil.ValidateEvidence(ev); err == nil {
+			t.Error("expected error for missing taint")
+		}
+	})
+	t.Run("wrong decision", func(t *testing.T) {
+		ev := &demoutil.DemoEvidence{Taint: "t", SourceTool: "f", SinkTool: "h", Rule: "r", Decision: "allow"}
+		if err := demoutil.ValidateEvidence(ev); err == nil {
+			t.Error("expected error for wrong decision")
+		}
+	})
+	t.Run("valid", func(t *testing.T) {
+		ev := &demoutil.DemoEvidence{
+			Taint: "sensitive_file_accessed", SourceTool: "file_read",
+			SinkTool: "http_post", Rule: "block_sensitive_egress", Decision: "deny",
+		}
+		if err := demoutil.ValidateEvidence(ev); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
 }
 
 func require(t *testing.T, output, substr string) {
 	t.Helper()
 	if !strings.Contains(output, substr) {
 		t.Errorf("missing required output: %q", substr)
-	}
-}
-
-func requireSubstr(t *testing.T, output, a, b, c string) {
-	t.Helper()
-	if !strings.Contains(output, a) || !strings.Contains(output, b) || !strings.Contains(output, c) {
-		t.Errorf("missing: %q %q %q", a, b, c)
 	}
 }

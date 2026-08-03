@@ -122,7 +122,10 @@ func main() {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments,omitempty"`
 			}
-			_ = json.Unmarshal(req.Params, &params)
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				fmt.Fprintf(os.Stderr, "mock-server: tools/call param error: %v\n", err)
+				os.Exit(1)
+			}
 
 			// Record observation BEFORE responding
 			if obsFile != nil {
@@ -134,8 +137,15 @@ func main() {
 				if id, ok := req.ID.(float64); ok {
 					obs["request_id"] = int(id)
 				}
-				data, _ := json.Marshal(obs)
-				obsFile.Write(append(data, '\n'))
+				data, err := json.Marshal(obs)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "mock-server: marshal observation: %v\n", err)
+					os.Exit(1)
+				}
+				if _, err := obsFile.Write(append(data, '\n')); err != nil {
+					fmt.Fprintf(os.Stderr, "mock-server: write observation: %v\n", err)
+					os.Exit(1)
+				}
 			}
 
 			response = mustMarshal(map[string]any{
