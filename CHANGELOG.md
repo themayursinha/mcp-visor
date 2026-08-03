@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## v1.3.0 (2026-08-03)
+
+> v1.3.0 is the Phase 1 hardening and interoperability release. It closes every security-verification gate (#41/#44/#45/#46), delivers real MCP server interoperability evidence, reconciles stale documentation claims with code, and establishes the supervised three-model harness loop for AI-assisted development.
+
+### Added
+
+- Real MCP interoperability matrix: 5 automated tests against filesystem, fetch, and remote MCP reference servers through Visor (`tests/integration/interop_real_servers_test.go`, build tag `interop`).
+- Matrix cells: filesystem stdio allow/deny (S1), fetch stdio allow/deny (S2), filesystem taint → egress deny + audit (S3), Python SDK second client path (S4), remote HTTP+SSE post-handshake allow/deny + audit (R1).
+- Interop policies: `examples/policies/interop/filesystem-sandbox.yaml`, `fetch-egress.yaml`, `remote-mock.yaml`.
+- Public interop docs: `docs/interoperability.md` with matrix table, reproduce recipe, and remote claim reconciliation.
+- `AGENTS.md` with canonical three-model harness loop (GPT-5.6 architect → DeepSeek V4 Flash builder → Qwen 3.8 Max reviewer).
+- Python SDK scripted MCP client for client-path parity (`tests/interop/python_sdk_client.py`).
+- Supervised `visor-workflow` tool and gitignored `graphify-out/` directory.
+
+### Changed
+
+- README: add interop docs link, interop policies pointer, v1.3 roadmap checkmark.
+- Docs: architecture and threat model remote claim reconciliation (readMu/writeMu, TLS fail-closed, shared enforcement gate).
+- CI: emoji prefix removal from OTel jobs, supervised workflow test header restoration.
 
 ### Fixed
 
