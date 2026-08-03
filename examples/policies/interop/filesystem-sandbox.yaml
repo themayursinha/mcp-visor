@@ -66,6 +66,10 @@ servers:
       - name: "search_files"
         allowed: true
         risk: low
+        rules:
+          - type: allow_path
+            patterns:
+              - "/tmp/interop-sandbox/**"
       - name: "write_file"
         allowed: true
         risk: high
@@ -104,8 +108,6 @@ egress_controls:
     description: "Do not allow egress-shaped tool calls after a sensitive read in this session"
     when_tainted: "sensitive_file_accessed"
     sink_tools:
-      - "fetch"
-      - "http_post"
       - "write_file"
       - "edit_file"
     action: deny

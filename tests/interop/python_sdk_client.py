@@ -8,8 +8,14 @@ Reproduce (external person):
     -server-arg /tmp/interop-sandbox -server-name filesystem \
     -policy examples/policies/interop/filesystem-sandbox.yaml \
     -audit-log /tmp/visor-audit.jsonl &
-  # 2. run this client; it speaks to visor over stdio exactly like any MCP client
-  uvx --with mcp==1.26.0 python3 tests/interop/python_sdk_client.py
+  # 2. run this client; pass the visor command and its arguments
+  uvx --with mcp==1.26.0 python3 tests/interop/python_sdk_client.py \
+    mcp-visor serve \
+    -server npx -server-arg -y \
+    -server-arg @modelcontextprotocol/server-filesystem@2026.7.10 \
+    -server-arg /tmp/interop-sandbox \
+    -server-name filesystem \
+    -policy examples/policies/interop/filesystem-sandbox.yaml
 """
 import asyncio
 import json

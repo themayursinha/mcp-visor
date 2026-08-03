@@ -18,9 +18,13 @@ func TestInteropPoliciesLoad(t *testing.T) {
 		wantTools   int
 		wantTaints  int
 		wantEgress  int
+		taintNames  []string
+		egressNames []string
 	}{
-		{path: filepath.Join("..", "..", "examples", "policies", "interop", "filesystem-sandbox.yaml"), defaultDeny: true, wantTools: 10, wantTaints: 1, wantEgress: 1},
-		{path: filepath.Join("..", "..", "examples", "policies", "interop", "fetch-egress.yaml"), defaultDeny: true, wantTools: 1, wantTaints: 1, wantEgress: 1},
+		{path: filepath.Join("..", "..", "examples", "policies", "interop", "filesystem-sandbox.yaml"), defaultDeny: true, wantTools: 10, wantTaints: 1, wantEgress: 1,
+			taintNames: []string{"sensitive_file_accessed"}, egressNames: []string{"block_egress_after_sensitive_read"}},
+		{path: filepath.Join("..", "..", "examples", "policies", "interop", "fetch-egress.yaml"), defaultDeny: true, wantTools: 1, wantTaints: 1, wantEgress: 1,
+			taintNames: []string{"sensitive_url_fetched"}, egressNames: []string{"block_fetch_after_sensitive_fetch"}},
 		{path: filepath.Join("..", "..", "examples", "policies", "interop", "remote-mock.yaml"), defaultDeny: true, wantTools: 2, wantTaints: 0, wantEgress: 0},
 	}
 	for _, c := range cases {
@@ -43,6 +47,34 @@ func TestInteropPoliciesLoad(t *testing.T) {
 		}
 		if len(pol.EgressControls) != c.wantEgress {
 			t.Errorf("%s: egress controls = %d, want %d", c.path, len(pol.EgressControls), c.wantEgress)
+		}
+		if c.taintNames != nil {
+			for _, name := range c.taintNames {
+				found := false
+				for _, t := range pol.Taints {
+					if t.Name == name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("%s: missing taint %q", c.path, name)
+				}
+			}
+		}
+		if c.egressNames != nil {
+			for _, name := range c.egressNames {
+				found := false
+				for _, e := range pol.EgressControls {
+					if e.Name == name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("%s: missing egress control %q", c.path, name)
+				}
+			}
 		}
 	}
 }

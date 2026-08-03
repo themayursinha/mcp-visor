@@ -8,7 +8,7 @@ All code changes (features, fixes, refactors) use this model assignment:
 |------|-------|----------|
 | Architect (design) | `gpt-5.6-sol` | `openai-codex` |
 | Builder (implementation) | `deepseek-v4-flash` | `opencode-go` |
-| Reviewer (verification) | `qwen3.8-max` | `qwen` |
+| Reviewer (verification) | `qwen3.8-max` | `openai-api` (Token Plan) |
 
 **Loop:** Architect → Builder → Reviewer. FAIL → back to Architect. Max 3 iterations.
 **Skip:** Only for single-line typos or when user says "quick fix, no loop."
