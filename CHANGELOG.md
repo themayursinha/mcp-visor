@@ -2,7 +2,7 @@
 
 ## v1.3.0 (2026-08-03)
 
-> v1.3.0 is the Phase 1 hardening and interoperability release. It closes every security-verification gate (#41/#44/#45/#46), delivers real MCP server interoperability evidence, reconciles stale documentation claims with code, and establishes the supervised three-model harness loop for AI-assisted development.
+> v1.3.0 is the Phase 1 hardening and interoperability release. It closes every security-verification gate (#41/#44/#45/#46), delivers real MCP server interoperability evidence, and reconciles stale documentation claims with code.
 
 ### Added
 
