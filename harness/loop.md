@@ -8,13 +8,13 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 
 ## Cycle
 
-1. Read `AGENTS.md`, `harness/project-contract.md`, `harness/invariants.md`.
+1. Read `harness/project-contract.md`, `harness/invariants.md`.
 2. Write a task JSON from `harness/tasks/template.json` and `validate` it.
 3. Work in an isolated git worktree when practical.
 4. **Worker:** `run -name red_test` (contract argv), implement inside `allowed_paths`, `run -name target_test`.
 5. **Planner:** `scope`, `run -name harness`, `verify -min HARNESS_VERIFIED`.
 6. **Reviewer:** produce `review.json` under `evidence/` or outside the repository. Review cannot override failed deterministic gates.
-7. `report` writes local evidence under `evidence/` by default; custom outputs must remain under `evidence/` or outside the repository. Stop for **Mayur** merge/tag/release approval.
+7. `report` writes local evidence under `evidence/` by default; custom outputs must remain under `evidence/` or outside the repository. Stop for maintainer merge/tag/release approval.
 
 `run` never accepts a replacement command; argv comes only from the task JSON.
 When `-base` is omitted, scope uses the merge base of `HEAD` and `origin/main`; if `origin/main` is unavailable, the tool fails closed and requires an explicit `-base`.
@@ -40,7 +40,7 @@ go run ./cmd/visor-workflow <validate|scope|run|verify|report> ...
 
 ## Approval-gated paths
 
-Default patterns include `*_test.go`, `harness/invariants.md`, `go.mod`/`go.sum`, `README.md`, `SECURITY.md`, `.github/workflows/*`. Custom patterns extend these defaults; they never replace them. Changes are **reported**; Mayur must explicitly accept them.
+Default patterns include `*_test.go`, `harness/invariants.md`, `go.mod`/`go.sum`, `README.md`, `SECURITY.md`, `.github/workflows/*`. Custom patterns extend these defaults; they never replace them. Changes are **reported**; the maintainer must explicitly accept them.
 
 ## Evidence truth
 

@@ -10,7 +10,6 @@
 - Matrix cells: filesystem stdio allow/deny (S1), fetch stdio allow/deny (S2), filesystem taint → egress deny + audit (S3), Python SDK second client path (S4), remote HTTP+SSE post-handshake allow/deny + audit (R1).
 - Interop policies: `examples/policies/interop/filesystem-sandbox.yaml`, `fetch-egress.yaml`, `remote-mock.yaml`.
 - Public interop docs: `docs/interoperability.md` with matrix table, reproduce recipe, and remote claim reconciliation.
-- `AGENTS.md` with canonical three-model harness loop (GPT-5.6 architect → DeepSeek V4 Flash builder → Qwen 3.8 Max reviewer).
 - Python SDK scripted MCP client for client-path parity (`tests/interop/python_sdk_client.py`).
 - Supervised `visor-workflow` tool and gitignored `graphify-out/` directory.
 
