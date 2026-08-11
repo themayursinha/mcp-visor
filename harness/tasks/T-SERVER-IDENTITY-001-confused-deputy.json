@@ -3,7 +3,7 @@
   "invariant_ids": ["H20"],
   "security_sensitive": true,
   "security_problem": "Untrusted MCP metadata can steer a call to a process that reuses an allowed logical server name without proving the invoked server artifact identity.",
-  "required_behavior": "A configured stdio executable digest is checked before all argument-dependent authorization and relay; mismatch denies with identity-bound audit evidence; a matching digest passes without false denial.",
+  "required_behavior": "A configured stdio invocation digest (launcher executable, args, and payload file content) is checked before all argument-dependent authorization and relay; mismatch denies with identity-bound audit evidence; a matching digest passes without false denial.",
   "failure_behavior": "Fail closed for tools/call when attestation is configured and identity resolution is missing, unsupported, or mismatched.",
   "allowed_paths": [
     "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",

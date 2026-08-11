@@ -76,9 +76,11 @@ func run() error {
 		return fmt.Errorf("build visor: %w\n%s", e, out)
 	}
 
-	// The policy pins the BENIGN artifact. The poisoned artifact reuses the
-	// same logical name and must be denied before any tools/call relay.
-	benignIdentity, err := serveridentity.ResolveStdioExecutable(benignBin)
+	// The policy pins the BENIGN artifact's full invocation (the same
+	// -observe-log args the proxy launches with). The poisoned artifact
+	// reuses the same logical name and must be denied before any tools/call
+	// relay.
+	benignIdentity, err := serveridentity.ResolveStdioInvocation(benignBin, []string{"-observe-log", benignObs})
 	if err != nil {
 		return fmt.Errorf("resolve benign identity: %w", err)
 	}

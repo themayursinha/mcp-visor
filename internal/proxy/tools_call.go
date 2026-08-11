@@ -90,6 +90,7 @@ func (p *Proxy) processToolsCall(
 			Reason:    decision.Reason,
 			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
 		}
+		p.attachServerIdentity(&rtDeniedEvent, p.engine.Policy(), serverName)
 		p.audit.Log(rtDeniedEvent)
 		release()
 		p.forwardAudit(rtDeniedEvent)
@@ -131,6 +132,7 @@ func (p *Proxy) processToolsCall(
 			Reason:    withRedactionNote(reason, redactionResult),
 			RiskLevel: string(risk),
 		}
+		p.attachServerIdentity(&sensitiveDeniedEvent, p.engine.Policy(), serverName)
 		p.audit.Log(sensitiveDeniedEvent)
 		release()
 		p.forwardAudit(sensitiveDeniedEvent)
@@ -177,6 +179,7 @@ func (p *Proxy) processToolsCall(
 				RiskLevel:    string(risk),
 				ChainContext: previousCalls,
 			}
+			p.attachServerIdentity(&chainDeniedEvent, p.engine.Policy(), serverName)
 			p.audit.Log(chainDeniedEvent)
 			release()
 			p.forwardAudit(chainDeniedEvent)

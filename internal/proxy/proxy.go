@@ -243,7 +243,7 @@ func (p *Proxy) resolveLaunchedIdentity(cfg Config) {
 	if cfg.ServerURL != "" || cfg.ServerCommand == "" {
 		return
 	}
-	r, err := serveridentity.ResolveStdioExecutable(cfg.ServerCommand)
+	r, err := serveridentity.ResolveStdioInvocation(cfg.ServerCommand, cfg.ServerArgs)
 	if err != nil {
 		p.logger.Warn("server identity resolution failed", "error", err)
 		return
@@ -860,7 +860,7 @@ func (p *Proxy) evaluateRuntimeLimits(callReq mcp.ToolsCallRequest) policy.Decis
 }
 
 func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel) {
-	p.logAudit(audit.Event{
+	ev := audit.Event{
 		EventType: audit.EventToolDenied,
 		SessionID: p.session.ID,
 		AgentID:   p.cfg.ClientID,
@@ -870,7 +870,9 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 		Decision:  string(policy.ActionDeny),
 		Reason:    reason,
 		RiskLevel: string(risk),
-	})
+	}
+	p.attachServerIdentity(&ev, p.engine.Policy(), serverName)
+	p.logAudit(ev)
 }
 
 func approvalRequiredEvent(p *Proxy, serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, chainContext []string, evidence approvalEvidence) audit.Event {
@@ -910,7 +912,7 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
 	if err != nil || !approved {
 		denyReason := withRedactionNote(fmt.Sprintf("approval denied: %v", err), redactionResult)
-		p.logAudit(audit.Event{
+		deniedEv := audit.Event{
 			EventType:            audit.EventToolDenied,
 			SessionID:            p.session.ID,
 			AgentID:              p.cfg.ClientID,
@@ -925,7 +927,9 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 			RedactedArgumentHash: evidence.RedactedArgumentHash,
 			PolicyHash:           evidence.PolicyHash,
 			ChainContextHash:     evidence.ChainContextHash,
-		})
+		}
+		p.attachServerIdentity(&deniedEv, snapshot.policy, serverName)
+		p.logAudit(deniedEv)
 		p.logger.Warn("approval denied", "tool", callReq.Name, "session", p.session.ID)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
