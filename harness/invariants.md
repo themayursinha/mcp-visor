@@ -22,6 +22,7 @@ Each invariant maps to automated checks in `check.sh` (via `go test`) or manual 
 | H16 | Incomplete TLS client cert/key pairs fail closed; HTTP SSE read cannot block concurrent message writes | `TestTLSConfigRejectsIncompleteClientKeyPair`, `TestHTTPTransportAllowsConcurrentReadAndWrite` — `internal/transport/transport_test.go` |
 | H17 | Successful policy hot reload atomically refreshes engine rules, redactor, audit patterns, and approval timeout; invalid reloads keep prior runtime surfaces | `TestHotReloadAtomicallyRefreshesRedactorAuditAndApproval`, `TestHotReloadInvalidPolicyKeepsRuntimeSurfaces` — `internal/proxy/hot_reload_test.go`; watcher keep-current tests in `internal/policy` |
 | H18 | Built-in SIEM JSON export is a reduced envelope without hash-chain fields or arguments (not a substitute for JSONL retention) | `TestJSONFormat` — `internal/siem/siem_test.go` |
+| H20 | A configured stdio server executable identity is resolved independently of MCP metadata and checked before argument policy or relay; mismatch/unresolved denies with identity-bound audit evidence, while a matching identity passes | `TestServerIdentityMismatchDeniesBeforeArgumentPolicy`, `TestServerIdentityMatchAllowsToolCall`, `TestConfusedDeputyDemo` |
 
 **Prompt-injection immunity** is architectural: decisions do not parse natural language from tool descriptions in an LLM. Regression: policy engine tests + integration deny paths; document scenarios in `examples/malicious-prompts/`.
 

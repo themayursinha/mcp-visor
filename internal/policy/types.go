@@ -44,12 +44,22 @@ type Settings struct {
 }
 
 type Server struct {
-	Name                string     `yaml:"name"`
-	Transport           string     `yaml:"transport"`
-	Allowed             bool       `yaml:"allowed"`
-	AllowedDestinations []string   `yaml:"allowed_destinations"`
-	DeniedDestinations  []string   `yaml:"denied_destinations"`
-	Tools               []ToolRule `yaml:"tools"`
+	Name                string             `yaml:"name"`
+	Transport           string             `yaml:"transport"`
+	Allowed             bool               `yaml:"allowed"`
+	AllowedDestinations []string           `yaml:"allowed_destinations"`
+	DeniedDestinations  []string           `yaml:"denied_destinations"`
+	Attestation         *ServerAttestation `yaml:"attestation,omitempty"`
+	Tools               []ToolRule         `yaml:"tools"`
+}
+
+// ServerAttestation pins an out-of-band identity claim for a logical server.
+// For this slice only kind "stdio_executable_sha256" is supported: the
+// digest is the SHA-256 of the launched stdio executable artifact and is
+// never derived from MCP metadata.
+type ServerAttestation struct {
+	Kind   string `yaml:"kind"`
+	Digest string `yaml:"digest"`
 }
 
 type ToolRule struct {

@@ -932,3 +932,96 @@ time_restrictions:
 		}
 	}
 }
+
+func TestServerIdentityPolicyAcceptsPinnedStdioSHA256(t *testing.T) {
+	valid := "sha256:" + strings.Repeat("a", 64)
+	p, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_executable_sha256"
+      digest: "%s"
+`, valid)))
+	if err != nil {
+		t.Fatalf("pinned stdio sha256 policy must load: %v", err)
+	}
+	if len(p.Servers) != 1 || p.Servers[0].Attestation == nil {
+		t.Fatalf("expected parsed attestation, got %+v", p.Servers)
+	}
+	if p.Servers[0].Attestation.Kind != "stdio_executable_sha256" {
+		t.Fatalf("unexpected kind: %s", p.Servers[0].Attestation.Kind)
+	}
+	if p.Servers[0].Attestation.Digest != valid {
+		t.Fatalf("unexpected digest: %s", p.Servers[0].Attestation.Digest)
+	}
+}
+
+func TestServerIdentityPolicyRejectsUnsupportedKind(t *testing.T) {
+	_, err := policy.Load([]byte(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "tpm_quote"
+      digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+`))
+	if err == nil {
+		t.Fatal("unsupported attestation kind must fail policy load")
+	}
+}
+
+func TestServerIdentityPolicyRejectsMalformedDigest(t *testing.T) {
+	for _, digest := range []string{
+		"sha256:ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123AB",
+		"sha256:" + strings.Repeat("a", 63),
+		"md5:" + strings.Repeat("a", 32),
+		"",
+	} {
+		_, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_executable_sha256"
+      digest: "%s"
+`, digest)))
+		if err == nil {
+			t.Fatalf("malformed digest %q must fail policy load", digest)
+		}
+	}
+}
+
+func TestServerIdentityPolicyRejectsIncompleteAttestation(t *testing.T) {
+	_, err := policy.Load([]byte(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation: {}
+`))
+	if err == nil {
+		t.Fatal("incomplete attestation must fail policy load")
+	}
+}
+
+func TestServerIdentityPolicyKeepsLegacyServerValid(t *testing.T) {
+	p, err := policy.Load([]byte(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    tools:
+      - name: "open_ticket"
+        allowed: true
+`))
+	if err != nil {
+		t.Fatalf("legacy server without attestation must remain valid: %v", err)
+	}
+	if p.Servers[0].Attestation != nil {
+		t.Fatal("legacy server must not gain an attestation")
+	}
+}

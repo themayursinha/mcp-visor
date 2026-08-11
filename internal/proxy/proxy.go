@@ -20,6 +20,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
+	"github.com/themayursinha/mcp-visor/internal/serveridentity"
 	"github.com/themayursinha/mcp-visor/internal/siem"
 	"github.com/themayursinha/mcp-visor/internal/signer"
 	"github.com/themayursinha/mcp-visor/internal/trace"
@@ -42,6 +43,14 @@ type Proxy struct {
 	siem           *siem.Exporter
 	approvalSigner signer.Signer
 	obs            *observability.Runtime
+
+	// resolvedIdentity is the immutable stdio executable identity resolved
+	// once per launched proxy process. identityResolved records whether the
+	// launcher command could be resolved to an artifact digest at startup.
+	resolvedIdentity     serveridentity.Resolved
+	identityResolved     bool
+	serverClaimedName    string
+	serverClaimedVersion string
 }
 
 type Config struct {
@@ -57,20 +66,24 @@ type Config struct {
 	ApprovalCLI        bool
 	ApprovalSigningKey string
 	ApprovalSigner     signer.Signer
-	Tracing            TracingConfig
-	ServerURL          string
-	SSEPath            string
-	InsecureTLS        bool
-	RemoteCert         string
-	RemoteKey          string
-	RemoteCA           string
-	RemoteServerName   string
-	WebhookURLs        []string
-	WebhookHMACSecret  string
-	SIEMTargets        []string
-	SIEMFormat         string
-	Vault              VaultConfig
-	Observability      observability.Config
+	// ResolvedIdentity is a test-only seam that pins the resolved stdio
+	// executable identity without launching a real server. When nil, the
+	// proxy resolves cfg.ServerCommand once at construction.
+	ResolvedIdentity  *serveridentity.Resolved
+	Tracing           TracingConfig
+	ServerURL         string
+	SSEPath           string
+	InsecureTLS       bool
+	RemoteCert        string
+	RemoteKey         string
+	RemoteCA          string
+	RemoteServerName  string
+	WebhookURLs       []string
+	WebhookHMACSecret string
+	SIEMTargets       []string
+	SIEMFormat        string
+	Vault             VaultConfig
+	Observability     observability.Config
 }
 
 type VaultConfig struct {
@@ -157,6 +170,7 @@ func New(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
+	proxy.resolveLaunchedIdentity(cfg)
 	proxy.wirePolicyReload()
 	return proxy
 }
@@ -210,9 +224,32 @@ func NewWithTracing(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
+	proxy.resolveLaunchedIdentity(cfg)
 	proxy.wirePolicyReload()
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
+}
+
+// resolveLaunchedIdentity captures the immutable stdio executable identity
+// for this proxy process. A test may pin it directly via Config.ResolvedIdentity.
+// Remote proxies never launch a stdio command, so their identity stays
+// unresolved: any configured stdio attestation then fails closed.
+func (p *Proxy) resolveLaunchedIdentity(cfg Config) {
+	if cfg.ResolvedIdentity != nil {
+		p.resolvedIdentity = *cfg.ResolvedIdentity
+		p.identityResolved = true
+		return
+	}
+	if cfg.ServerURL != "" || cfg.ServerCommand == "" {
+		return
+	}
+	r, err := serveridentity.ResolveStdioExecutable(cfg.ServerCommand)
+	if err != nil {
+		p.logger.Warn("server identity resolution failed", "error", err)
+		return
+	}
+	p.resolvedIdentity = r
+	p.identityResolved = true
 }
 
 // wirePolicyReload attaches an atomic policy/runtime transaction to reloads.
@@ -435,6 +472,10 @@ func (p *Proxy) runHandshake(client, server *mcp.Parser) error {
 
 	var initResp mcp.InitializeResult
 	if err := json.Unmarshal(resp.Result, &initResp); err == nil {
+		// serverInfo name/version are untrusted claims logged for context.
+		// They never satisfy identity attestation.
+		p.serverClaimedName = initResp.ServerInfo.Name
+		p.serverClaimedVersion = initResp.ServerInfo.Version
 		p.logger.Info("server init", "server", initResp.ServerInfo.Name, "version", initResp.ServerInfo.Version)
 	}
 

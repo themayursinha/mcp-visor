@@ -132,6 +132,12 @@ Valid JSON-RPC `tools/call` requests with an `id` are classified in `internal/mc
 intercepted tools/call
         │
         ▼
+ ┌──────────────────────────┐
+ │ Server identity         │──Deny──▶ one terminal deny event with identity
+ │ attestation (optional)  │          evidence; no arguments, no relay
+ └──────┬───────────────────┘
+  No pin│ (or matched)
+        ▼
  ┌──────────────────┐
  │ Runtime limits   │──▶ DENY if argument/session caps are exceeded
  └──────┬───────────┘
@@ -181,6 +187,8 @@ intercepted tools/call
  Return result to client
 ```
 
+When a server policy pins an attestation (`kind: stdio_executable_sha256`), the proxy resolves the launched stdio executable artifact to a SHA-256 digest at startup and compares it against the current policy snapshot on every `tools/call` before runtime limits, redaction, argument policy, taint, chains, approval, or relay. A configured mismatch or unresolved identity fails closed with one terminal deny event, no arguments, and identity-bound audit fields. A matching identity continues and emits `server_attested=true` on the terminal event. Policies without an attestation preserve legacy behavior and omit the verdict. Tool descriptions, schemas, instructions, and handshake `serverInfo` are untrusted presentation data and never satisfy identity. This is local executable pinning, not remote/hardware attestation; server startup behavior and TOCTOU by a privileged filesystem attacker remain out of scope.
+
 Denied or approval-rejected calls do not enter the relay write path. Selected events cover denies, approvals, argument redactions, session taints, and session lifecycle. Policy lifecycle constants exist but are not emitted. Output redaction and plain unredacted allows lack standalone JSONL events.
 
 ## Core Components
@@ -204,6 +212,10 @@ The main proxy loop (`Run`) manages the full lifecycle:
    - `relayClientToServer`: classifies client envelopes, blocks notification-form `tools/call`, then enforces valid request-form `tools/call`
    - `relayServerToClient`: reads server responses, redacts outputs, forwards to client
 4. Graceful shutdown on SIGINT/SIGTERM via `signal.NotifyContext`
+
+### 2.5 Server Identity Attestation (`internal/serveridentity/`, proxy gate)
+
+Optional, deterministic stdio server identity binding. For a server policy that pins `attestation: {kind: stdio_executable_sha256, digest: sha256:<64-hex>}`, the proxy resolves the launched stdio executable artifact once at startup (`internal/serveridentity/identity.go`): the launcher command is resolved via PATH, symlinks are followed, and the regular executable file is streamed into SHA-256. The resolved digest is compared against the current policy snapshot as the first `tools/call` gate, before runtime limits, redaction, argument policy, taint, chains, approval, or relay. Mismatch or unresolved identity fails closed with one terminal deny audit event carrying identity fields and no arguments. Matching identity continues and emits `server_attested=true` on the terminal allow event. Policies without attestation omit the verdict and preserve legacy behavior. Tool descriptions, schemas, instructions, and handshake `serverInfo` are untrusted presentation data and never satisfy identity. This is local executable pinning, not remote/hardware attestation.
 
 ### 3. Session Tracking (`internal/proxy/session.go`)
 

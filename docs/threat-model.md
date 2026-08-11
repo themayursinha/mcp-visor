@@ -61,7 +61,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
 | Spoofed agent identity | Medium | Low | Identity-based policies match the operator-supplied `--client-id`; the value is not authenticated by the core proxy. |
-| Spoofed MCP server | High | Medium | Local stdio starts the operator-selected command. Remote transport supports TLS/mTLS, but the logical policy server name is operator configuration rather than cryptographic identity. |
+| Spoofed MCP server | High | Medium | Local stdio starts the operator-selected command. Remote transport supports TLS/mTLS, but the logical policy server name is operator configuration rather than cryptographic identity. An optional `stdio_executable_sha256` attestation pin binds the logical server name to the SHA-256 of the launched executable artifact and is checked before argument policy or relay; tool descriptions, schemas, instructions, and handshake `serverInfo` are untrusted presentation data and never satisfy identity. |
 | Spoofed approval | High | Low | File-based approval assumes host filesystem integrity. Only users with write access to `--approval-dir` can approve. |
 
 ### 2. Tampering
@@ -276,6 +276,10 @@ OTLP omits the raw argument map, but `policy.reason` is exported without redacti
 `ClassifyClientEnvelope`, `enforceHandshakeEnvelope`, and `interceptClientToServerEnvelope` block `tools/call` messages without a response `id` on stdio and remote client paths, including the post-initialize handshake slot. A denied handshake-slot message terminates the handshake. The proxy does not send a JSON-RPC response to true notifications; it records a deterministic denial via audit and metrics without relaying to the MCP server. Non-tools notifications (for example `notifications/initialized`) still forward unchanged.
 
 **Remaining limitation:** unrelated invalid JSON that cannot be recognized as a `tools/call` attempt is still forwarded unchanged. Per-item mixed-batch authorization and response aggregation are not yet implemented.
+
+### 18. Server Identity Attestation Is Local Executable Pinning Only
+
+Optional `stdio_executable_sha256` attestation pins the SHA-256 of the launched stdio executable artifact and is checked before argument policy or relay. It is not remote/hardware attestation: no TPM/TEE quote, certificate pin, or signed capability is involved. Server startup side effects occur before the first `tools/call`, so this gate blocks tool execution but not process launch. A privileged local attacker who can race binary replacement between digest resolution and process execution (TOCTOU) or who can modify the policy file can bypass the pin; host filesystem integrity remains a trust assumption. Remote HTTP/SSE servers cannot satisfy a stdio attestation and fail closed when one is configured. A policy without an attestation preserves legacy behavior and is never described as attested. The confused-deputy demo's `selected_by=description` evidence comes from the demo's deterministic selector, not from a Visor inference of model causality.
 
 ### 17. Strict Lint Is Not a Complete Gate
 
