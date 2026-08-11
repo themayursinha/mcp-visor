@@ -18,6 +18,8 @@ INTERNAL.md
 
 # Build artifacts
 mcp-visor
+demo-mcp-server
+demo-runner
 *.test
 dist/
 *.exe
