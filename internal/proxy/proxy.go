@@ -280,10 +280,11 @@ func NewWithTracing(cfg Config) *Proxy {
 // construction: attestation is restart-bound, so policy reloads cannot bind
 // a replacement filesystem artifact to the already-running stdio child.
 func (p *Proxy) resolveLaunchedIdentity(cfg Config) {
-	resolved, ok := p.prepareIdentity(p.engine.Policy())
+	pol := p.engine.Policy()
+	resolved, ok := p.prepareIdentity(pol)
 	p.resolvedIdentity = resolved
 	p.identityResolved = ok
-	if srv := findServerByName(p.engine.Policy(), p.cfg.ServerName); srv != nil && srv.Attestation != nil {
+	if srv := findServerByName(pol, p.cfg.ServerName); srv != nil && srv.Attestation != nil {
 		entry := append([]int(nil), srv.Attestation.EntryArgPositions...)
 		sort.Ints(entry)
 		p.launchShape = &attestationShape{kind: srv.Attestation.Kind, entry: entry}

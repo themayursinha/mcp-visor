@@ -675,3 +675,117 @@ servers:
 		t.Fatalf("reload-fail: expected attested=false on unresolved identity, got %+v", ev.ServerAttested)
 	}
 }
+
+// P1 RED (round-6): the launch digest and its launch shape (attestation kind
+// plus normalized entry_arg_positions) must derive from ONE policy snapshot.
+// A reload that publishes policy B while the resolver is hashing must not
+// relabel a digest measured under A with B's shape, even when the expected
+// digest string is identical. The resolver seam asserts it receives A's
+// positions [0], synchronously publishes B (positions [1], same digest D),
+// and returns digest D; the vulnerable double policy read then labels D with
+// B's shape and forwards/attests. The fixed code keeps A's shape so the call
+// under B fails closed with a restart-required reason and no arguments.
+func TestServerIdentityLaunchDigestAndShapeUseSinglePolicySnapshot(t *testing.T) {
+	digestD := pinnedDigest("d")
+
+	policyA := mustLoadPolicy(t, fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_executable_sha256"
+      digest: "%s"
+      entry_arg_positions: [0]
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        risk: low
+`, digestD))
+
+	policyB := mustLoadPolicy(t, fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_executable_sha256"
+      digest: "%s"
+      entry_arg_positions: [1]
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        risk: low
+`, digestD))
+
+	eng := policy.NewEngine(policyA)
+
+	resolveCalls := 0
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:    "it-support",
+		SessionID:     "sess-identity-single-snapshot",
+		ClientID:      "agent-identity",
+		AuditLogPath:  auditPath,
+		Policy:        policyA,
+		Engine:        eng,
+		ServerCommand: writeExecutableServer(t),
+		ServerArgs:    []string{filepath.Join(t.TempDir(), "s0.js"), filepath.Join(t.TempDir(), "s1.js")},
+		resolveIdentity: func(command string, args []string, entryArgPositions []int) (serveridentity.Resolved, error) {
+			resolveCalls++
+			if len(entryArgPositions) != 1 || entryArgPositions[0] != 0 {
+				t.Fatalf("resolver must measure the digest under policy A positions [0], got %v", entryArgPositions)
+			}
+			// Deterministic interleaving: publish B between digest
+			// measurement and launch-shape construction.
+			eng.Reload(policyB)
+			return serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestD}, nil
+		},
+	})
+	defer p.audit.Close()
+
+	if resolveCalls != 1 {
+		t.Fatalf("pinned launch must resolve exactly once, got %d calls", resolveCalls)
+	}
+	if cur := eng.Policy(); cur != policyB {
+		t.Fatalf("current engine policy after construction must be B, got %p", cur)
+	}
+	// The launch-time resolved identity retains the digest D measured under
+	// policy A; the cached evidence stays coherent and never pairs that
+	// digest with B's measurement contract.
+	if p.resolvedIdentity.Digest != digestD {
+		t.Fatalf("launch-time resolved digest must stay D, got %q", p.resolvedIdentity.Digest)
+	}
+
+	// Under B (same expected digest D but positions [1]), the cached launch
+	// evidence must stay coherent: the digest was measured under A ([0]), so
+	// B's shape cannot reuse digest D and the ordinary allowed call must
+	// fail closed before relay.
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(toolCallRaw(1, "open_ticket", map[string]any{"ticket_id": "T-1"}), client)
+	if action != "denied" {
+		t.Fatalf("digest measured under A must not be relabeled with B's shape, got %q; response=%s", action, out.String())
+	}
+	denied := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+	if denied.ServerIdentityExpected != digestD {
+		t.Fatalf("expected digest D on deny, got %q", denied.ServerIdentityExpected)
+	}
+	// Round-5 terminal-evidence semantics: a shape-mismatch deny omits the
+	// resolved digest because the cached digest was measured under a
+	// different contract and is not comparable to the current pin. Recording
+	// it here would itself pair the A-measured digest with B's pin, the
+	// exact class of confusion this P1 prevents.
+	if denied.ServerIdentityResolved != "" {
+		t.Fatalf("shape-mismatch deny must omit the non-comparable resolved digest, got %q", denied.ServerIdentityResolved)
+	}
+	if denied.ServerAttested == nil || *denied.ServerAttested {
+		t.Fatalf("B's shape must never attest the A-measured digest, got %+v", denied.ServerAttested)
+	}
+	if !strings.Contains(denied.Reason, "shape") || !strings.Contains(denied.Reason, "restart") {
+		t.Fatalf("deny must report the changed shape / restart requirement, got reason %q", denied.Reason)
+	}
+	if len(denied.Arguments) != 0 {
+		t.Fatalf("identity-gate deny must not leak arguments, got %+v", denied.Arguments)
+	}
+}

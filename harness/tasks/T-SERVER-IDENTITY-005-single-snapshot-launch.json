@@ -1,0 +1,67 @@
+{
+  "task_id": "T-SERVER-IDENTITY-005-single-snapshot-launch",
+  "invariant_ids": ["H20"],
+  "security_sensitive": true,
+  "security_problem": "Round-6 P1: resolveLaunchedIdentity reads p.engine.Policy() twice during construction. A watched policy reload that publishes policy B while the invocation resolver is hashing can measure the launch digest under policy A but label it with policy B's attestation kind and normalized entry_arg_positions. If B retains the same expected digest string, the identity gate can report server_attested=true for a measurement contract that was never applied.",
+  "required_behavior": "The resolved launch digest and its launch shape (attestation kind plus normalized entry_arg_positions, sorted copy) derive from ONE policy snapshot captured at the top of resolveLaunchedIdentity and passed to both prepareIdentity and findServerByName for shape construction. A reload that publishes during a slow resolver call never relabels a digest measured under generation N with generation N+1's shape: the in-progress launch measurement remains wholly generation N. The already-shipped restart-bound gate compares future policy generations against that coherent cached launch record; a materially different entry position shape or kind cannot reuse the cached digest even when the expected digest string is equal, and fails closed until restart. Equivalent normalized position order remains equivalent. All prior round-1 through round-5 behavior is preserved: immutable launch identity, restart-bound replacement/introduction, changed-shape fail closed, normalized-order compatibility, no-attestation zero resolver work, approval allow/signing-failure snapshots, approval barrier/taint snapshot regressions, all 11 canonical registry-runner rejects, entry-artifact-not-transitive boundary, no argument leak on identity denial, and confused-deputy demo behavior.",
+  "failure_behavior": "Fail closed for tools/call when a cached launch digest is labeled with a launch shape derived from a different policy snapshot than the one under which the digest was measured; never report server_attested=true for a contract never measured; never leak call arguments on an identity-gate deny.",
+  "allowed_paths": [
+    "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
+    "harness/tasks/T-SERVER-IDENTITY-002-registry-runners.json",
+    "harness/tasks/T-SERVER-IDENTITY-003-declared-entry-payloads.json",
+    "harness/tasks/T-SERVER-IDENTITY-004-process-bound-snapshot.json",
+    "harness/tasks/T-SERVER-IDENTITY-005-single-snapshot-launch.json",
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity",
+    "internal/audit/logger.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/client_envelope.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/confuseddeputydemo",
+    "examples/confused-deputy-demo",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/engine_test.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/proxy", "-run", "^TestServerIdentityLaunchDigestAndShapeUseSinglePolicySnapshot$", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy", "-count=1"]
+    },
+    {
+      "name": "demo_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}
