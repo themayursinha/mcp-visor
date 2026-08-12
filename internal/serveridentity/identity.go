@@ -31,12 +31,15 @@ type Resolved struct {
 // local payloads therefore get different digests, closing the P1
 // confused-deputy gap for shared launchers.
 //
-// Dynamic registry launchers (npx, uvx, npm exec) are unpinnable: they
-// select a package from a registry at runtime, and the literal package spec
-// does not bind the artifact that will execute. ResolveStdioInvocation
-// therefore returns an error for those launchers, and a configured
+// Dynamic registry runners select executable package bytes from a registry
+// or package cache at runtime, and the literal package spec does not bind the
+// artifact that will execute. ResolveStdioInvocation therefore returns an
+// error for every recognized canonical form (npx, uvx, bunx, pnpx, pnx, npm
+// exec, npm x, yarn dlx, pnpm dlx, bun x, uv tool run), and a configured
 // attestation fails closed through the existing unresolved-identity path
-// instead of claiming a content pin.
+// instead of claiming a content pin. Only exact canonical executable names
+// and exact leading subcommand tuples are recognized; options-before-
+// subcommand, renamed launchers, and shell wrappers are not inferred.
 func ResolveStdioInvocation(command string, args []string) (Resolved, error) {
 	if command == "" {
 		return Resolved{}, fmt.Errorf("resolve stdio invocation: command is empty")
@@ -102,21 +105,48 @@ func ResolveStdioInvocation(command string, args []string) (Resolved, error) {
 	}, nil
 }
 
-// unpinnableLauncher returns the recognized dynamic registry launcher
+// unpinnableLauncher returns the recognized canonical dynamic registry-runner
 // invocation label for the command, or "" when the command selects a
 // direct/local artifact. Both the operator-supplied command basename and the
 // pre-symlink exec.LookPath basename are checked so bare commands and
-// absolute/symlink paths are classified identically. npx and uvx are
-// unpinnable in every form. npm is classified only for the canonical
-// registry-runner subcommand `npm exec`; other npm subcommands (run, install,
-// and so on) and arbitrary renamed package managers are not inferred.
+// absolute/symlink paths are classified identically.
+//
+// Recognized unconditional executable basenames: npx, uvx, bunx, pnpx, pnx.
+// Recognized exact leading subcommand tuples: npm exec, npm x, yarn dlx,
+// pnpm dlx, bun x, uv tool run. Only these canonical names and their exact
+// leading argv positions are classified; options before the subcommand,
+// renamed launchers, Corepack/shell wrappers, and later argv words (for
+// example x in `npm run x`) are never inferred. Other package-manager
+// subcommands (run, install, ci, add, exec local, tool install) remain
+// direct/local artifacts.
 func unpinnableLauncher(command, lookPath string, args []string) string {
 	for _, c := range []string{filepath.Base(command), filepath.Base(lookPath)} {
-		if c == "npx" || c == "uvx" {
+		switch c {
+		case "npx", "uvx", "bunx", "pnpx", "pnx":
 			return c
-		}
-		if c == "npm" && len(args) > 0 && args[0] == "exec" {
-			return "npm exec"
+		case "npm":
+			if len(args) > 0 && args[0] == "exec" {
+				return "npm exec"
+			}
+			if len(args) > 0 && args[0] == "x" {
+				return "npm x"
+			}
+		case "yarn":
+			if len(args) > 0 && args[0] == "dlx" {
+				return "yarn dlx"
+			}
+		case "pnpm":
+			if len(args) > 0 && args[0] == "dlx" {
+				return "pnpm dlx"
+			}
+		case "bun":
+			if len(args) > 0 && args[0] == "x" {
+				return "bun x"
+			}
+		case "uv":
+			if len(args) >= 2 && args[0] == "tool" && args[1] == "run" {
+				return "uv tool run"
+			}
 		}
 	}
 	return ""

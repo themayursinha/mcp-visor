@@ -113,3 +113,78 @@ func TestServerIdentityNpmRunNotRejected(t *testing.T) {
 		t.Fatalf("npm run must not be rejected merely because the executable is named npm: %v", err)
 	}
 }
+
+// P1 RED: the full documented canonical registry-runner class. Each form
+// selects executable package bytes from a registry or package cache at
+// runtime; the literal package spec does not bind the artifact that will
+// execute. On the vulnerable implementation every form below not already
+// classified (npx, uvx, npm exec) hashes the launcher plus the literal spec
+// and returns a digest, so these subtests fail with a nil error.
+func TestServerIdentityDocumentedRegistryRunnersRejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		launcher string
+		args     []string
+		wantErr  string
+	}{
+		{"npx package spec", "npx", []string{"@example/mcp-server@1.0.0"}, "npx"},
+		{"uvx package spec", "uvx", []string{"example-server==1.0.0"}, "uvx"},
+		{"npm exec package spec", "npm", []string{"exec", "--", "@example/mcp-server@1.0.0"}, "npm exec"},
+		{"npm x package spec", "npm", []string{"x", "@example/mcp-server@1.0.0"}, "npm x"},
+		{"yarn dlx package spec", "yarn", []string{"dlx", "@example/mcp-server@1.0.0"}, "yarn dlx"},
+		{"pnpm dlx package spec", "pnpm", []string{"dlx", "@example/mcp-server@1.0.0"}, "pnpm dlx"},
+		{"bunx package spec", "bunx", []string{"@example/mcp-server@1.0.0"}, "bunx"},
+		{"bun x package spec", "bun", []string{"x", "@example/mcp-server@1.0.0"}, "bun x"},
+		{"uv tool run package spec", "uv", []string{"tool", "run", "example-server==1.0.0"}, "uv tool run"},
+		{"pnpx package spec", "pnpx", []string{"@example/mcp-server@1.0.0"}, "pnpx"},
+		{"pnx package spec", "pnx", []string{"@example/mcp-server@1.0.0"}, "pnx"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := writePayload(t, tt.launcher, "#!/bin/sh\nprintf 'registry launcher'\n")
+			res, err := ResolveStdioInvocation(launcher, tt.args)
+			if err == nil {
+				t.Fatalf("P1: %s invocation must be rejected as unpinnable, got digest %q and nil error", tt.name, res.Digest)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error to identify %q, got %v", tt.wantErr, err)
+			}
+			if res.Digest != "" {
+				t.Fatalf("unpinnable invocation must not return a digest, got %q", res.Digest)
+			}
+		})
+	}
+}
+
+// Negative control: ordinary package-manager subcommands that execute local
+// scripts, add dependencies, install, or run projects must still resolve even
+// though their executable is a canonical package manager. The classifier is
+// a canonical-name and exact-leading-subcommand boundary; it must not scan
+// later argv (npm run x), parse flags, or infer renamed wrappers.
+func TestServerIdentityNonRegistryPackageManagerSubcommandsNotRejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		launcher string
+		args     []string
+	}{
+		{"npm run local-server", "npm", []string{"run", "local-server"}},
+		{"npm run x", "npm", []string{"run", "x"}},
+		{"npm install", "npm", []string{"install"}},
+		{"npm ci", "npm", []string{"ci"}},
+		{"yarn add", "yarn", []string{"add", "example"}},
+		{"pnpm add", "pnpm", []string{"add", "example"}},
+		{"pnpm exec local-server", "pnpm", []string{"exec", "local-server"}},
+		{"bun run local-server", "bun", []string{"run", "local-server"}},
+		{"bun add example", "bun", []string{"add", "example"}},
+		{"uv run local script", "uv", []string{"run", "local-script.py"}},
+		{"uv tool install example", "uv", []string{"tool", "install", "example"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := writePayload(t, tt.launcher, "#!/bin/sh\nprintf 'package manager shim'\n")
+			if _, err := ResolveStdioInvocation(launcher, tt.args); err != nil {
+				t.Fatalf("negative control %s must resolve, got error: %v", tt.name, err)
+			}
+		})
+	}
+}

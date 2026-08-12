@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -348,5 +349,105 @@ func TestServerIdentityUnpinnableRegistryLauncherFailsClosed(t *testing.T) {
 	}
 	if strings.Contains(string(data), "T-60") || strings.Contains(string(data), spec) {
 		t.Fatalf("argument data leaked into identity denial event: %s", data)
+	}
+}
+
+// P1 RED: every documented canonical registry-runner form must fail closed
+// before relay when an attestation is configured, even when the configured
+// pin matches the vulnerable legacy launcher+literal-argv digest. The
+// vulnerable resolver returned that digest for the unrecognized forms (npm x,
+// yarn dlx, pnpm dlx, bunx, bun x, uv tool run, pnpx, pnx), so those calls
+// were attested=true and relayed; the repair must deny with attested=false,
+// no resolved digest, no argument/package leak, and never forward.
+func TestServerIdentityDocumentedRegistryRunnersFailClosed(t *testing.T) {
+	tests := []struct {
+		name     string
+		launcher string
+		args     []string
+		spec     string
+	}{
+		{"npx", "npx", []string{"@example/npx-server@1.0.0"}, "@example/npx-server@1.0.0"},
+		{"uvx", "uvx", []string{"uvx-server==1.0.0"}, "uvx-server==1.0.0"},
+		{"npm exec", "npm", []string{"exec", "--", "@example/npm-exec-server@1.0.0"}, "@example/npm-exec-server@1.0.0"},
+		{"npm x", "npm", []string{"x", "@example/npm-x-server@1.0.0"}, "@example/npm-x-server@1.0.0"},
+		{"yarn dlx", "yarn", []string{"dlx", "@example/yarn-dlx-server@1.0.0"}, "@example/yarn-dlx-server@1.0.0"},
+		{"pnpm dlx", "pnpm", []string{"dlx", "@example/pnpm-dlx-server@1.0.0"}, "@example/pnpm-dlx-server@1.0.0"},
+		{"bunx", "bunx", []string{"@example/bunx-server@1.0.0"}, "@example/bunx-server@1.0.0"},
+		{"bun x", "bun", []string{"x", "@example/bun-x-server@1.0.0"}, "@example/bun-x-server@1.0.0"},
+		{"uv tool run", "uv", []string{"tool", "run", "uv-tool-run-server==1.0.0"}, "uv-tool-run-server==1.0.0"},
+		{"pnpx", "pnpx", []string{"@example/pnpx-server@1.0.0"}, "@example/pnpx-server@1.0.0"},
+		{"pnx", "pnx", []string{"@example/pnx-server@1.0.0"}, "@example/pnx-server@1.0.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := filepath.Join(t.TempDir(), tt.launcher)
+			if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'registry launcher'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			pin := legacyInvocationDigest(t, launcher, tt.args)
+			marker := fmt.Sprintf("SECRET-%s", tt.name)
+
+			auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+			p := New(Config{
+				ServerName:    "it-support",
+				SessionID:     "sess-identity-doc-runners-" + tt.name,
+				ClientID:      "agent-identity",
+				AuditLogPath:  auditPath,
+				Policy:        attestationPolicy(t, pin),
+				ServerCommand: launcher,
+				ServerArgs:    tt.args,
+			})
+			defer p.audit.Close()
+
+			out := &bytes.Buffer{}
+			client := mcp.NewParser(nil, out)
+			_, action := p.interceptAndModify(toolCallRaw(1, "open_ticket", map[string]any{"ticket_id": marker}), client)
+			if action == "forward" {
+				t.Fatalf("P1: %s registry-runner invocation must fail closed before relay, got forward", tt.name)
+			}
+			if action != "denied" {
+				t.Fatalf("P1: expected denied action, got %q; response=%s", action, out.String())
+			}
+
+			ev := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+			if ev.ServerAttested == nil || *ev.ServerAttested {
+				t.Fatalf("P1: expected attested=false for %s, got %+v", tt.name, ev.ServerAttested)
+			}
+			if ev.ServerIdentityKind != "stdio_executable_sha256" {
+				t.Fatalf("expected identity kind, got %+v", ev)
+			}
+			if ev.ServerIdentityExpected != pin {
+				t.Fatalf("expected configured digest in deny event, got %+v", ev)
+			}
+			if ev.ServerIdentityResolved != "" {
+				t.Fatalf("unpinnable launcher must omit resolved digest, got %+v", ev)
+			}
+			if ev.Arguments != nil {
+				t.Fatalf("identity denial event must omit arguments, got %+v", ev.Arguments)
+			}
+			data, err := os.ReadFile(auditPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), marker) || strings.Contains(string(data), tt.spec) {
+				t.Fatalf("argument/package data leaked into identity denial event: %s", data)
+			}
+			var denies int
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				var ev audit.Event
+				if err := json.Unmarshal([]byte(line), &ev); err != nil {
+					t.Fatalf("unmarshal audit event: %v\n%s", err, line)
+				}
+				if ev.EventType == audit.EventToolDenied && ev.Tool == "open_ticket" {
+					denies++
+				}
+			}
+			if denies != 1 {
+				t.Fatalf("expected one terminal deny event, got %d", denies)
+			}
+		})
 	}
 }
