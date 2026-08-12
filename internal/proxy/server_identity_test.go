@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +19,30 @@ import (
 
 func pinnedDigest(hexDigit string) string {
 	return "sha256:" + strings.Repeat(hexDigit, 64)
+}
+
+// legacyInvocationDigest reproduces the pre-repair resolver framing for a
+// launcher with literal non-file args: SHA-256 over the launcher artifact
+// bytes followed by each 0x00-separated literal arg. It proves the vulnerable
+// resolver would have matched this pin even though a dynamic registry package
+// spec does not content-bind the artifact that will execute.
+func legacyInvocationDigest(t *testing.T, launcher string, args []string) string {
+	t.Helper()
+	h := sha256.New()
+	f, err := os.Open(launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(h, f); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	for _, arg := range args {
+		h.Write([]byte{0x00})
+		h.Write([]byte(arg))
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func attestationPolicy(t *testing.T, digest string) *policy.Policy {
@@ -264,5 +291,62 @@ servers:
 	w.Reload()
 	if action := call(3); action != "forward" {
 		t.Fatalf("reload back to matching digest should allow, got %q", action)
+	}
+}
+
+// P1 RED: a configured attestation for a dynamic registry launcher (npx) must
+// fail closed even when the literal package spec matches the old digest. The
+// vulnerable resolver returned a digest for the literal spec, so this call
+// would have been attested=true and relayed; the repair must deny before
+// relay with server_attested=false, no resolved digest, and no argument leak.
+func TestServerIdentityUnpinnableRegistryLauncherFailsClosed(t *testing.T) {
+	launcher := filepath.Join(t.TempDir(), "npx")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'npx launcher'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := "@example/mcp-server@1.0.0"
+	pin := legacyInvocationDigest(t, launcher, []string{spec})
+
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:    "it-support",
+		SessionID:     "sess-identity-unpinnable",
+		ClientID:      "agent-identity",
+		AuditLogPath:  auditPath,
+		Policy:        attestationPolicy(t, pin),
+		ServerCommand: launcher,
+		ServerArgs:    []string{spec},
+	})
+	defer p.audit.Close()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(toolCallRaw(1, "open_ticket", map[string]any{"ticket_id": "T-60"}), client)
+	if action != "denied" {
+		t.Fatalf("P1: attested npx package-spec invocation must fail closed before relay, got %q; response=%s", action, out.String())
+	}
+
+	ev := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+	if ev.ServerAttested == nil || *ev.ServerAttested {
+		t.Fatalf("P1: expected attested=false for unpinnable launcher, got %+v", ev.ServerAttested)
+	}
+	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+		t.Fatalf("expected identity kind, got %+v", ev)
+	}
+	if ev.ServerIdentityExpected != pin {
+		t.Fatalf("expected configured digest in deny event, got %+v", ev)
+	}
+	if ev.ServerIdentityResolved != "" {
+		t.Fatalf("unpinnable launcher must omit resolved digest, got %+v", ev)
+	}
+	if ev.Arguments != nil {
+		t.Fatalf("identity denial event must omit arguments, got %+v", ev.Arguments)
+	}
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "T-60") || strings.Contains(string(data), spec) {
+		t.Fatalf("argument data leaked into identity denial event: %s", data)
 	}
 }

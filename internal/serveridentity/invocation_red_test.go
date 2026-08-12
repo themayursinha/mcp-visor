@@ -3,6 +3,7 @@ package serveridentity
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +68,34 @@ func TestResolveStdioInvocationBindsPayloadContent(t *testing.T) {
 	}
 	if a.Digest == b.Digest {
 		t.Fatalf("P1: payload content change must change the digest; got %q for both", a.Digest)
+	}
+}
+
+// P1 RED: dynamic registry launchers (npx, uvx) select a package from a
+// registry at runtime; the literal package spec does not bind the artifact
+// that will actually execute, so attestation must fail closed instead of
+// returning a digest for the literal spec. On the vulnerable implementation
+// this test fails because the resolver hashes the literal spec and returns a
+// digest.
+func TestServerIdentityUnpinnableRegistryLauncherRejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		launcher string
+		spec     string
+	}{
+		{"npx package spec", "npx", "@example/mcp-server@1.0.0"},
+		{"uvx package spec", "uvx", "example-server==1.0.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := writePayload(t, tt.launcher, "#!/bin/sh\nprintf 'registry launcher'\n")
+			_, err := ResolveStdioInvocation(launcher, []string{tt.spec})
+			if err == nil {
+				t.Fatalf("P1: %s invocation must be rejected as unpinnable, got nil error", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.launcher) {
+				t.Fatalf("expected error to identify launcher %q, got %v", tt.launcher, err)
+			}
+		})
 	}
 }

@@ -3,7 +3,7 @@
   "invariant_ids": ["H20"],
   "security_sensitive": true,
   "security_problem": "Untrusted MCP metadata can steer a call to a process that reuses an allowed logical server name without proving the invoked server artifact identity.",
-  "required_behavior": "A configured stdio invocation digest (launcher executable, args, and payload file content) is checked before all argument-dependent authorization and relay; mismatch denies with identity-bound audit evidence; a matching digest passes without false denial.",
+  "required_behavior": "A configured stdio invocation digest binds a locally resolved launcher executable and local payload file content selected by the args, and is checked before all argument-dependent authorization and relay; mismatch or unresolved identity denies with identity-bound audit evidence; recognized dynamic registry launchers (npx, uvx) are unpinnable and fail closed when attestation is configured; a matching local digest passes without false denial.",
   "failure_behavior": "Fail closed for tools/call when attestation is configured and identity resolution is missing, unsupported, or mismatched.",
   "allowed_paths": [
     "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
@@ -16,6 +16,7 @@
     "internal/proxy/proxy.go",
     "internal/proxy/tools_call.go",
     "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
     "internal/confuseddeputydemo",
     "examples/confused-deputy-demo",
     "tests/integration/confused_deputy_demo_test.go",
