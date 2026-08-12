@@ -1,0 +1,66 @@
+{
+  "task_id": "T-SERVER-IDENTITY-004-process-bound-snapshot",
+  "invariant_ids": ["H20"],
+  "security_sensitive": true,
+  "security_problem": "Round-5 P1/P2: a hot reload that introduces or updates a stdio attestation pin re-resolves mutable launcher/payload paths and can attest an on-disk replacement as the identity of the already-running child (server_attested=true for an unrelated running server); and a call that releases runtimeMu before blocking for approval combines the captured policy snapshot with live mutable resolved-identity state after release, so a reload can make an allowed or denied terminal event report the wrong resolved digest or attested=false even though the call passed the old pin.",
+  "required_behavior": "A configured stdio invocation identity is resolved exactly once at proxy construction from the logical server policy current at startup: the resolved launcher, literal argv, and only the policy-declared entry payload positions are bound exactly as in round 4, and the resolution contract (attestation kind plus normalized entry_arg_positions, sorted copy) is cached immutable for the proxy/stdio-child lifecycle. Hot reload never re-hashes launcher or payload paths and never re-resolves identity: unrelated policy/redactor/audit/approval reloads remain atomic, and same-shape digest comparisons use the cached startup digest. A pin introduced after an unattested start publishes but has no startup contract, so tools/call denies as unresolved/restart-required and never invokes the resolver. A same-shape digest replacement compares against the cached startup digest and denies on mismatch until restart. A changed kind or entry-position resolution shape cannot reuse the cached digest even when the expected digest string is equal, and denies until restart. Removing attestation may restore explicit unattested behavior; an originally unattested process remains unresolved on later reintroduction. A resolution failure at startup stays unresolved for the lifecycle and is not retried on reload. Every approval terminal allow/deny, receipt evidence, and taint mutation uses one complete runtime snapshot containing policy, redactor, approval backend/timeout, resolved identity state, resolution contract, and claimed server metadata; no post-release terminal path reads live mutable identity fields. All 11 canonical registry-runner rejects, negative controls, entry-artifact-not-transitive boundary, no-attestation zero-work, no argument leak on identity denial, approval policy/timeout/receipt/taint snapshots, and confused-deputy demo behavior are preserved.",
+  "failure_behavior": "Fail closed for tools/call when attestation is configured and startup identity evidence is absent, incompatible, unresolved, or mismatched; never re-hash mutable launcher/payload paths during reload; never re-resolve identity during reload; never combine a captured policy snapshot with live mutable identity state on a post-approval terminal path.",
+  "allowed_paths": [
+    "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
+    "harness/tasks/T-SERVER-IDENTITY-002-registry-runners.json",
+    "harness/tasks/T-SERVER-IDENTITY-003-declared-entry-payloads.json",
+    "harness/tasks/T-SERVER-IDENTITY-004-process-bound-snapshot.json",
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity",
+    "internal/audit/logger.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/client_envelope.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/confuseddeputydemo",
+    "examples/confused-deputy-demo",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/engine_test.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/proxy", "-run", "TestServerIdentityReloadDoesNotReResolveRunningProcess|TestServerIdentityPinIntroAfterLaunchFailsClosedRequiresRestart|TestServerIdentityChangedShapeCannotReuseOldDigest|TestServerIdentityApprovalAllowUsesIdentitySnapshot|TestServerIdentityApprovalSigningFailureUsesPolicySnapshot", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy", "-count=1"]
+    },
+    {
+      "name": "demo_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}

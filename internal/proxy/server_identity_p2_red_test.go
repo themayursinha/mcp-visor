@@ -158,12 +158,15 @@ func (s *blockingFailingSigner) PublicKey() crypto.PublicKey { return s.inner.Pu
 func (s *blockingFailingSigner) KeyID() string               { return s.inner.KeyID() }
 func (s *blockingFailingSigner) Algorithm() string           { return s.inner.Algorithm() }
 
-// P2 RED: a post-approval receipt signing failure happens AFTER the runtime
-// barrier is released, so the terminal deny must attach identity from the
-// policy SNAPSHOT that authorized the call, not the live policy after a
-// reload. Codex P2: logDenied reads p.engine.Policy(); reloading from digest
-// A to B while the failing signer blocks makes the deny report expected B and
-// attested=false even though the call was authorized under A.
+// P2 RED (round-5): a post-approval receipt signing failure happens AFTER the
+// runtime barrier is released, so the terminal deny must attach identity from
+// the complete policy+identity SNAPSHOT that authorized the call, not the
+// live policy or live resolved identity after a reload. The resolver seam
+// returns digest A at construction and digest B after the reload so the live
+// identity ACTUALLY changes (a fixed Config.ResolvedIdentity would mask the
+// bug because the vulnerable reload re-resolves to the same fixed value).
+// Codex P2: reloading from digest A to B while the failing signer blocks must
+// not make the deny report expected B / resolved B / attested=false.
 func TestServerIdentityApprovalSigningFailureUsesPolicySnapshot(t *testing.T) {
 	dir := t.TempDir()
 	policyPath := filepath.Join(dir, "policy.yaml")
@@ -206,18 +209,26 @@ servers:
 	}
 	failing := &blockingFailingSigner{inner: inner, entered: make(chan struct{}, 1), release: make(chan struct{})}
 
+	seam := &restartBoundSeam{
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestB},
+	}
 	p := New(Config{
-		ServerName:       "it-support",
-		SessionID:        "sess-approval-snapshot",
-		ClientID:         "agent-identity",
-		AuditLogPath:     auditPath,
-		Policy:           w.Policy(),
-		Engine:           policy.NewEngineWithWatcher(w),
-		ApprovalDir:      approvalDir,
-		ApprovalSigner:   failing,
-		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		ServerName:      "it-support",
+		SessionID:       "sess-approval-snapshot",
+		ClientID:        "agent-identity",
+		AuditLogPath:    auditPath,
+		Policy:          w.Policy(),
+		Engine:          policy.NewEngineWithWatcher(w),
+		ServerCommand:   writeExecutableServer(t),
+		ApprovalDir:     approvalDir,
+		ApprovalSigner:  failing,
+		resolveIdentity: seam.resolve,
 	})
 	defer p.audit.Close()
+	if calls := seam.count(); calls != 1 {
+		t.Fatalf("pinned launch must resolve exactly once, got %d calls", calls)
+	}
 
 	// Operator goroutine: approve the request as soon as it appears.
 	requestSeen := make(chan struct{})
@@ -257,7 +268,8 @@ servers:
 	}
 
 	// Reload policy B while the signer is blocked: the live engine now
-	// expects digest B, but the call was authorized under snapshot A.
+	// expects digest B, and the seam would resolve B if reloaded. The call
+	// was authorized under snapshot A and its terminal deny must stay A.
 	if err := os.WriteFile(policyPath, []byte(policyYAML(digestB)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -294,5 +306,173 @@ servers:
 	}
 	if ev.ServerIdentityExpected == digestB || ev.ServerIdentityResolved == digestB {
 		t.Fatalf("P2: deny must not carry reloaded digest B: %+v", ev)
+	}
+}
+
+// blockingSuccessSigner implements signer.Signer with a deterministic
+// blocking success: Sign signals entry, blocks until released, then delegates
+// to a real Ed25519 signer so approval ultimately SUCCEEDS (the allow-path
+// counterpart to blockingFailingSigner).
+type blockingSuccessSigner struct {
+	inner   signer.Signer
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingSuccessSigner) Sign(data []byte) ([]byte, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return s.inner.Sign(data)
+}
+
+func (s *blockingSuccessSigner) PublicKey() crypto.PublicKey { return s.inner.PublicKey() }
+func (s *blockingSuccessSigner) KeyID() string               { return s.inner.KeyID() }
+func (s *blockingSuccessSigner) Algorithm() string           { return s.inner.Algorithm() }
+
+// P2 RED (round-5): an APPROVED allow after the runtime barrier is released
+// must attach identity from the COMPLETE policy+identity snapshot captured
+// before the barrier, never from live resolved identity after a reload. The
+// resolver seam returns digest A at construction and digest B after the
+// reload. Codex P2: reloading A→B while approval is pending must not make the
+// terminal allow report resolved B or attested=false.
+func TestServerIdentityApprovalAllowUsesIdentitySnapshot(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	approvalDir := filepath.Join(dir, "approvals")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+
+	digestA := pinnedDigest("a")
+	digestB := pinnedDigest("b")
+
+	policyYAML := func(digest string) string {
+		return fmt.Sprintf(`version: "1.0"
+default_action: deny
+settings:
+  approval_timeout_seconds: 10
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_executable_sha256"
+      digest: "%s"
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        approval_required: true
+`, digest)
+	}
+
+	if err := os.WriteFile(policyPath, []byte(policyYAML(digestA)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+
+	inner, err := signer.NewApprovalSigner()
+	if err != nil {
+		t.Fatalf("real signer: %v", err)
+	}
+	blocking := &blockingSuccessSigner{inner: inner, entered: make(chan struct{}, 1), release: make(chan struct{})}
+
+	seam := &restartBoundSeam{
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestB},
+	}
+	p := New(Config{
+		ServerName:      "it-support",
+		SessionID:       "sess-approval-allow-snapshot",
+		ClientID:        "agent-identity",
+		AuditLogPath:    auditPath,
+		Policy:          w.Policy(),
+		Engine:          policy.NewEngineWithWatcher(w),
+		ServerCommand:   writeExecutableServer(t),
+		ApprovalDir:     approvalDir,
+		ApprovalSigner:  blocking,
+		resolveIdentity: seam.resolve,
+	})
+	defer p.audit.Close()
+	if calls := seam.count(); calls != 1 {
+		t.Fatalf("pinned launch must resolve exactly once, got %d calls", calls)
+	}
+
+	// Operator goroutine: approve the request as soon as it appears.
+	requestSeen := make(chan struct{})
+	go func() {
+		for {
+			matches, _ := filepath.Glob(filepath.Join(approvalDir, "req-*.json"))
+			if len(matches) > 0 {
+				id := strings.TrimSuffix(filepath.Base(matches[0]), ".json")
+				_ = os.WriteFile(filepath.Join(approvalDir, id+".ok"), []byte{}, 0o600)
+				close(requestSeen)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	callDone := make(chan string, 1)
+	go func() {
+		out := &bytes.Buffer{}
+		client := mcp.NewParser(nil, out)
+		_, action := p.interceptAndModify(toolCallRaw(1, "open_ticket", map[string]any{"ticket_id": "T-1"}), client)
+		callDone <- action
+	}()
+
+	select {
+	case <-requestSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("approval request was not created")
+	}
+
+	// Wait until the blocking signer reports that receipt signing has begun:
+	// approval has succeeded and the call is past the runtime barrier.
+	select {
+	case <-blocking.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("signer was not invoked after approval")
+	}
+
+	// Reload A→B while the approval is in flight. The runtime barrier was
+	// released before the approval wait, so this must not stall; the
+	// terminal allow event must still use snapshot A's identity evidence.
+	if err := os.WriteFile(policyPath, []byte(policyYAML(digestB)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+
+	// Release the signer so approval succeeds and the terminal ALLOW event
+	// is written.
+	close(blocking.release)
+
+	select {
+	case action := <-callDone:
+		if action != "forward" {
+			t.Fatalf("expected forward after approved+reload, got %q", action)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("call did not terminate after signer release")
+	}
+
+	ev := findAuditEvent(t, auditPath, audit.EventToolAllowed, "open_ticket")
+	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+		t.Fatalf("P2: expected snapshot identity kind on approval allow, got %+v", ev)
+	}
+	if ev.ServerIdentityExpected != digestA {
+		t.Fatalf("P2: expected snapshot expected digest A on approval allow, got %q", ev.ServerIdentityExpected)
+	}
+	if ev.ServerIdentityResolved != digestA {
+		t.Fatalf("P2: expected snapshot resolved digest A on approval allow, got %q", ev.ServerIdentityResolved)
+	}
+	if ev.ServerAttested == nil || !*ev.ServerAttested {
+		t.Fatalf("P2: expected snapshot attested=true on approval allow, got %+v", ev.ServerAttested)
+	}
+	if ev.ServerIdentityExpected == digestB || ev.ServerIdentityResolved == digestB {
+		t.Fatalf("P2: approval allow must not carry reloaded digest B: %+v", ev)
 	}
 }

@@ -36,14 +36,26 @@ func (p *Proxy) processToolsCall(
 		}
 	}
 	defer release()
-	redactor := p.redactor
+	// Capture the FULL runtime snapshot (policy, redactor, approval, and the
+	// immutable server identity evidence) ONCE while the barrier is held.
+	// Every terminal allow/deny/approval event for this call copies identity
+	// evidence from this same snapshot; nothing after the identity gate may
+	// recompute it from mutable live proxy state or from the filesystem.
+	snapshot := p.runtimeSnapshotLocked(serverName)
+	redactor := snapshot.redactor
 
 	// Server identity attestation is the first tools/call gate. It runs
 	// before runtime limits, redaction, argument policy, taint, chains,
 	// approval, or relay so poisoned MCP metadata can never reach
-	// argument-dependent authorization without an artifact proof.
-	if verdict := p.evaluateServerIdentity(p.engine.Policy(), serverName); verdict.configured && !verdict.matched {
-		reason := "server identity attestation failed: " + verdict.reason
+	// argument-dependent authorization without an artifact proof. The verdict
+	// is derived from the snapshot evidence: a configured pin that the
+	// captured launch identity does not satisfy (or that was never captured
+	// because the proxy started unattested) fails closed and requires a
+	// server restart. A reload can never retroactively attest an
+	// already-running process.
+	identity := snapshot.identity
+	if identity.configured && !identity.attested {
+		reason := "server identity attestation failed: " + identity.reason
 		respond(req.ID, reason)
 		p.metrics.IncrementDenied()
 		attested := false
@@ -57,12 +69,12 @@ func (p *Proxy) processToolsCall(
 			Decision:               string(policy.ActionDeny),
 			Reason:                 reason,
 			RiskLevel:              string(risk),
-			ServerIdentityKind:     verdict.kind,
-			ServerIdentityExpected: verdict.expected,
-			ServerIdentityResolved: verdict.resolved,
+			ServerIdentityKind:     identity.kind,
+			ServerIdentityExpected: identity.expected,
+			ServerIdentityResolved: identity.resolved,
 			ServerAttested:         &attested,
-			ServerClaimedName:      p.serverClaimedName,
-			ServerClaimedVersion:   p.serverClaimedVersion,
+			ServerClaimedName:      identity.claimedName,
+			ServerClaimedVersion:   identity.claimedVersion,
 		}
 		p.audit.Log(identityDeniedEvent)
 		release()
@@ -70,7 +82,7 @@ func (p *Proxy) processToolsCall(
 		p.logger.Warn("server identity attestation failed",
 			"tool", callReq.Name,
 			"server", serverName,
-			"reason", verdict.reason,
+			"reason", identity.reason,
 			"session", p.session.ID,
 		)
 		p.observeToolCall("denied", reason, serverName, callReq.Name, string(risk), false, started)
@@ -90,7 +102,7 @@ func (p *Proxy) processToolsCall(
 			Reason:    decision.Reason,
 			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
 		}
-		p.attachServerIdentity(&rtDeniedEvent, p.engine.Policy(), serverName)
+		p.attachServerIdentity(&rtDeniedEvent, snapshot.identity)
 		p.audit.Log(rtDeniedEvent)
 		release()
 		p.forwardAudit(rtDeniedEvent)
@@ -132,7 +144,7 @@ func (p *Proxy) processToolsCall(
 			Reason:    withRedactionNote(reason, redactionResult),
 			RiskLevel: string(risk),
 		}
-		p.attachServerIdentity(&sensitiveDeniedEvent, p.engine.Policy(), serverName)
+		p.attachServerIdentity(&sensitiveDeniedEvent, snapshot.identity)
 		p.audit.Log(sensitiveDeniedEvent)
 		release()
 		p.forwardAudit(sensitiveDeniedEvent)
@@ -179,7 +191,7 @@ func (p *Proxy) processToolsCall(
 				RiskLevel:    string(risk),
 				ChainContext: previousCalls,
 			}
-			p.attachServerIdentity(&chainDeniedEvent, p.engine.Policy(), serverName)
+			p.attachServerIdentity(&chainDeniedEvent, snapshot.identity)
 			p.audit.Log(chainDeniedEvent)
 			release()
 			p.forwardAudit(chainDeniedEvent)
@@ -216,7 +228,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.TaintReason = egressContext.taint.Reason
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
-		p.attachServerIdentity(&deniedEvent, p.engine.Policy(), serverName)
+		p.attachServerIdentity(&deniedEvent, snapshot.identity)
 		p.audit.Log(deniedEvent)
 		release()
 		p.forwardAudit(deniedEvent)
@@ -229,10 +241,12 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
-		// Pin evidence, receipt metadata, and approval timeout while the same
-		// runtime snapshot used for evaluation is still protected. Release only
-		// before the blocking approval wait so reloads are not stalled.
-		snapshot := p.runtimeSnapshotLocked()
+		// The runtime snapshot was captured at the top of this call while
+		// runtimeMu.RLock was held and remains authoritative: the barrier is
+		// held until just before the blocking approval wait, so reloads
+		// cannot change policy, redactor, or identity evidence underneath it.
+		// Evidence, receipt metadata, and approval timeout stay pinned to the
+		// SAME snapshot used for evaluation and the identity gate.
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
 		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
 		// Write the JSONL ledger record while holding runtimeMu to
@@ -262,7 +276,7 @@ func (p *Proxy) processToolsCall(
 			Reason:    withRedactionNote("approved by human operator", redactionResult),
 			RiskLevel: string(risk),
 		}
-		p.attachServerIdentity(&allowEvent, snapshot.policy, serverName)
+		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		p.logAudit(allowEvent)
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
@@ -286,7 +300,7 @@ func (p *Proxy) processToolsCall(
 			Reason:    reason,
 			RiskLevel: string(risk),
 		}
-		p.attachServerIdentity(&allowEvent, p.engine.Policy(), serverName)
+		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.audit.Log(allowEvent)
 		release()
 		p.forwardAudit(allowEvent)
@@ -308,7 +322,7 @@ func (p *Proxy) processToolsCall(
 			Reason:    reason,
 			RiskLevel: string(risk),
 		}
-		p.attachServerIdentity(&defaultAllowEvent, p.engine.Policy(), serverName)
+		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
 		p.audit.Log(defaultAllowEvent)
 		release()
 		p.forwardAudit(defaultAllowEvent)
@@ -328,64 +342,64 @@ func withRedactionNote(reason string, result redaction.Result) string {
 	return reason + "; " + note
 }
 
-// serverIdentityVerdict reports the attestation result for the current call.
-// configured=false means the logical server has no attestation pin and the
-// legacy pipeline runs unchanged. matched=true means the resolved stdio
-// executable digest equals the current policy expectation.
-type serverIdentityVerdict struct {
-	configured bool
-	matched    bool
-	kind       string
-	expected   string
-	resolved   string
-	reason     string
-}
-
-// evaluateServerIdentity compares the immutable resolved stdio executable
-// identity with the attestation expected by the CURRENT policy snapshot. It
-// is called while runtimeMu.RLock is held so a hot reload can never pair the
-// gate with a stale expectation.
-func (p *Proxy) evaluateServerIdentity(pol *policy.Policy, serverName string) serverIdentityVerdict {
+// identityEvidence derives the immutable attestation evidence for the
+// supplied policy snapshot and logical server using ONLY the identity
+// captured at proxy construction for the launched stdio child. It never
+// resolves the current filesystem artifact: attestation is restart-bound, so
+// a reload that introduces or changes a pin cannot re-attest an
+// already-running process. configured=false means the snapshot policy has no
+// pin for this logical server and the legacy pipeline runs unchanged.
+// attested=true means the captured launch identity satisfies the snapshot
+// pin. It is computed while the runtime snapshot is authoritative
+// (runtimeSnapshotLocked), and terminal audit helpers copy the result.
+func (p *Proxy) identityEvidence(pol *policy.Policy, serverName string) serverIdentityEvidence {
 	srv := findServerByName(pol, serverName)
 	if srv == nil || srv.Attestation == nil {
-		return serverIdentityVerdict{}
+		return serverIdentityEvidence{}
 	}
-	v := serverIdentityVerdict{
-		configured: true,
-		kind:       srv.Attestation.Kind,
-		expected:   srv.Attestation.Digest,
+	ev := serverIdentityEvidence{
+		configured:     true,
+		kind:           srv.Attestation.Kind,
+		expected:       srv.Attestation.Digest,
+		claimedName:    p.serverClaimedName,
+		claimedVersion: p.serverClaimedVersion,
 	}
 	if !p.identityResolved {
-		v.reason = "configured stdio identity could not be resolved"
-		return v
+		ev.reason = "configured stdio identity was not captured for this server session; server restart is required to satisfy attestation"
+		return ev
 	}
-	v.resolved = p.resolvedIdentity.Digest
+	if !p.attestationShapeMatches(srv.Attestation) {
+		ev.reason = "attestation resolution shape changed after launch; server restart is required to satisfy the new pin"
+		return ev
+	}
+	ev.resolved = p.resolvedIdentity.Digest
 	if p.resolvedIdentity.Digest != srv.Attestation.Digest {
-		v.reason = "resolved executable digest does not match policy expectation"
-		return v
+		ev.reason = "attestation expectation differs from the launched server identity; server restart is required to satisfy the new pin"
+		return ev
 	}
-	v.matched = true
-	return v
+	ev.attested = true
+	return ev
 }
 
-// attachServerIdentity records attestation evidence on a terminal allow/deny
-// event for a call that passed the identity gate. Policies without an
-// attestation omit all identity fields so legacy events never claim a
-// verdict.
-func (p *Proxy) attachServerIdentity(event *audit.Event, pol *policy.Policy, serverName string) {
-	srv := findServerByName(pol, serverName)
-	if srv == nil || srv.Attestation == nil {
+// attachServerIdentity copies the immutable attestation evidence captured
+// with the runtime snapshot onto a terminal allow/deny event. Evidence with
+// configured=false (no pin in the snapshot policy) omits all identity fields
+// so legacy events never claim a verdict. Callers must pass the SAME evidence
+// that passed the identity gate; this function never reads live proxy state
+// and never re-resolves identity from disk.
+func (p *Proxy) attachServerIdentity(event *audit.Event, evidence serverIdentityEvidence) {
+	if !evidence.configured {
 		return
 	}
-	event.ServerIdentityKind = srv.Attestation.Kind
-	event.ServerIdentityExpected = srv.Attestation.Digest
-	matched := p.identityResolved && p.resolvedIdentity.Digest == srv.Attestation.Digest
-	event.ServerAttested = &matched
-	if p.identityResolved {
-		event.ServerIdentityResolved = p.resolvedIdentity.Digest
+	event.ServerIdentityKind = evidence.kind
+	event.ServerIdentityExpected = evidence.expected
+	attested := evidence.attested
+	event.ServerAttested = &attested
+	if evidence.resolved != "" {
+		event.ServerIdentityResolved = evidence.resolved
 	}
-	event.ServerClaimedName = p.serverClaimedName
-	event.ServerClaimedVersion = p.serverClaimedVersion
+	event.ServerClaimedName = evidence.claimedName
+	event.ServerClaimedVersion = evidence.claimedVersion
 }
 
 func findServerByName(pol *policy.Policy, name string) *policy.Server {

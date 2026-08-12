@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
@@ -221,31 +222,67 @@ servers:
 	}
 }
 
-// Reload RED (round-4): a hot reload that introduces a pin resolves it exactly
-// once and publishes policy + identity atomically; removal clears the verdict;
-// reintroduction resolves again. The resolver seam records call counts.
-func TestServerIdentityReloadIntroducesPinAtomically(t *testing.T) {
-	dir := t.TempDir()
-	policyPath := filepath.Join(dir, "policy.yaml")
-	auditPath := filepath.Join(dir, "audit.jsonl")
+// restartCall intercepts one tools/call against the proxy and returns the
+// action plus the raw client response (for reason assertions).
+func restartCall(t *testing.T, p *Proxy, id int) (string, string) {
+	t.Helper()
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(toolCallRaw(id, "open_ticket", map[string]any{"ticket_id": fmt.Sprintf("T-%d", id)}), client)
+	return action, out.String()
+}
 
-	launcher := writeExecutableServer(t)
-	entry := filepath.Join(t.TempDir(), "server.js")
-	if err := os.WriteFile(entry, []byte("serve stable"), 0o755); err != nil {
-		t.Fatal(err)
+// restartBoundSeam returns resolvedA on the FIRST resolver invocation
+// (proxy construction) and resolvedB on every later invocation, modelling a
+// replacement launcher/payload artifact appearing on disk while the proxy
+// (and its launched stdio child) keeps running. The call count and the
+// current digest are mutex-protected so -race is clean when the watcher
+// goroutine and the test goroutine both reach the seam.
+type restartBoundSeam struct {
+	mu        sync.Mutex
+	calls     int
+	resolvedA serveridentity.Resolved
+	resolvedB serveridentity.Resolved
+}
+
+func (s *restartBoundSeam) resolve(command string, args []string, entryArgPositions []int) (serveridentity.Resolved, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.calls == 1 {
+		return s.resolvedA, nil
 	}
+	return s.resolvedB, nil
+}
 
-	resolved := serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: pinnedDigest("a")}
-	calls := 0
-	seamErr := error(nil)
+func (s *restartBoundSeam) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
 
-	write := func(yaml string) {
-		t.Helper()
-		if err := os.WriteFile(policyPath, []byte(yaml), 0o600); err != nil {
-			t.Fatal(err)
-		}
+func restartPinYAML(digest string, positions string) string {
+	if positions == "" {
+		positions = "[0]"
 	}
-	noPinYAML := `version: "1.0"
+	return fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_executable_sha256"
+      digest: "%s"
+      entry_arg_positions: %s
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        risk: low
+`, digest, positions)
+}
+
+func restartNoPinYAML() string {
+	return `version: "1.0"
 default_action: deny
 servers:
   - name: "it-support"
@@ -255,24 +292,28 @@ servers:
         allowed: true
         risk: low
 `
-	pinYAML := func(digest string) string {
-		return fmt.Sprintf(`version: "1.0"
-default_action: deny
-servers:
-  - name: "it-support"
-    allowed: true
-    attestation:
-      kind: "stdio_executable_sha256"
-      digest: "%s"
-      entry_arg_positions: [0]
-    tools:
-      - name: "open_ticket"
-        allowed: true
-        risk: low
-`, digest)
+}
+
+// P1 RED (round-5): a running process launched as artifact A must never
+// become attested after the executable/payload on disk is replaced with B and
+// the policy is reloaded to B's pin. The resolver is invoked exactly once (at
+// construction); the deny carries expected=B, resolved=A, attested=false,
+// restart-required reason, and no arguments.
+func TestServerIdentityReloadDoesNotReResolveRunningProcess(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+
+	digestA := pinnedDigest("a")
+	digestB := pinnedDigest("b")
+	seam := &restartBoundSeam{
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestB},
 	}
 
-	write(noPinYAML)
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[0]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	w, err := policy.NewWatcher(policyPath)
 	if err != nil {
 		t.Fatalf("watcher: %v", err)
@@ -280,82 +321,285 @@ servers:
 	defer w.Close()
 	eng := policy.NewEngineWithWatcher(w)
 	p := New(Config{
-		ServerName:    "it-support",
-		SessionID:     "sess-identity-reload-pin",
-		ClientID:      "agent-identity",
-		AuditLogPath:  auditPath,
-		Policy:        w.Policy(),
-		Engine:        eng,
-		ServerCommand: launcher,
-		ServerArgs:    []string{entry, "-observe-log", filepath.Join(dir, "server.log")},
-		resolveIdentity: func(command string, args []string, entryArgPositions []int) (serveridentity.Resolved, error) {
-			calls++
-			return resolved, seamErr
-		},
+		ServerName:      "it-support",
+		SessionID:       "sess-identity-replace",
+		ClientID:        "agent-identity",
+		AuditLogPath:    auditPath,
+		Policy:          w.Policy(),
+		Engine:          eng,
+		ServerCommand:   writeExecutableServer(t),
+		ServerArgs:      []string{filepath.Join(dir, "server.js")},
+		resolveIdentity: seam.resolve,
 	})
 	defer p.audit.Close()
-
-	call := func(id int) string {
-		out := &bytes.Buffer{}
-		client := mcp.NewParser(nil, out)
-		_, action := p.interceptAndModify(toolCallRaw(id, "open_ticket", map[string]any{"ticket_id": fmt.Sprintf("T-%d", id)}), client)
-		return action
+	if calls := seam.count(); calls != 1 {
+		t.Fatalf("launch must resolve identity exactly once, got %d calls", calls)
+	}
+	if action, _ := restartCall(t, p, 1); action != "forward" {
+		t.Fatalf("launched artifact A must forward against pin A, got %q", action)
 	}
 
-	// No-pin start: no resolver work, legacy verdict omitted.
-	if calls != 0 {
-		t.Fatalf("reload: no-pin start must do zero resolver work, got %d calls", calls)
+	// Reload the policy to B's pin while the proxy (and its logical server
+	// process) is still running. The still-running process launched as A
+	// must NOT become attested: identity is not re-resolved, so B's pin
+	// cannot be satisfied by the captured A identity.
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestB, "[0]")), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if action := call(1); action != "forward" {
-		t.Fatalf("reload: legacy no-pin call must forward, got %q", action)
-	}
-
-	// Introduce a valid pin: exactly one resolver call, next call forwards
-	// with attested=true.
-	write(pinYAML(pinnedDigest("a")))
 	w.Reload()
-	if calls != 1 {
-		t.Fatalf("reload: pin introduction must resolve exactly once, got %d calls", calls)
+	if calls := seam.count(); calls != 1 {
+		t.Fatalf("reload after artifact replacement must not re-resolve identity, got %d calls", calls)
 	}
-	if action := call(2); action != "forward" {
-		t.Fatalf("reload: matched introduced pin must forward, got %q", action)
+	if action, resp := restartCall(t, p, 2); action != "denied" {
+		t.Fatalf("replaced artifact must NOT make the running process attested, got %q; response=%s", action, resp)
 	}
-	ev := lastAuditEvent(t, auditPath, audit.EventToolAllowed, "open_ticket")
-	if ev.ServerAttested == nil || !*ev.ServerAttested {
-		t.Fatalf("reload: introduced pin must emit attested=true, got %+v", ev.ServerAttested)
+	denied := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+	if denied.ServerIdentityExpected != digestB {
+		t.Fatalf("expected=B on replacement deny, got %q", denied.ServerIdentityExpected)
+	}
+	if denied.ServerIdentityResolved != digestA {
+		t.Fatalf("resolved must stay the captured launch digest A, got %q", denied.ServerIdentityResolved)
+	}
+	if denied.ServerAttested == nil || *denied.ServerAttested {
+		t.Fatalf("replacement must never attest the running process, got %+v", denied.ServerAttested)
+	}
+	if !strings.Contains(denied.Reason, "restart") {
+		t.Fatalf("replacement deny must require a restart, got reason %q", denied.Reason)
+	}
+	if len(denied.Arguments) != 0 {
+		t.Fatalf("identity-gate deny must not leak arguments, got %+v", denied.Arguments)
+	}
+}
+
+// P1 RED (round-5): introducing a pin AFTER an unattested launch fails closed
+// for tools/call and reports that a server restart is required. The running
+// server is never retroactively hashed and attested; the resolver is never
+// invoked by the reload. Removing the pin restores the explicitly requested
+// unattested legacy path; reintroducing a pin on an originally unattested
+// process stays unresolved and denied.
+func TestServerIdentityPinIntroAfterLaunchFailsClosedRequiresRestart(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+
+	digestA := pinnedDigest("a")
+	seam := &restartBoundSeam{
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
 	}
 
-	// Mismatched pin: resolver called again; deny uses the coherent new
-	// policy snapshot (expected digest b, resolved digest a).
-	write(pinYAML(pinnedDigest("b")))
-	w.Reload()
-	if action := call(3); action != "denied" {
-		t.Fatalf("reload: mismatched pin must deny, got %q", action)
+	if err := os.WriteFile(policyPath, []byte(restartNoPinYAML()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+	eng := policy.NewEngineWithWatcher(w)
+	p := New(Config{
+		ServerName:      "it-support",
+		SessionID:       "sess-identity-intro-pin",
+		ClientID:        "agent-identity",
+		AuditLogPath:    auditPath,
+		Policy:          w.Policy(),
+		Engine:          eng,
+		ServerCommand:   writeExecutableServer(t),
+		ServerArgs:      []string{filepath.Join(dir, "server.js")},
+		resolveIdentity: seam.resolve,
+	})
+	defer p.audit.Close()
+	if calls := seam.count(); calls != 0 {
+		t.Fatalf("unattested launch must perform zero resolver work, got %d calls", calls)
+	}
+	if action, _ := restartCall(t, p, 1); action != "forward" {
+		t.Fatalf("legacy unattested call must forward, got %q", action)
 	}
 
-	// Remove pin: verdict cleared, no extra resolver work.
-	write(noPinYAML)
+	// Introduce a pin for the CURRENT artifact while the unattested server
+	// keeps running: no identity was captured, so the next call fails closed
+	// and reports a restart requirement. The resolver is never invoked.
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[0]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	w.Reload()
-	before := calls
-	if action := call(4); action != "forward" {
-		t.Fatalf("reload: pin removal must restore legacy forward, got %q", action)
+	if calls := seam.count(); calls != 0 {
+		t.Fatalf("pin introduction must not resolve on reload, got %d calls", calls)
 	}
-	if calls != before {
-		t.Fatalf("reload: pin removal must not call the resolver, got %d calls", calls)
+	if action, resp := restartCall(t, p, 2); action != "denied" {
+		t.Fatalf("introduced pin without captured identity must fail closed, got %q; response=%s", action, resp)
 	}
-	ev2 := lastAuditEvent(t, auditPath, audit.EventToolAllowed, "open_ticket")
-	if ev2.ServerAttested != nil {
-		t.Fatalf("reload: pin removal must clear the attestation verdict, got %+v", ev2.ServerAttested)
+	denied := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+	if denied.ServerIdentityExpected != digestA {
+		t.Fatalf("expected introduced pin digest on deny, got %q", denied.ServerIdentityExpected)
+	}
+	if denied.ServerIdentityResolved != "" {
+		t.Fatalf("no captured identity must omit resolved digest, got %q", denied.ServerIdentityResolved)
+	}
+	if denied.ServerAttested == nil || *denied.ServerAttested {
+		t.Fatalf("introduced pin must not attest the running server, got %+v", denied.ServerAttested)
+	}
+	if !strings.Contains(denied.Reason, "restart") {
+		t.Fatalf("introduced-pin deny must require a restart, got reason %q", denied.Reason)
+	}
+	if len(denied.Arguments) != 0 {
+		t.Fatalf("identity-gate deny must not leak arguments, got %+v", denied.Arguments)
 	}
 
-	// Reintroduce the pin: fresh resolver call, forward again.
-	write(pinYAML(pinnedDigest("a")))
-	w.Reload()
-	if calls != before+1 {
-		t.Fatalf("reload: pin reintroduction must resolve again, got %d calls", calls)
+	// Ordinary policy reload without attestation still applies.
+	if err := os.WriteFile(policyPath, []byte(restartNoPinYAML()), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if action := call(5); action != "forward" {
-		t.Fatalf("reload: reintroduced matched pin must forward, got %q", action)
+	w.Reload()
+	if calls := seam.count(); calls != 0 {
+		t.Fatalf("no-pin reload must not call the resolver, got %d calls", calls)
+	}
+	if action, _ := restartCall(t, p, 3); action != "forward" {
+		t.Fatalf("removed pin must restore explicit unattested forward, got %q", action)
+	}
+	allowed := lastAuditEvent(t, auditPath, audit.EventToolAllowed, "open_ticket")
+	if allowed.ServerAttested != nil {
+		t.Fatalf("removed pin must omit the attestation verdict, got %+v", allowed.ServerAttested)
+	}
+
+	// Reintroducing a pin after an originally unattested start remains
+	// unresolved and denied: the launched process has no startup contract.
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[0]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	if calls := seam.count(); calls != 0 {
+		t.Fatalf("pin reintroduction must not resolve on reload, got %d calls", calls)
+	}
+	if action, resp := restartCall(t, p, 4); action != "denied" {
+		t.Fatalf("reintroduced pin on originally unattested process must stay denied, got %q; response=%s", action, resp)
+	}
+}
+
+// P1 RED (round-5): a changed resolution shape cannot reuse the cached launch
+// digest even when the expected digest string is equal. The deny reports an
+// incompatible startup resolution contract. Equivalent normalized position
+// sets ([0,2] and [2,0]) remain the same shape and stay attested.
+func TestServerIdentityChangedShapeCannotReuseOldDigest(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+
+	digestA := pinnedDigest("a")
+	seam := &restartBoundSeam{
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+	}
+
+	// Construct with positions [0]: digest A is bound to shape (kind, [0]).
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[0]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+	eng := policy.NewEngineWithWatcher(w)
+	p := New(Config{
+		ServerName:      "it-support",
+		SessionID:       "sess-identity-shape",
+		ClientID:        "agent-identity",
+		AuditLogPath:    auditPath,
+		Policy:          w.Policy(),
+		Engine:          eng,
+		ServerCommand:   writeExecutableServer(t),
+		ServerArgs:      []string{filepath.Join(dir, "server.js"), filepath.Join(dir, "extra.js")},
+		resolveIdentity: seam.resolve,
+	})
+	defer p.audit.Close()
+	if calls := seam.count(); calls != 1 {
+		t.Fatalf("pinned launch must resolve exactly once, got %d calls", calls)
+	}
+	if action, _ := restartCall(t, p, 1); action != "forward" {
+		t.Fatalf("launch shape [0] with digest A must forward, got %q", action)
+	}
+
+	// Reload a VALID policy with positions [1] but the SAME expected digest
+	// A. The cached digest was produced under shape [0]; shape [1] measures
+	// different bytes, so it must NOT reuse digest A and must fail closed.
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[1]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	if action, resp := restartCall(t, p, 2); action != "denied" {
+		t.Fatalf("changed shape must not reuse the old digest, got %q; response=%s", action, resp)
+	}
+	denied := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+	if denied.ServerAttested == nil || *denied.ServerAttested {
+		t.Fatalf("changed shape must not attest, got %+v", denied.ServerAttested)
+	}
+	if !strings.Contains(denied.Reason, "shape") && !strings.Contains(denied.Reason, "restart") {
+		t.Fatalf("changed-shape deny must report incompatible contract / restart, got reason %q", denied.Reason)
+	}
+	if len(denied.Arguments) != 0 {
+		t.Fatalf("identity-gate deny must not leak arguments, got %+v", denied.Arguments)
+	}
+}
+
+// P1 compatibility control: equivalent normalized position sets ([0,2] and
+// [2,0]) are the SAME resolution shape, so a reload between them keeps the
+// launch identity and stays attested.
+func TestServerIdentityShapeNormalizedOrderCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+
+	digestA := pinnedDigest("a")
+	seam := &restartBoundSeam{
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+	}
+
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[0,2]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+	eng := policy.NewEngineWithWatcher(w)
+	p := New(Config{
+		ServerName:      "it-support",
+		SessionID:       "sess-identity-shape-normalize",
+		ClientID:        "agent-identity",
+		AuditLogPath:    auditPath,
+		Policy:          w.Policy(),
+		Engine:          eng,
+		ServerCommand:   writeExecutableServer(t),
+		ServerArgs:      []string{filepath.Join(dir, "s0.js"), filepath.Join(dir, "s1.js"), filepath.Join(dir, "s2.js")},
+		resolveIdentity: seam.resolve,
+	})
+	defer p.audit.Close()
+	if calls := seam.count(); calls != 1 {
+		t.Fatalf("pinned launch must resolve exactly once, got %d calls", calls)
+	}
+	if action, _ := restartCall(t, p, 1); action != "forward" {
+		t.Fatalf("launch shape [0,2] with digest A must forward, got %q", action)
+	}
+
+	// Reload with the same positions in a different YAML order: the
+	// normalized contract is identical, so identity is preserved and the
+	// call stays attested.
+	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[2,0]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	if calls := seam.count(); calls != 1 {
+		t.Fatalf("same-shape reload must not re-resolve identity, got %d calls", calls)
+	}
+	if action, resp := restartCall(t, p, 2); action != "forward" {
+		t.Fatalf("normalized-order reload must keep the launch identity, got %q; response=%s", action, resp)
+	}
+	allowed := lastAuditEvent(t, auditPath, audit.EventToolAllowed, "open_ticket")
+	if allowed.ServerAttested == nil || !*allowed.ServerAttested || allowed.ServerIdentityExpected != digestA || allowed.ServerIdentityResolved != digestA {
+		t.Fatalf("normalized-order reload must keep attested=true with digest A, got %+v", allowed)
 	}
 }
 
