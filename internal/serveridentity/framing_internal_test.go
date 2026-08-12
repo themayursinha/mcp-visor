@@ -3,7 +3,6 @@ package serveridentity
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"hash"
 	"testing"
 )
 
@@ -17,7 +16,7 @@ import (
 // content.
 func TestFramingTagSeparatesDomains(t *testing.T) {
 	data := []byte("shared-bytes")
-	var hExec, hArg hash.Hash = sha256.New(), sha256.New()
+	hExec, hArg := sha256.New(), sha256.New()
 	writeField(hExec, tagExecutable, 0, data)
 	writeField(hArg, tagArgument, 0, data)
 	if hex.EncodeToString(hExec.Sum(nil)) == hex.EncodeToString(hArg.Sum(nil)) {
@@ -29,7 +28,7 @@ func TestFramingTagSeparatesDomains(t *testing.T) {
 // inputs: position is part of the serialized input.
 func TestFramingIndexSeparatesPositions(t *testing.T) {
 	data := []byte("arg")
-	var h0, h1 hash.Hash = sha256.New(), sha256.New()
+	h0, h1 := sha256.New(), sha256.New()
 	writeField(h0, tagArgument, 0, data)
 	writeField(h1, tagArgument, 1, data)
 	if hex.EncodeToString(h0.Sum(nil)) == hex.EncodeToString(h1.Sum(nil)) {
@@ -48,7 +47,7 @@ func TestFramingFieldSelfDelimiting(t *testing.T) {
 	evilData := append([]byte{tagArgument}, make([]byte, 8)...) // tag + zero index bytes
 	evilData = append(evilData, 0x08, 0x00)                     // plausible length + junk
 
-	var withField, concatenated hash.Hash = sha256.New(), sha256.New()
+	withField, concatenated := sha256.New(), sha256.New()
 	// (1) one field with data evilData
 	writeField(withField, tagExecutable, 0, evilData)
 	// (2) two fields: one with the prefix, one with the rest
