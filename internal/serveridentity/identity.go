@@ -31,12 +31,12 @@ type Resolved struct {
 // local payloads therefore get different digests, closing the P1
 // confused-deputy gap for shared launchers.
 //
-// Dynamic registry launchers (npx, uvx) are unpinnable: they select a package
-// from a registry at runtime, and the literal package spec does not bind the
-// artifact that will execute. ResolveStdioInvocation therefore returns an
-// error for those launchers, and a configured attestation fails closed
-// through the existing unresolved-identity path instead of claiming a content
-// pin.
+// Dynamic registry launchers (npx, uvx, npm exec) are unpinnable: they
+// select a package from a registry at runtime, and the literal package spec
+// does not bind the artifact that will execute. ResolveStdioInvocation
+// therefore returns an error for those launchers, and a configured
+// attestation fails closed through the existing unresolved-identity path
+// instead of claiming a content pin.
 func ResolveStdioInvocation(command string, args []string) (Resolved, error) {
 	if command == "" {
 		return Resolved{}, fmt.Errorf("resolve stdio invocation: command is empty")
@@ -45,7 +45,7 @@ func ResolveStdioInvocation(command string, args []string) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, fmt.Errorf("resolve stdio invocation %q: %w", command, err)
 	}
-	if launcher := unpinnableLauncher(command, path); launcher != "" {
+	if launcher := unpinnableLauncher(command, path, args); launcher != "" {
 		return Resolved{}, fmt.Errorf("resolve stdio invocation: launcher %q selects a registry payload that cannot be content-pinned", launcher)
 	}
 	resolvedPath, err := filepath.EvalSymlinks(path)
@@ -103,15 +103,20 @@ func ResolveStdioInvocation(command string, args []string) (Resolved, error) {
 }
 
 // unpinnableLauncher returns the recognized dynamic registry launcher
-// basename (npx or uvx) for the invocation, or "" when the command selects a
+// invocation label for the command, or "" when the command selects a
 // direct/local artifact. Both the operator-supplied command basename and the
 // pre-symlink exec.LookPath basename are checked so bare commands and
-// absolute/symlink paths are classified identically. Only npx and uvx are
-// recognized; arbitrary renamed package managers are not inferred.
-func unpinnableLauncher(command, lookPath string) string {
+// absolute/symlink paths are classified identically. npx and uvx are
+// unpinnable in every form. npm is classified only for the canonical
+// registry-runner subcommand `npm exec`; other npm subcommands (run, install,
+// and so on) and arbitrary renamed package managers are not inferred.
+func unpinnableLauncher(command, lookPath string, args []string) string {
 	for _, c := range []string{filepath.Base(command), filepath.Base(lookPath)} {
 		if c == "npx" || c == "uvx" {
 			return c
+		}
+		if c == "npm" && len(args) > 0 && args[0] == "exec" {
+			return "npm exec"
 		}
 	}
 	return ""

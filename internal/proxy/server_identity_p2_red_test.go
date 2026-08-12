@@ -2,16 +2,21 @@ package proxy
 
 import (
 	"bytes"
+	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/serveridentity"
+	"github.com/themayursinha/mcp-visor/internal/signer"
 )
 
 // attestationLimitPolicy pins a matching identity and sets a runtime limit so
@@ -127,5 +132,167 @@ servers:
 	}
 	if ev.ServerIdentityKind != "stdio_executable_sha256" || ev.ServerIdentityExpected != pinnedDigest("a") || ev.ServerIdentityResolved != pinnedDigest("a") {
 		t.Fatalf("P2: expected identity evidence on sensitive-path deny, got %+v", ev)
+	}
+}
+
+// blockingFailingSigner implements signer.Signer with a deterministic
+// blocking failure: Sign signals entry, blocks until released, then returns
+// a fixed error. The remaining interface methods delegate to a real Ed25519
+// signer so the receipt path sees a genuine public key and key ID.
+type blockingFailingSigner struct {
+	inner   signer.Signer
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingFailingSigner) Sign(data []byte) ([]byte, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return nil, errors.New("deterministic signing failure")
+}
+
+func (s *blockingFailingSigner) PublicKey() crypto.PublicKey { return s.inner.PublicKey() }
+func (s *blockingFailingSigner) KeyID() string               { return s.inner.KeyID() }
+func (s *blockingFailingSigner) Algorithm() string           { return s.inner.Algorithm() }
+
+// P2 RED: a post-approval receipt signing failure happens AFTER the runtime
+// barrier is released, so the terminal deny must attach identity from the
+// policy SNAPSHOT that authorized the call, not the live policy after a
+// reload. Codex P2: logDenied reads p.engine.Policy(); reloading from digest
+// A to B while the failing signer blocks makes the deny report expected B and
+// attested=false even though the call was authorized under A.
+func TestServerIdentityApprovalSigningFailureUsesPolicySnapshot(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	approvalDir := filepath.Join(dir, "approvals")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+
+	digestA := pinnedDigest("a")
+	digestB := pinnedDigest("b")
+
+	policyYAML := func(digest string) string {
+		return fmt.Sprintf(`version: "1.0"
+default_action: deny
+settings:
+  approval_timeout_seconds: 10
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_executable_sha256"
+      digest: "%s"
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        approval_required: true
+`, digest)
+	}
+
+	if err := os.WriteFile(policyPath, []byte(policyYAML(digestA)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+
+	inner, err := signer.NewApprovalSigner()
+	if err != nil {
+		t.Fatalf("real signer: %v", err)
+	}
+	failing := &blockingFailingSigner{inner: inner, entered: make(chan struct{}, 1), release: make(chan struct{})}
+
+	p := New(Config{
+		ServerName:       "it-support",
+		SessionID:        "sess-approval-snapshot",
+		ClientID:         "agent-identity",
+		AuditLogPath:     auditPath,
+		Policy:           w.Policy(),
+		Engine:           policy.NewEngineWithWatcher(w),
+		ApprovalDir:      approvalDir,
+		ApprovalSigner:   failing,
+		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+	})
+	defer p.audit.Close()
+
+	// Operator goroutine: approve the request as soon as it appears.
+	requestSeen := make(chan struct{})
+	go func() {
+		for {
+			matches, _ := filepath.Glob(filepath.Join(approvalDir, "req-*.json"))
+			if len(matches) > 0 {
+				id := strings.TrimSuffix(filepath.Base(matches[0]), ".json")
+				_ = os.WriteFile(filepath.Join(approvalDir, id+".ok"), []byte{}, 0o600)
+				close(requestSeen)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	callDone := make(chan string, 1)
+	go func() {
+		out := &bytes.Buffer{}
+		client := mcp.NewParser(nil, out)
+		_, action := p.interceptAndModify(toolCallRaw(1, "open_ticket", map[string]any{"ticket_id": "T-1"}), client)
+		callDone <- action
+	}()
+
+	select {
+	case <-requestSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("approval request was not created")
+	}
+
+	// Wait until the failing signer reports that receipt signing has begun.
+	// This guarantees approval succeeded and the call is past receipt creation.
+	select {
+	case <-failing.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("signer was not invoked after approval")
+	}
+
+	// Reload policy B while the signer is blocked: the live engine now
+	// expects digest B, but the call was authorized under snapshot A.
+	if err := os.WriteFile(policyPath, []byte(policyYAML(digestB)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+
+	// Release the signer so it returns its deterministic error and the call
+	// terminates denied.
+	close(failing.release)
+
+	select {
+	case action := <-callDone:
+		if action != "denied" {
+			t.Fatalf("expected denied after signing failure, got %q", action)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("call did not terminate after signing failure")
+	}
+
+	ev := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+		t.Fatalf("P2: expected snapshot identity kind on signing-failure deny, got %+v", ev)
+	}
+	if ev.ServerIdentityExpected != digestA {
+		t.Fatalf("P2: expected snapshot digest A on signing-failure deny, got %q", ev.ServerIdentityExpected)
+	}
+	if ev.ServerIdentityResolved != digestA {
+		t.Fatalf("P2: expected resolved digest A on signing-failure deny, got %q", ev.ServerIdentityResolved)
+	}
+	if ev.ServerAttested == nil || !*ev.ServerAttested {
+		t.Fatalf("P2: expected attested=true from snapshot A on signing-failure deny, got %+v", ev.ServerAttested)
+	}
+	if !strings.Contains(ev.Reason, "approval receipt signing failed") {
+		t.Fatalf("P2: expected signing-failure reason on deny, got %q", ev.Reason)
+	}
+	if ev.ServerIdentityExpected == digestB || ev.ServerIdentityResolved == digestB {
+		t.Fatalf("P2: deny must not carry reloaded digest B: %+v", ev)
 	}
 }

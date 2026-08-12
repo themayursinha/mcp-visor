@@ -859,7 +859,19 @@ func (p *Proxy) evaluateRuntimeLimits(callReq mcp.ToolsCallRequest) policy.Decis
 	return policy.Decision{Action: policy.ActionAllow, Reason: "runtime limits passed"}
 }
 
+// logDenied attaches server identity from the CURRENT live policy. It is the
+// compatibility wrapper for deny paths that run while the runtime barrier is
+// held, where live and snapshot policy are the same generation.
 func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel) {
+	p.logDeniedWithPolicy(serverName, toolName, args, reason, risk, p.engine.Policy())
+}
+
+// logDeniedWithPolicy builds the terminal deny event and attaches server
+// identity from the supplied policy snapshot. requestApproval paths that run
+// after the runtime barrier is released must pass snapshot.policy so a hot
+// reload cannot pair a later terminal record with a different policy
+// generation than the one that authorized the call.
+func (p *Proxy) logDeniedWithPolicy(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel, pol *policy.Policy) {
 	ev := audit.Event{
 		EventType: audit.EventToolDenied,
 		SessionID: p.session.ID,
@@ -871,7 +883,7 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 		Reason:    reason,
 		RiskLevel: string(risk),
 	}
-	p.attachServerIdentity(&ev, p.engine.Policy(), serverName)
+	p.attachServerIdentity(&ev, pol, serverName)
 	p.logAudit(ev)
 }
 
@@ -906,7 +918,7 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 
 	if snapshot.approval == nil {
 		denyReason := withRedactionNote("approval denied: approval backend is not configured", redactionResult)
-		p.logDenied(serverName, callReq.Name, redactedArgs, denyReason, risk)
+		p.logDeniedWithPolicy(serverName, callReq.Name, redactedArgs, denyReason, risk, snapshot.policy)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
 	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
@@ -953,17 +965,17 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	)
 	if err != nil {
 		errReason := fmt.Sprintf("approval receipt creation failed: %v", err)
-		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		p.logDeniedWithPolicy(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.policy)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if p.approvalSigner == nil {
 		errReason := "approval receipt signing failed: signer is not configured"
-		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		p.logDeniedWithPolicy(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.policy)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if err := rec.SignWith(p.approvalSigner); err != nil {
 		errReason := fmt.Sprintf("approval receipt signing failed: %v", err)
-		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		p.logDeniedWithPolicy(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.policy)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 

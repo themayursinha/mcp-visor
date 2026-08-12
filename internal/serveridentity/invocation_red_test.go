@@ -71,31 +71,45 @@ func TestResolveStdioInvocationBindsPayloadContent(t *testing.T) {
 	}
 }
 
-// P1 RED: dynamic registry launchers (npx, uvx) select a package from a
-// registry at runtime; the literal package spec does not bind the artifact
-// that will actually execute, so attestation must fail closed instead of
-// returning a digest for the literal spec. On the vulnerable implementation
-// this test fails because the resolver hashes the literal spec and returns a
-// digest.
+// P1 RED: dynamic registry launchers (npx, uvx, and canonical npm exec)
+// select a package from a registry at runtime; the literal package spec does
+// not bind the artifact that will actually execute, so attestation must fail
+// closed instead of returning a digest for the literal spec. On the
+// vulnerable implementation this test fails because the resolver hashes the
+// literal spec and returns a digest for npm exec, which it does not yet
+// classify as unpinnable.
 func TestServerIdentityUnpinnableRegistryLauncherRejected(t *testing.T) {
 	tests := []struct {
 		name     string
 		launcher string
-		spec     string
+		args     []string
+		wantErr  string
 	}{
-		{"npx package spec", "npx", "@example/mcp-server@1.0.0"},
-		{"uvx package spec", "uvx", "example-server==1.0.0"},
+		{"npx package spec", "npx", []string{"@example/mcp-server@1.0.0"}, "npx"},
+		{"uvx package spec", "uvx", []string{"example-server==1.0.0"}, "uvx"},
+		{"npm exec package spec", "npm", []string{"exec", "--", "@example/mcp-server@1.0.0"}, "npm exec"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			launcher := writePayload(t, tt.launcher, "#!/bin/sh\nprintf 'registry launcher'\n")
-			_, err := ResolveStdioInvocation(launcher, []string{tt.spec})
+			_, err := ResolveStdioInvocation(launcher, tt.args)
 			if err == nil {
 				t.Fatalf("P1: %s invocation must be rejected as unpinnable, got nil error", tt.name)
 			}
-			if !strings.Contains(err.Error(), tt.launcher) {
-				t.Fatalf("expected error to identify launcher %q, got %v", tt.launcher, err)
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error to identify %q, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+// Negative control: an invocation whose executable happens to be named npm
+// but which is NOT the canonical registry-runner subcommand (npm run) must
+// still resolve. Only npm exec is classified as unpinnable; the classifier
+// must not reject arbitrary npm subcommands merely because of the basename.
+func TestServerIdentityNpmRunNotRejected(t *testing.T) {
+	npm := writePayload(t, "npm", "#!/bin/sh\nprintf 'npm shim'\n")
+	if _, err := ResolveStdioInvocation(npm, []string{"run", "local-server"}); err != nil {
+		t.Fatalf("npm run must not be rejected merely because the executable is named npm: %v", err)
 	}
 }
