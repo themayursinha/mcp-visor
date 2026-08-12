@@ -210,8 +210,8 @@ func New(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
-	proxy.resolveLaunchedIdentity(cfg)
 	proxy.wirePolicyReload()
+	proxy.resolveLaunchedIdentity(cfg)
 	return proxy
 }
 
@@ -264,8 +264,8 @@ func NewWithTracing(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 	}
-	proxy.resolveLaunchedIdentity(cfg)
 	proxy.wirePolicyReload()
+	proxy.resolveLaunchedIdentity(cfg)
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
 }

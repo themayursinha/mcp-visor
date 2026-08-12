@@ -1,0 +1,71 @@
+{
+  "task_id": "T-SERVER-IDENTITY-007-reload-transaction-before-identity",
+  "invariant_ids": ["H17", "H20"],
+  "security_sensitive": true,
+  "security_problem": "Round-8 Codex P2: both constructors call resolveLaunchedIdentity(cfg) BEFORE wirePolicyReload(). resolveLaunchedIdentity can stream the executable and declared entry payloads while the policy watcher is already running; until wirePolicyReload() installs the atomic commitPolicyRuntime transaction, a watcher reload that publishes during identity hashing publishes the new policy directly. That can produce a mixed-generation runtime: engine.Policy() = generation B while the redactor, audit redaction patterns, and approval timeout stay generation A. PR #60 introduces potentially slow identity hashing before reload wiring and materially enlarges the exploitable race window.",
+  "required_behavior": "wirePolicyReload() installs the atomic reload transaction BEFORE resolveLaunchedIdentity(cfg) in BOTH New and NewWithTracing, so once potentially slow invocation hashing starts, every watcher reload goes through commitPolicyRuntime(...) and publishes policy+redactor+audit patterns+approval timeout atomically under runtimeMu. Startup identity remains single-snapshot coherent: resolveLaunchedIdentity captures exactly ONE policy pointer and uses that same snapshot for identity measurement and attestation shape; a reload during identity hashing never relabels a digest measured under generation A with generation B's shape. Identity stays immutable: commitPolicyRuntime never re-resolves or re-installs server identity. A deterministic blocked-resolver regression test proves the transaction is installed before hashing: policy A current, constructor begins, reload transaction installed, resolver blocks, watcher publishes B, resolver unblocks, constructor completes; engine policy == B, redactor corresponds to B, approval timeout corresponds to B, audit redaction patterns correspond to B; launch identity + launch shape stay coherently derived from the ONE snapshot A; if B changes the attestation contract, tools/call fails closed with a restart-required deny rather than incorrectly attested.",
+  "failure_behavior": "Fail closed for tools/call when a watcher reload during identity hashing produces mixed-generation runtime surfaces; never report server_attested=true for a contract never measured; never leak call arguments on an identity-gate deny.",
+  "allowed_paths": [
+    "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
+    "harness/tasks/T-SERVER-IDENTITY-002-registry-runners.json",
+    "harness/tasks/T-SERVER-IDENTITY-003-declared-entry-payloads.json",
+    "harness/tasks/T-SERVER-IDENTITY-004-process-bound-snapshot.json",
+    "harness/tasks/T-SERVER-IDENTITY-005-single-snapshot-launch.json",
+    "harness/tasks/T-SERVER-IDENTITY-006-framed-injective-hashing.json",
+    "harness/tasks/T-SERVER-IDENTITY-007-reload-transaction-before-identity.json",
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity",
+    "internal/audit/logger.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/client_envelope.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_reload_order_test.go",
+    "internal/confuseddeputydemo",
+    "examples/confused-deputy-demo",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/engine_test.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/server_identity_reload_order_test.go",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/proxy", "-run", "^TestReloadTransactionInstalledBeforeIdentityHashing$", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity|TestReloadTransactionInstalledBeforeIdentityHashing|TestHotReload|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy", "-count=1"]
+    },
+    {
+      "name": "demo_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}
