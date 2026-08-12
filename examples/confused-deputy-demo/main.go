@@ -222,7 +222,7 @@ servers:
   - name: "%s"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "open_ticket"

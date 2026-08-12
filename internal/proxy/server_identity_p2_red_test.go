@@ -31,7 +31,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "open_ticket"
@@ -52,7 +52,7 @@ func TestServerIdentityAttachedOnRuntimeLimitDeny(t *testing.T) {
 		ClientID:         "agent-identity",
 		AuditLogPath:     auditPath,
 		Policy:           attestationLimitPolicy(t, pinnedDigest("a"), 1),
-		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: pinnedDigest("a")},
+		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: pinnedDigest("a")},
 	})
 	defer p.audit.Close()
 
@@ -74,7 +74,7 @@ func TestServerIdentityAttachedOnRuntimeLimitDeny(t *testing.T) {
 	if ev.ServerAttested == nil || !*ev.ServerAttested {
 		t.Fatalf("P2: runtime-limit deny must carry attested=true, got %+v", ev.ServerAttested)
 	}
-	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+	if ev.ServerIdentityKind != "stdio_invocation_sha256_v1" {
 		t.Fatalf("P2: expected identity kind on runtime-limit deny, got %+v", ev)
 	}
 	if ev.ServerIdentityExpected != pinnedDigest("a") {
@@ -108,14 +108,14 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "read_file"
         allowed: true
         risk: medium
 `, pinnedDigest("a"))),
-		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: pinnedDigest("a")},
+		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: pinnedDigest("a")},
 	})
 	defer p.audit.Close()
 
@@ -130,7 +130,7 @@ servers:
 	if ev.ServerAttested == nil || !*ev.ServerAttested {
 		t.Fatalf("P2: sensitive-path deny must carry attested=true, got %+v", ev.ServerAttested)
 	}
-	if ev.ServerIdentityKind != "stdio_executable_sha256" || ev.ServerIdentityExpected != pinnedDigest("a") || ev.ServerIdentityResolved != pinnedDigest("a") {
+	if ev.ServerIdentityKind != "stdio_invocation_sha256_v1" || ev.ServerIdentityExpected != pinnedDigest("a") || ev.ServerIdentityResolved != pinnedDigest("a") {
 		t.Fatalf("P2: expected identity evidence on sensitive-path deny, got %+v", ev)
 	}
 }
@@ -185,7 +185,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "open_ticket"
@@ -210,8 +210,8 @@ servers:
 	failing := &blockingFailingSigner{inner: inner, entered: make(chan struct{}, 1), release: make(chan struct{})}
 
 	seam := &restartBoundSeam{
-		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
-		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestB},
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestB},
 	}
 	p := New(Config{
 		ServerName:      "it-support",
@@ -289,7 +289,7 @@ servers:
 	}
 
 	ev := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
-	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+	if ev.ServerIdentityKind != "stdio_invocation_sha256_v1" {
 		t.Fatalf("P2: expected snapshot identity kind on signing-failure deny, got %+v", ev)
 	}
 	if ev.ServerIdentityExpected != digestA {
@@ -356,7 +356,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "open_ticket"
@@ -381,8 +381,8 @@ servers:
 	blocking := &blockingSuccessSigner{inner: inner, entered: make(chan struct{}, 1), release: make(chan struct{})}
 
 	seam := &restartBoundSeam{
-		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
-		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestB},
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestB},
 	}
 	p := New(Config{
 		ServerName:      "it-support",
@@ -460,7 +460,7 @@ servers:
 	}
 
 	ev := findAuditEvent(t, auditPath, audit.EventToolAllowed, "open_ticket")
-	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+	if ev.ServerIdentityKind != "stdio_invocation_sha256_v1" {
 		t.Fatalf("P2: expected snapshot identity kind on approval allow, got %+v", ev)
 	}
 	if ev.ServerIdentityExpected != digestA {

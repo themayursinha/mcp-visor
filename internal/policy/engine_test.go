@@ -941,7 +941,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
 `, valid)))
 	if err != nil {
@@ -950,7 +950,7 @@ servers:
 	if len(p.Servers) != 1 || p.Servers[0].Attestation == nil {
 		t.Fatalf("expected parsed attestation, got %+v", p.Servers)
 	}
-	if p.Servers[0].Attestation.Kind != "stdio_executable_sha256" {
+	if p.Servers[0].Attestation.Kind != "stdio_invocation_sha256_v1" {
 		t.Fatalf("unexpected kind: %s", p.Servers[0].Attestation.Kind)
 	}
 	if p.Servers[0].Attestation.Digest != valid {
@@ -959,17 +959,24 @@ servers:
 }
 
 func TestServerIdentityPolicyRejectsUnsupportedKind(t *testing.T) {
-	_, err := policy.Load([]byte(`version: "1.0"
+	for _, kind := range []string{
+		"tpm_quote",
+		// Round-7: the old unversioned scheme name is no longer accepted;
+		// exactly one supported scheme exists (stdio_invocation_sha256_v1).
+		"stdio_executable_sha256",
+	} {
+		_, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
 default_action: deny
 servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "tpm_quote"
+      kind: "%s"
       digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-`))
-	if err == nil {
-		t.Fatal("unsupported attestation kind must fail policy load")
+`, kind)))
+		if err == nil {
+			t.Fatalf("unsupported attestation kind %q must fail policy load", kind)
+		}
 	}
 }
 
@@ -986,7 +993,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
 `, digest)))
 		if err == nil {
@@ -1037,18 +1044,18 @@ func TestServerIdentityPolicyAcceptsDeclaredEntryPositions(t *testing.T) {
 		expected []int
 	}{
 		{"omitted", `attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "` + valid + `"`, nil},
 		{"single zero", `attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "` + valid + `"
       entry_arg_positions: [0]`, []int{0}},
 		{"multiple positions", `attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "` + valid + `"
       entry_arg_positions: [0, 2]`, []int{0, 2}},
 		{"explicit empty", `attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "` + valid + `"
       entry_arg_positions: []`, []int{}},
 	}
@@ -1090,11 +1097,11 @@ func TestServerIdentityPolicyRejectsInvalidEntryPositions(t *testing.T) {
 		yaml string
 	}{
 		{"negative", `attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "` + valid + `"
       entry_arg_positions: [-1]`},
 		{"duplicate", `attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "` + valid + `"
       entry_arg_positions: [1, 1]`},
 	}

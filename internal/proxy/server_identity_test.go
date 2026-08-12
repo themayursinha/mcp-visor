@@ -54,7 +54,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "open_ticket"
@@ -71,7 +71,7 @@ func TestServerIdentityMismatchDeniesBeforeArgumentPolicy(t *testing.T) {
 		ClientID:         "agent-identity",
 		AuditLogPath:     auditPath,
 		Policy:           attestationPolicy(t, pinnedDigest("a")),
-		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: pinnedDigest("b")},
+		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: pinnedDigest("b")},
 	})
 	defer p.audit.Close()
 
@@ -95,7 +95,7 @@ func TestServerIdentityMismatchDeniesBeforeArgumentPolicy(t *testing.T) {
 	if ev.Decision != "deny" {
 		t.Fatalf("expected deny decision, got %+v", ev)
 	}
-	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+	if ev.ServerIdentityKind != "stdio_invocation_sha256_v1" {
 		t.Fatalf("expected identity kind, got %+v", ev)
 	}
 	if ev.ServerIdentityExpected != pinnedDigest("a") {
@@ -127,7 +127,7 @@ func TestServerIdentityMatchAllowsToolCall(t *testing.T) {
 		ClientID:         "agent-identity",
 		AuditLogPath:     auditPath,
 		Policy:           attestationPolicy(t, pinnedDigest("a")),
-		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: pinnedDigest("a")},
+		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: pinnedDigest("a")},
 	})
 	defer p.audit.Close()
 
@@ -196,7 +196,7 @@ servers:
         allowed: true
         risk: low
 `),
-		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: pinnedDigest("a")},
+		ResolvedIdentity: &serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: pinnedDigest("a")},
 	})
 	defer p.audit.Close()
 
@@ -219,7 +219,7 @@ func TestServerIdentityUsesCurrentPolicyAfterHotReload(t *testing.T) {
 	dir := t.TempDir()
 	policyPath := filepath.Join(dir, "policy.yaml")
 	auditPath := filepath.Join(dir, "audit.jsonl")
-	resolved := serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: pinnedDigest("a")}
+	resolved := serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: pinnedDigest("a")}
 
 	initial := fmt.Sprintf(`version: "1.0"
 default_action: deny
@@ -227,7 +227,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "open_ticket"
@@ -271,7 +271,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
     tools:
       - name: "open_ticket"
@@ -331,7 +331,7 @@ func TestServerIdentityUnpinnableRegistryLauncherFailsClosed(t *testing.T) {
 	if ev.ServerAttested == nil || *ev.ServerAttested {
 		t.Fatalf("P1: expected attested=false for unpinnable launcher, got %+v", ev.ServerAttested)
 	}
-	if ev.ServerIdentityKind != "stdio_executable_sha256" {
+	if ev.ServerIdentityKind != "stdio_invocation_sha256_v1" {
 		t.Fatalf("expected identity kind, got %+v", ev)
 	}
 	if ev.ServerIdentityExpected != pin {
@@ -413,7 +413,7 @@ func TestServerIdentityDocumentedRegistryRunnersFailClosed(t *testing.T) {
 			if ev.ServerAttested == nil || *ev.ServerAttested {
 				t.Fatalf("P1: expected attested=false for %s, got %+v", tt.name, ev.ServerAttested)
 			}
-			if ev.ServerIdentityKind != "stdio_executable_sha256" {
+			if ev.ServerIdentityKind != "stdio_invocation_sha256_v1" {
 				t.Fatalf("expected identity kind, got %+v", ev)
 			}
 			if ev.ServerIdentityExpected != pin {

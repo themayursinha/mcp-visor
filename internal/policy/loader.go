@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// serverAttestationDigestRe validates the pinned stdio executable digest.
+// serverAttestationDigestRe validates the pinned stdio invocation digest.
 var serverAttestationDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func LoadFile(path string) (*Policy, error) {
@@ -96,8 +96,8 @@ func (p *Policy) Validate() error {
 		seenServers[srv.Name] = true
 
 		if srv.Attestation != nil {
-			if srv.Attestation.Kind != "stdio_executable_sha256" {
-				return fmt.Errorf("server %s: unsupported attestation kind '%s' (supported: stdio_executable_sha256)", srv.Name, srv.Attestation.Kind)
+			if srv.Attestation.Kind != "stdio_invocation_sha256_v1" {
+				return fmt.Errorf("server %s: unsupported attestation kind '%s' (supported: stdio_invocation_sha256_v1)", srv.Name, srv.Attestation.Kind)
 			}
 			if !serverAttestationDigestRe.MatchString(srv.Attestation.Digest) {
 				return fmt.Errorf("server %s: attestation digest must match sha256:<64 lowercase hex>", srv.Name)

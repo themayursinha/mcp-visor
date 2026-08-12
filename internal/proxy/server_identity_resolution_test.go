@@ -28,7 +28,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
       entry_arg_positions: [0]
     tools:
@@ -271,7 +271,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
       entry_arg_positions: %s
     tools:
@@ -307,8 +307,8 @@ func TestServerIdentityReloadDoesNotReResolveRunningProcess(t *testing.T) {
 	digestA := pinnedDigest("a")
 	digestB := pinnedDigest("b")
 	seam := &restartBoundSeam{
-		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
-		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestB},
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestB},
 	}
 
 	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[0]")), 0o600); err != nil {
@@ -384,8 +384,8 @@ func TestServerIdentityPinIntroAfterLaunchFailsClosedRequiresRestart(t *testing.
 
 	digestA := pinnedDigest("a")
 	seam := &restartBoundSeam{
-		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
-		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
 	}
 
 	if err := os.WriteFile(policyPath, []byte(restartNoPinYAML()), 0o600); err != nil {
@@ -487,8 +487,8 @@ func TestServerIdentityChangedShapeCannotReuseOldDigest(t *testing.T) {
 
 	digestA := pinnedDigest("a")
 	seam := &restartBoundSeam{
-		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
-		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
 	}
 
 	// Construct with positions [0]: digest A is bound to shape (kind, [0]).
@@ -552,8 +552,8 @@ func TestServerIdentityShapeNormalizedOrderCompatibility(t *testing.T) {
 
 	digestA := pinnedDigest("a")
 	seam := &restartBoundSeam{
-		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
-		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestA},
+		resolvedA: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
+		resolvedB: serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestA},
 	}
 
 	if err := os.WriteFile(policyPath, []byte(restartPinYAML(digestA, "[0,2]")), 0o600); err != nil {
@@ -625,7 +625,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
       entry_arg_positions: [0]
     tools:
@@ -694,7 +694,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
       entry_arg_positions: [0]
     tools:
@@ -709,7 +709,7 @@ servers:
   - name: "it-support"
     allowed: true
     attestation:
-      kind: "stdio_executable_sha256"
+      kind: "stdio_invocation_sha256_v1"
       digest: "%s"
       entry_arg_positions: [1]
     tools:
@@ -739,7 +739,7 @@ servers:
 			// Deterministic interleaving: publish B between digest
 			// measurement and launch-shape construction.
 			eng.Reload(policyB)
-			return serveridentity.Resolved{Kind: serveridentity.KindStdioExecutableSHA256, Digest: digestD}, nil
+			return serveridentity.Resolved{Kind: serveridentity.KindStdioInvocationSHA256V1, Digest: digestD}, nil
 		},
 	})
 	defer p.audit.Close()

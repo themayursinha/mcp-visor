@@ -6,8 +6,10 @@ package serveridentity
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"os/exec"
@@ -15,8 +17,64 @@ import (
 	"sort"
 )
 
-// KindStdioExecutableSHA256 is the only attestation kind this slice supports.
-const KindStdioExecutableSHA256 = "stdio_executable_sha256"
+// KindStdioInvocationSHA256V1 is the only attestation kind this slice
+// supports: a versioned, deterministic, locally measured stdio invocation
+// identity. The v1 suffix is intentional: the digest serialization is part
+// of the security contract, and future format changes use a new version
+// rather than silently reinterpreting existing pins.
+const KindStdioInvocationSHA256V1 = "stdio_invocation_sha256_v1"
+
+// Framed serialization contract (stdio_invocation_sha256_v1).
+//
+// The digest input is a sequence of self-delimiting framed fields:
+//
+//	field := tag(1 byte) | index(8-byte big-endian uint64) |
+//	         length(8-byte big-endian uint64) | data(exactly length bytes)
+//
+// and the full input is:
+//
+//	format marker field   (tag=0x01, index=0, data="stdio_invocation_sha256_v1")
+//	executable field      (tag=0x02, index=0, data=resolved launcher file bytes)
+//	for each argument i in argv order:
+//	  argument field      (tag=0x03, index=i, data=literal argument bytes)
+//	  if i is declared:   entry payload field (tag=0x04, index=i,
+//	                       data=resolved local regular-file bytes)
+//
+// The tag separates component domains, the fixed-width index fixes ordinal
+// position, and the fixed-width length prefix makes every field
+// self-delimiting without relying on any separator byte. Different component
+// structures therefore never serialize to the same hash input (injective
+// framing): the Codex collision class where executable bytes plus a
+// NUL-separated argv are indistinguishable from a different executable whose
+// content embeds that same byte sequence cannot occur, because the
+// executable field carries its own explicit length and the argument fields
+// carry their own tags, indexes, and lengths. The format marker is written
+// first so a future serialization version produces a different digest even
+// for an identical invocation.
+const (
+	tagFormat       byte = 0x01 // format/version marker field
+	tagExecutable   byte = 0x02 // resolved launcher executable content
+	tagArgument     byte = 0x03 // literal argv value at ordinal index
+	tagEntryPayload byte = 0x04 // declared entry payload content at arg index
+)
+
+// writeFieldHeader writes tag|index|length into h without the data bytes,
+// so the caller can stream data of the declared length separately (used for
+// file contents whose size is known from Stat).
+func writeFieldHeader(h hash.Hash, tag byte, index, length uint64) {
+	var buf [8]byte
+	h.Write([]byte{tag})
+	binary.BigEndian.PutUint64(buf[:], index)
+	h.Write(buf[:])
+	binary.BigEndian.PutUint64(buf[:], length)
+	h.Write(buf[:])
+}
+
+// writeField writes one complete framed field tag|index|length|data.
+func writeField(h hash.Hash, tag byte, index uint64, data []byte) {
+	writeFieldHeader(h, tag, index, uint64(len(data)))
+	h.Write(data)
+}
 
 // Resolved carries the immutable identity evidence for the launched stdio
 // executable. It deliberately contains no local paths or file contents.
@@ -36,6 +94,15 @@ type Resolved struct {
 // launched through the same runner with different declared local payloads
 // therefore get different digests, closing the P1 confused-deputy gap for
 // shared launchers.
+//
+// The digest is a versioned, deterministic measurement: the serialized input
+// is the canonical framed encoding documented above (format marker,
+// executable field, then one argument field per argv value in order with an
+// entry-payload field after each declared position), hashed with SHA-256 and
+// returned as "sha256:" + 64 lowercase hex digits under kind
+// stdio_invocation_sha256_v1. The framing is injective within the supported
+// identity model: InvocationA != InvocationB implies
+// CanonicalEncoding(A) != CanonicalEncoding(B).
 //
 // Dynamic registry runners select executable package bytes from a registry
 // or package cache at runtime, and the literal package spec does not bind the
@@ -92,12 +159,21 @@ func ResolveStdioInvocation(command string, args []string, entryArgPositions []i
 	defer f.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	writeField(h, tagFormat, 0, []byte(KindStdioInvocationSHA256V1))
+	// Executable field: explicit length from the same Stat that validated
+	// the artifact, then stream the bytes. If the file changes size between
+	// Stat and read, the field header and the data disagree, so resolution
+	// fails closed instead of producing a digest for a moving target.
+	writeFieldHeader(h, tagExecutable, 0, uint64(info.Size()))
+	n, err := io.Copy(h, f)
+	if err != nil {
 		return Resolved{}, fmt.Errorf("resolve stdio invocation hash %q: %w", resolvedPath, err)
 	}
+	if n != info.Size() {
+		return Resolved{}, fmt.Errorf("resolve stdio invocation %q: size changed while hashing (%d != %d)", resolvedPath, n, info.Size())
+	}
 	for i, arg := range args {
-		h.Write([]byte{0x00})
-		h.Write([]byte(arg))
+		writeField(h, tagArgument, uint64(i), []byte(arg))
 		// Only a policy-declared entry payload position is content-bound.
 		// Undeclared file-valued args are bound by their literal bytes
 		// above and are never opened or hashed; dynamic registry launcher
@@ -117,19 +193,24 @@ func ResolveStdioInvocation(command string, args []string, entryArgPositions []i
 		if !fi.Mode().IsRegular() {
 			return Resolved{}, fmt.Errorf("resolve stdio invocation entry payload %q: not a regular file", arg)
 		}
-		h.Write([]byte{0x00})
 		af, err := os.Open(p)
 		if err != nil {
 			return Resolved{}, fmt.Errorf("resolve stdio invocation entry payload %q: %w", arg, err)
 		}
-		if _, err := io.Copy(h, af); err != nil {
-			af.Close()
+		// Entry payload field: tag=tagEntryPayload, index=the declared arg
+		// position, length from the stat above, then the streamed bytes.
+		writeFieldHeader(h, tagEntryPayload, uint64(i), uint64(fi.Size()))
+		pn, err := io.Copy(h, af)
+		af.Close()
+		if err != nil {
 			return Resolved{}, fmt.Errorf("resolve stdio invocation entry payload hash %q: %w", arg, err)
 		}
-		af.Close()
+		if pn != fi.Size() {
+			return Resolved{}, fmt.Errorf("resolve stdio invocation entry payload %q: size changed while hashing (%d != %d)", arg, pn, fi.Size())
+		}
 	}
 	return Resolved{
-		Kind:   KindStdioExecutableSHA256,
+		Kind:   KindStdioInvocationSHA256V1,
 		Digest: "sha256:" + hex.EncodeToString(h.Sum(nil)),
 	}, nil
 }

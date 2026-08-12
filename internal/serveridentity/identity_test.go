@@ -23,8 +23,8 @@ func TestServerIdentityResolveStdioExecutableHashesResolvedCommand(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if r.Kind != KindStdioExecutableSHA256 {
-		t.Fatalf("expected kind %s, got %q", KindStdioExecutableSHA256, r.Kind)
+	if r.Kind != KindStdioInvocationSHA256V1 {
+		t.Fatalf("expected kind %s, got %q", KindStdioInvocationSHA256V1, r.Kind)
 	}
 	if !strings.HasPrefix(r.Digest, "sha256:") || len(r.Digest) != len("sha256:")+64 {
 		t.Fatalf("expected sha256:<64 lowercase hex> digest, got %q", r.Digest)
