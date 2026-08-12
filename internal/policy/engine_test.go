@@ -1025,3 +1025,98 @@ servers:
 		t.Fatal("legacy server must not gain an attestation")
 	}
 }
+
+// Round-4 RED: a pinned server may declare entry_arg_positions as zero-based
+// indexes into ServerArgs excluding the executable. Single and multiple
+// declared positions load and round-trip into the policy structure.
+func TestServerIdentityPolicyAcceptsDeclaredEntryPositions(t *testing.T) {
+	valid := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name     string
+		yaml     string
+		expected []int
+	}{
+		{"omitted", `attestation:
+      kind: "stdio_executable_sha256"
+      digest: "` + valid + `"`, nil},
+		{"single zero", `attestation:
+      kind: "stdio_executable_sha256"
+      digest: "` + valid + `"
+      entry_arg_positions: [0]`, []int{0}},
+		{"multiple positions", `attestation:
+      kind: "stdio_executable_sha256"
+      digest: "` + valid + `"
+      entry_arg_positions: [0, 2]`, []int{0, 2}},
+		{"explicit empty", `attestation:
+      kind: "stdio_executable_sha256"
+      digest: "` + valid + `"
+      entry_arg_positions: []`, []int{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    %s
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        risk: low
+`, tt.yaml)))
+			if err != nil {
+				t.Fatalf("policy with declared entry positions must load: %v", err)
+			}
+			got := p.Servers[0].Attestation.EntryArgPositions
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected positions %v, got %v", tt.expected, got)
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Fatalf("expected positions %v, got %v", tt.expected, got)
+				}
+			}
+		})
+	}
+}
+
+// Round-4 RED: negative and duplicate declared entry positions must fail
+// policy load with a server-specific error.
+func TestServerIdentityPolicyRejectsInvalidEntryPositions(t *testing.T) {
+	valid := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"negative", `attestation:
+      kind: "stdio_executable_sha256"
+      digest: "` + valid + `"
+      entry_arg_positions: [-1]`},
+		{"duplicate", `attestation:
+      kind: "stdio_executable_sha256"
+      digest: "` + valid + `"
+      entry_arg_positions: [1, 1]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    %s
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        risk: low
+`, tt.yaml)))
+			if err == nil {
+				t.Fatalf("invalid entry_arg_positions must fail policy load")
+			}
+			if !strings.Contains(err.Error(), "it-support") {
+				t.Fatalf("expected server-specific validation error, got %v", err)
+			}
+		})
+	}
+}

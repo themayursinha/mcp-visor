@@ -67,9 +67,15 @@ type Config struct {
 	ApprovalSigningKey string
 	ApprovalSigner     signer.Signer
 	// ResolvedIdentity is a test-only seam that pins the resolved stdio
-	// executable identity without launching a real server. When nil, the
-	// proxy resolves cfg.ServerCommand once at construction.
-	ResolvedIdentity  *serveridentity.Resolved
+	// executable identity without launching a real server. It is consumed
+	// only when the logical server policy declares an attestation; an
+	// unattested server performs zero resolver work.
+	ResolvedIdentity *serveridentity.Resolved
+	// resolveIdentity is an unexported test-only seam that replaces the real
+	// stdio invocation resolver. It is consulted only when the logical server
+	// policy declares an attestation, so unattested construction and reload
+	// never invoke it.
+	resolveIdentity   func(command string, args []string, entryArgPositions []int) (serveridentity.Resolved, error)
 	Tracing           TracingConfig
 	ServerURL         string
 	SSEPath           string
@@ -231,25 +237,48 @@ func NewWithTracing(cfg Config) *Proxy {
 }
 
 // resolveLaunchedIdentity captures the immutable stdio executable identity
-// for this proxy process. A test may pin it directly via Config.ResolvedIdentity.
-// Remote proxies never launch a stdio command, so their identity stays
-// unresolved: any configured stdio attestation then fails closed.
+// for this proxy process at construction. It performs zero resolver work
+// when the logical server policy has no attestation pin. A test may pin it
+// directly via Config.ResolvedIdentity (consumed only when a pin is
+// configured). Remote proxies never launch a stdio command, so their
+// identity stays unresolved: any configured stdio attestation then fails
+// closed.
 func (p *Proxy) resolveLaunchedIdentity(cfg Config) {
-	if cfg.ResolvedIdentity != nil {
-		p.resolvedIdentity = *cfg.ResolvedIdentity
-		p.identityResolved = true
-		return
+	resolved, ok := p.prepareIdentity(p.engine.Policy())
+	p.resolvedIdentity = resolved
+	p.identityResolved = ok
+}
+
+// prepareIdentity resolves the stdio invocation identity for the logical
+// server under the supplied policy snapshot, returning ok=false (unresolved)
+// when the server has no attestation, the launcher cannot be resolved, or the
+// configured stdio attestation cannot be satisfied locally. It performs zero
+// resolver work for an unattested logical server in every path, and it never
+// mutates proxy state: callers install the prepared identity atomically with
+// the policy publish.
+func (p *Proxy) prepareIdentity(pol *policy.Policy) (serveridentity.Resolved, bool) {
+	srv := findServerByName(pol, p.cfg.ServerName)
+	if srv == nil || srv.Attestation == nil {
+		return serveridentity.Resolved{}, false
 	}
-	if cfg.ServerURL != "" || cfg.ServerCommand == "" {
-		return
+	if p.cfg.ResolvedIdentity != nil {
+		return *p.cfg.ResolvedIdentity, true
 	}
-	r, err := serveridentity.ResolveStdioInvocation(cfg.ServerCommand, cfg.ServerArgs)
+	if p.cfg.ServerURL != "" || p.cfg.ServerCommand == "" {
+		// Remote stdio attestation cannot be satisfied locally; leave
+		// unresolved so the configured pin fails closed.
+		return serveridentity.Resolved{}, false
+	}
+	resolve := p.cfg.resolveIdentity
+	if resolve == nil {
+		resolve = serveridentity.ResolveStdioInvocation
+	}
+	r, err := resolve(p.cfg.ServerCommand, p.cfg.ServerArgs, srv.Attestation.EntryArgPositions)
 	if err != nil {
 		p.logger.Warn("server identity resolution failed", "error", err)
-		return
+		return serveridentity.Resolved{}, false
 	}
-	p.resolvedIdentity = r
-	p.identityResolved = true
+	return r, true
 }
 
 // wirePolicyReload attaches an atomic policy/runtime transaction to reloads.
@@ -262,10 +291,17 @@ func (p *Proxy) wirePolicyReload() {
 
 // commitPolicyRuntime publishes the policy snapshot and refreshes redactor,
 // audit patterns, and approval timeout while tools/call is excluded by runtimeMu.
+// The stdio identity is prepared for the candidate policy BEFORE the write
+// barrier (file hashing must never hold runtimeMu) and installed atomically
+// with the policy publish, so no call can observe a new pin with stale
+// identity: introduction resolves once, removal clears the verdict, and a
+// resolution failure publishes the configured pin with unresolved identity so
+// the next tools/call fails closed.
 func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	if pol == nil {
 		return
 	}
+	preparedIdentity, preparedOK := p.prepareIdentity(pol)
 	newRedactor := redaction.NewEngine(pol.Redaction)
 	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
 
@@ -281,6 +317,8 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	p.runtimeMu.Lock()
 	publish()
 	p.redactor = newRedactor
+	p.resolvedIdentity = preparedIdentity
+	p.identityResolved = preparedOK
 	if p.approval != nil {
 		p.approval.SetTimeout(timeout)
 	}
@@ -296,6 +334,7 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 		"default_action", pol.DefaultAction,
 		"redaction_patterns", len(pol.Redaction.Patterns),
 		"approval_timeout_seconds", pol.Settings.ApprovalTimeoutSecs,
+		"identity_resolved", preparedOK,
 	)
 }
 

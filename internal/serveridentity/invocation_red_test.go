@@ -32,16 +32,18 @@ func writePayload(t *testing.T, name, content string) string {
 // NOT produce identical identities. Codex P1: hashing only cfg.ServerCommand
 // (e.g. "npx") ignores the package/script the args select, so benign and
 // poisoned servers behind the same runner both get server_attested=true.
+// The payload is bound only when its position is declared, per round-4
+// semantics: arg 0 is the declared local entry payload.
 func TestResolveStdioInvocationBindsArgs(t *testing.T) {
 	runner := writeRunner(t)
 	benignPayload := writePayload(t, "benign-server.js", "serve benign")
 	poisonedPayload := writePayload(t, "poisoned-server.js", "serve poisoned")
 
-	benign, err := ResolveStdioInvocation(runner, []string{benignPayload})
+	benign, err := ResolveStdioInvocation(runner, []string{benignPayload}, []int{0})
 	if err != nil {
 		t.Fatalf("resolve benign: %v", err)
 	}
-	poisoned, err := ResolveStdioInvocation(runner, []string{poisonedPayload})
+	poisoned, err := ResolveStdioInvocation(runner, []string{poisonedPayload}, []int{0})
 	if err != nil {
 		t.Fatalf("resolve poisoned: %v", err)
 	}
@@ -51,24 +53,133 @@ func TestResolveStdioInvocationBindsArgs(t *testing.T) {
 }
 
 // P1 RED: the same runner + same arg must be deterministic, and a payload
-// content change must change the identity (payload is bound, not just names).
+// content change must change the identity (declared payload is content-bound,
+// not just name-bound).
 func TestResolveStdioInvocationBindsPayloadContent(t *testing.T) {
 	runner := writeRunner(t)
 	payloadPath := writePayload(t, "server.js", "v1")
-	a, err := ResolveStdioInvocation(runner, []string{payloadPath})
+	a, err := ResolveStdioInvocation(runner, []string{payloadPath}, []int{0})
 	if err != nil {
 		t.Fatalf("resolve v1: %v", err)
 	}
 	if err := os.WriteFile(payloadPath, []byte("v2"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	b, err := ResolveStdioInvocation(runner, []string{payloadPath})
+	b, err := ResolveStdioInvocation(runner, []string{payloadPath}, []int{0})
 	if err != nil {
 		t.Fatalf("resolve v2: %v", err)
 	}
 	if a.Digest == b.Digest {
-		t.Fatalf("P1: payload content change must change the digest; got %q for both", a.Digest)
+		t.Fatalf("P1: declared payload content change must change the digest; got %q for both", a.Digest)
 	}
+}
+
+// P1 RED (round-4): mutable runtime data arguments (logs, databases,
+// datasets, output paths) must NEVER change the stdio identity digest. Only
+// policy-declared entry positions bind file content. The vulnerable resolver
+// hashes every regular-file argument, so creating or mutating an undeclared
+// log file changed the digest and produced a false attestation deny.
+func TestServerIdentityUndeclaredRuntimeFileDoesNotChangeDigest(t *testing.T) {
+	runner := writeRunner(t)
+	entry := writePayload(t, "server.js", "serve stable")
+	logPath := filepath.Join(t.TempDir(), "server.log")
+
+	resolve := func() string {
+		t.Helper()
+		r, err := ResolveStdioInvocation(runner, []string{entry, "--log", logPath}, []int{0})
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		return r.Digest
+	}
+
+	before := resolve()
+	if err := os.WriteFile(logPath, []byte("request 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterCreate := resolve()
+	if afterCreate != before {
+		t.Fatalf("P1: undeclared log creation must not change the digest; before=%q after=%q", before, afterCreate)
+	}
+	if err := os.WriteFile(logPath, []byte("request 2, longer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterMutate := resolve()
+	if afterMutate != before {
+		t.Fatalf("P1: undeclared log mutation must not change the digest; before=%q after=%q", before, afterMutate)
+	}
+}
+
+// P1 RED (round-4): a declared entry payload stays content-bound while an
+// undeclared runtime file argument is ignored. Mutating the declared entry
+// changes the digest, so a configured pin on the original entry denies after
+// the mutation.
+func TestServerIdentityDeclaredEntryMutationChangesDigest(t *testing.T) {
+	runner := writeRunner(t)
+	entry := writePayload(t, "server.js", "serve v1")
+	logPath := filepath.Join(t.TempDir(), "server.log")
+
+	resolve := func() string {
+		t.Helper()
+		r, err := ResolveStdioInvocation(runner, []string{entry, "--log", logPath}, []int{0})
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		return r.Digest
+	}
+
+	before := resolve()
+	if err := os.WriteFile(logPath, []byte("log content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("serve v2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after := resolve()
+	if after == before {
+		t.Fatalf("P1: declared entry mutation must change the digest; got %q for both", before)
+	}
+}
+
+// P1 RED (round-4): declared entry positions must be validated. Negative,
+// out-of-range, missing, symlink-failure, and non-regular declared entries
+// fail resolution (fail closed) rather than silently binding nothing.
+func TestServerIdentityDeclaredEntryValidation(t *testing.T) {
+	runner := writeRunner(t)
+	entry := writePayload(t, "server.js", "serve stable")
+
+	t.Run("out of range", func(t *testing.T) {
+		if _, err := ResolveStdioInvocation(runner, []string{entry}, []int{3}); err == nil {
+			t.Fatal("out-of-range declared position must fail resolution")
+		}
+	})
+	t.Run("negative", func(t *testing.T) {
+		if _, err := ResolveStdioInvocation(runner, []string{entry}, []int{-1}); err == nil {
+			t.Fatal("negative declared position must fail resolution")
+		}
+	})
+	t.Run("missing entry file", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "missing.js")
+		if _, err := ResolveStdioInvocation(runner, []string{missing}, []int{0}); err == nil {
+			t.Fatal("missing declared entry must fail resolution")
+		}
+	})
+	t.Run("directory entry", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := ResolveStdioInvocation(runner, []string{dir}, []int{0}); err == nil {
+			t.Fatal("directory declared entry must fail resolution")
+		}
+	})
+	t.Run("broken symlink entry", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "does-not-exist.js")
+		link := filepath.Join(t.TempDir(), "link.js")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ResolveStdioInvocation(runner, []string{link}, []int{0}); err == nil {
+			t.Fatal("broken symlink declared entry must fail resolution")
+		}
+	})
 }
 
 // P1 RED: dynamic registry launchers (npx, uvx, and canonical npm exec)
@@ -92,7 +203,7 @@ func TestServerIdentityUnpinnableRegistryLauncherRejected(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			launcher := writePayload(t, tt.launcher, "#!/bin/sh\nprintf 'registry launcher'\n")
-			_, err := ResolveStdioInvocation(launcher, tt.args)
+			_, err := ResolveStdioInvocation(launcher, tt.args, nil)
 			if err == nil {
 				t.Fatalf("P1: %s invocation must be rejected as unpinnable, got nil error", tt.name)
 			}
@@ -109,7 +220,7 @@ func TestServerIdentityUnpinnableRegistryLauncherRejected(t *testing.T) {
 // must not reject arbitrary npm subcommands merely because of the basename.
 func TestServerIdentityNpmRunNotRejected(t *testing.T) {
 	npm := writePayload(t, "npm", "#!/bin/sh\nprintf 'npm shim'\n")
-	if _, err := ResolveStdioInvocation(npm, []string{"run", "local-server"}); err != nil {
+	if _, err := ResolveStdioInvocation(npm, []string{"run", "local-server"}, nil); err != nil {
 		t.Fatalf("npm run must not be rejected merely because the executable is named npm: %v", err)
 	}
 }
@@ -142,7 +253,7 @@ func TestServerIdentityDocumentedRegistryRunnersRejected(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			launcher := writePayload(t, tt.launcher, "#!/bin/sh\nprintf 'registry launcher'\n")
-			res, err := ResolveStdioInvocation(launcher, tt.args)
+			res, err := ResolveStdioInvocation(launcher, tt.args, nil)
 			if err == nil {
 				t.Fatalf("P1: %s invocation must be rejected as unpinnable, got digest %q and nil error", tt.name, res.Digest)
 			}
@@ -182,9 +293,30 @@ func TestServerIdentityNonRegistryPackageManagerSubcommandsNotRejected(t *testin
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			launcher := writePayload(t, tt.launcher, "#!/bin/sh\nprintf 'package manager shim'\n")
-			if _, err := ResolveStdioInvocation(launcher, tt.args); err != nil {
+			if _, err := ResolveStdioInvocation(launcher, tt.args, nil); err != nil {
 				t.Fatalf("negative control %s must resolve, got error: %v", tt.name, err)
 			}
 		})
+	}
+}
+
+// P1 RED (round-4): declared positions are normalized by sorting a copy, so
+// YAML list order is not part of identity. Resolving with [1,0] and [0,1]
+// must produce identical digests.
+func TestServerIdentityDeclaredEntryOrderIndependence(t *testing.T) {
+	runner := writeRunner(t)
+	entryA := writePayload(t, "a.js", "module a")
+	entryB := writePayload(t, "b.js", "module b")
+
+	ab, err := ResolveStdioInvocation(runner, []string{entryA, entryB}, []int{0, 1})
+	if err != nil {
+		t.Fatalf("resolve [0,1]: %v", err)
+	}
+	ba, err := ResolveStdioInvocation(runner, []string{entryA, entryB}, []int{1, 0})
+	if err != nil {
+		t.Fatalf("resolve [1,0]: %v", err)
+	}
+	if ab.Digest != ba.Digest {
+		t.Fatalf("P1: declared position order must not change identity; [0,1]=%q [1,0]=%q", ab.Digest, ba.Digest)
 	}
 }

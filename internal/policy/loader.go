@@ -102,6 +102,16 @@ func (p *Policy) Validate() error {
 			if !serverAttestationDigestRe.MatchString(srv.Attestation.Digest) {
 				return fmt.Errorf("server %s: attestation digest must match sha256:<64 lowercase hex>", srv.Name)
 			}
+			seenPos := make(map[int]bool)
+			for _, pos := range srv.Attestation.EntryArgPositions {
+				if pos < 0 {
+					return fmt.Errorf("server %s: attestation entry_arg_positions must be non-negative, got %d", srv.Name, pos)
+				}
+				if seenPos[pos] {
+					return fmt.Errorf("server %s: duplicate attestation entry_arg_positions %d", srv.Name, pos)
+				}
+				seenPos[pos] = true
+			}
 		}
 
 		seenTools := make(map[string]bool)

@@ -79,8 +79,10 @@ func run() error {
 	// The policy pins the BENIGN artifact's full invocation (the same
 	// -observe-log args the proxy launches with). The poisoned artifact
 	// reuses the same logical name and must be denied before any tools/call
-	// relay.
-	benignIdentity, err := serveridentity.ResolveStdioInvocation(benignBin, []string{"-observe-log", benignObs})
+	// relay. The -observe-log output path is runtime data and stays
+	// undeclared (no entry_arg_positions), so its content never affects the
+	// identity digest.
+	benignIdentity, err := serveridentity.ResolveStdioInvocation(benignBin, []string{"-observe-log", benignObs}, nil)
 	if err != nil {
 		return fmt.Errorf("resolve benign identity: %w", err)
 	}

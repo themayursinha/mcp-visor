@@ -57,9 +57,16 @@ type Server struct {
 // For this slice only kind "stdio_executable_sha256" is supported: the
 // digest is the SHA-256 of the launched stdio executable artifact and is
 // never derived from MCP metadata.
+//
+// EntryArgPositions declares which ServerArgs entries (zero-based, excluding
+// the executable) select local entry payload files whose resolved regular-file
+// content is part of the digest. Omitted or empty means launcher + literal
+// argv only: undeclared file-valued args (logs, databases, datasets, output
+// paths) are never opened or hashed.
 type ServerAttestation struct {
-	Kind   string `yaml:"kind"`
-	Digest string `yaml:"digest"`
+	Kind              string `yaml:"kind"`
+	Digest            string `yaml:"digest"`
+	EntryArgPositions []int  `yaml:"entry_arg_positions,omitempty"`
 }
 
 type ToolRule struct {
