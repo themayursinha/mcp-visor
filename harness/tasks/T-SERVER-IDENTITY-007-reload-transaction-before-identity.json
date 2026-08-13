@@ -5,8 +5,8 @@
   "H20"
  ],
  "security_sensitive": true,
- "security_problem": "Round-8 Codex P2: both constructors call resolveLaunchedIdentity(cfg) BEFORE wirePolicyReload(). resolveLaunchedIdentity can stream the executable and declared entry payloads while the policy watcher is already running; until wirePolicyReload() installs the atomic commitPolicyRuntime transaction, a watcher reload that publishes during identity hashing publishes the new policy directly. That can produce a mixed-generation runtime: engine.Policy() = generation B while the redactor, audit redaction patterns, and approval timeout stay generation A. PR #60 introduces potentially slow identity hashing before reload wiring and materially enlarges the exploitable race window.",
- "required_behavior": "wirePolicyReload() installs the atomic reload transaction BEFORE resolveLaunchedIdentity(cfg) in BOTH New and NewWithTracing, so once potentially slow invocation hashing starts, every watcher reload goes through commitPolicyRuntime(...) and publishes policy+redactor+audit patterns+approval timeout atomically under runtimeMu. Startup identity remains single-snapshot coherent: resolveLaunchedIdentity captures exactly ONE policy pointer and uses that same snapshot for identity measurement and attestation shape; a reload during identity hashing never relabels a digest measured under generation A with generation B's shape. Identity stays immutable: commitPolicyRuntime never re-resolves or re-installs server identity. A deterministic blocked-resolver regression test proves the transaction is installed before hashing: policy A current, constructor begins, reload transaction installed, resolver blocks, watcher publishes B, resolver unblocks, constructor completes; engine policy == B, redactor corresponds to B, approval timeout corresponds to B, audit redaction patterns correspond to B; launch identity + launch shape stay coherently derived from the ONE snapshot A; if B changes the attestation contract, tools/call fails closed with a restart-required deny rather than incorrectly attested.",
+ "security_problem": "Round-9 Codex P2: wirePolicyReload() calls SetReloadCommitter, which installs the committer and returns the currently published generation B, then reconciles runtime surfaces AFTER that call returns. A subsequent reload C can therefore commit through the newly installed committer (policy+runtime become C) before the caller applies stale B via commitPolicyRuntime(B, no-op publish). Result: authorization policy = C while redactor, audit redaction patterns, and approval timeout = B. This violates the invariant that every policy generation visible to authorization must be accompanied by the policy-derived runtime surfaces for that same generation.",
+ "required_behavior": "Registration and initial reconciliation are atomic with respect to subsequent reload commits: SetReloadCommitter installs the committer and reconciles the currently published generation inside the same serialization boundary that excludes later reload publication. After that boundary releases, every later reload goes through the installed committer. A deterministic test forces A current, B published before registration, C committed after committer install, and an attempted stale B reconciliation; final state is policy=C, redactor=C, audit patterns=C, approval timeout=C (never B). The previous pre-registration nil-committer race remains fixed. A reload during identity hashing still keeps policy/runtime surfaces coherent. Identity remains launch-bound: a changed attestation after startup fails closed/restart-required.",
  "failure_behavior": "Fail closed for tools/call when a watcher reload during identity hashing produces mixed-generation runtime surfaces; never report server_attested=true for a contract never measured; never leak call arguments on an identity-gate deny.",
  "allowed_paths": [
   "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
@@ -64,7 +64,7 @@
     "test",
     "./internal/proxy",
     "-run",
-    "^TestReloadTransactionInstalledBeforeIdentityHashing$",
+    "^TestStaleReconciliationDoesNotOverrideNewerCommit$",
     "-count=1"
    ]
   },
@@ -78,7 +78,7 @@
     "./internal/policy",
     "./internal/proxy",
     "-run",
-    "TestServerIdentity|TestReloadTransactionInstalledBeforeIdentityHashing|TestHotReload|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy",
+    "TestServerIdentity|TestReload|TestStaleReconciliationDoesNotOverrideNewerCommit|TestHotReload|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy",
     "-count=1"
    ]
   },

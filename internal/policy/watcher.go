@@ -34,6 +34,10 @@ type Watcher struct {
 	// reloadStall is a test-only seam invoked immediately before the locked
 	// committer decision during reload. Production leaves it nil.
 	reloadStall func()
+
+	// registrationStall is a test-only seam invoked after the registration
+	// transaction releases the watcher lock. Production leaves it nil.
+	registrationStall func()
 }
 
 func NewWatcher(path string) (*Watcher, error) {
@@ -140,8 +144,8 @@ func (w *Watcher) reload() {
 
 	// Test seam: hold an in-flight reload that began before committer
 	// registration so the locked decision below can observe a committer
-	// installed concurrently (or a completed nil-committer publish can be
-	// reconciled after SetReloadCommitter returns).
+	// installed concurrently (or so a completed nil-committer publish can be
+	// reconciled inside SetReloadCommitter before later reloads publish).
 	if stall != nil {
 		stall()
 	}
@@ -159,7 +163,9 @@ func (w *Watcher) reload() {
 	// Hold the lock across the nil-committer publish decision so:
 	// 1. an in-flight reload re-reads a committer registered after LoadFile,
 	// 2. SetReloadCommitter cannot observe a committed generation that
-	//    bypassed the atomic runtime transaction.
+	//    bypassed the atomic runtime transaction,
+	// 3. SetReloadCommitter's install+reconcile transaction excludes any
+	//    later reload from publishing until reconciliation finishes.
 	w.mu.Lock()
 	committer := w.committer
 	hooks := append([]ReloadHook(nil), w.hooks...)
@@ -198,15 +204,27 @@ func (w *Watcher) OnReload(hook ReloadHook) {
 }
 
 // SetReloadCommitter installs the single transaction responsible for publishing
-// the watcher snapshot with dependent runtime surfaces. It is configured during
-// proxy construction, before the watcher is used for live reloads. It returns
-// the watcher's currently published policy so the caller can reconcile runtime
-// surfaces that may already have advanced via a nil-committer publish.
-func (w *Watcher) SetReloadCommitter(committer ReloadCommitter) *Policy {
+// the watcher snapshot with dependent runtime surfaces and reconciles the
+// currently published generation before returning.
+//
+// The install and reconcile run under w.mu, which is the same lock reload()
+// must acquire before publishing. That is the happens-before:
+// a later reload cannot snapshot the committer or publish until reconcile
+// returns. reconcile must refresh dependent runtime surfaces without calling
+// publish() or any Watcher method that acquires w.mu (the already-authoritative
+// snapshot must not be re-published, or the same goroutine deadlocks).
+func (w *Watcher) SetReloadCommitter(committer ReloadCommitter, reconcile func(*Policy)) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.committer = committer
-	return w.policy
+	current := w.policy
+	stall := w.registrationStall
+	if reconcile != nil {
+		reconcile(current)
+	}
+	w.mu.Unlock()
+	if stall != nil {
+		stall()
+	}
 }
 
 // SetReloadStallForTest installs a synchronous stall invoked during reload.
@@ -216,6 +234,16 @@ func (w *Watcher) SetReloadStallForTest(fn func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.reloadStall = fn
+}
+
+// SetRegistrationStallForTest installs a synchronous stall invoked after the
+// registration transaction (install + reconcile) has released the watcher lock.
+// Production code must leave this nil. Tests use it to run a subsequent reload
+// that must not be overwritten by a stale post-return reconciliation.
+func (w *Watcher) SetRegistrationStallForTest(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.registrationStall = fn
 }
 
 func (w *Watcher) Reload() {

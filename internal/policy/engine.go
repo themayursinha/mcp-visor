@@ -73,17 +73,22 @@ func (e *Engine) OnReload(hook ReloadHook) {
 }
 
 // SetReloadCommitter installs the transaction that publishes an engine policy
-// with dependent runtime surfaces. With a watcher, it delegates to the watcher.
-// It returns the currently published policy so callers can reconcile runtime
-// surfaces after registration.
-func (e *Engine) SetReloadCommitter(committer ReloadCommitter) *Policy {
+// with dependent runtime surfaces and reconciles the currently published
+// generation before returning. With a watcher, it delegates to the watcher.
+// reconcile must not call publish() or Engine/Watcher methods that acquire
+// the same mutex this transaction holds.
+func (e *Engine) SetReloadCommitter(committer ReloadCommitter, reconcile func(*Policy)) {
 	if e.watcher != nil {
-		return e.watcher.SetReloadCommitter(committer)
+		e.watcher.SetReloadCommitter(committer, reconcile)
+		return
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.committer = committer
-	return e.policy
+	current := e.policy
+	if reconcile != nil {
+		reconcile(current)
+	}
+	e.mu.Unlock()
 }
 
 func (e *Engine) Reload(p *Policy) {
@@ -102,8 +107,9 @@ func (e *Engine) Reload(p *Policy) {
 
 	// Hold the lock across the nil-committer publish decision so a concurrent
 	// SetReloadCommitter cannot observe a committed generation without the
-	// committer installed, and so an in-flight reload re-reads a committer
-	// registered while LoadFile was running.
+	// committer installed, so an in-flight reload re-reads a committer
+	// registered while LoadFile was running, and so install+reconcile excludes
+	// later Engine.Reload publication until reconciliation finishes.
 	e.mu.Lock()
 	committer := e.committer
 	hooks := append([]ReloadHook(nil), e.hooks...)

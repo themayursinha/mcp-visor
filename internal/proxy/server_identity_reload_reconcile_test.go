@@ -176,3 +176,156 @@ func TestReloadStartedBeforeCommitterRegistrationReconcilesRuntime(t *testing.T)
 		t.Fatalf("changed-attestation deny must require restart, got reason %q", denied.Reason)
 	}
 }
+
+// RED-to-GREEN (Codex P2, serialize reconciliation): returning the published
+// generation from SetReloadCommitter and reconciling it after the watcher lock
+// is released lets a later reload C commit (policy+runtime = C) before stale B
+// overwrites runtime surfaces.
+//
+// Forced sequence (no sleeps; registration stall after the registration
+// transaction releases the lock):
+//
+//	A current
+//	B published before registration (nil committer)
+//	registration installs the committer
+//	C commits through the installed committer
+//	attempted stale B reconciliation
+//
+// Vulnerable result: engine policy = C while redactor, audit patterns, and
+// approval timeout = B. Fixed result: every policy-derived surface is C.
+func TestStaleReconciliationDoesNotOverrideNewerCommit(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	approvalDir := filepath.Join(dir, "approvals")
+
+	digestA := pinnedDigest("a")
+	digestB := pinnedDigest("b")
+	digestC := pinnedDigest("c")
+
+	if err := os.WriteFile(policyPath, []byte(reloadIdentityPolicy(digestA, 30, "token_a", "TOKENA[0-9]+", "[REDACTED-A]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	defer w.Close()
+	eng := policy.NewEngineWithWatcher(w)
+	policyA := w.Policy()
+
+	if err := os.WriteFile(policyPath, []byte(reloadIdentityPolicy(digestB, 7, "token_b", "TOKENB[0-9]+", "[REDACTED-B]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	if got := w.Policy().Settings.ApprovalTimeoutSecs; got != 7 {
+		t.Fatalf("watcher must publish generation B before registration, got timeout %d", got)
+	}
+
+	regEntered := make(chan struct{})
+	regRelease := make(chan struct{})
+	w.SetRegistrationStallForTest(func() {
+		close(regEntered)
+		<-regRelease
+	})
+
+	done := make(chan *Proxy, 1)
+	go func() {
+		done <- New(Config{
+			ServerName:    "it-support",
+			SessionID:     "sess-stale-reconcile",
+			ClientID:      "agent-identity",
+			AuditLogPath:  auditPath,
+			ApprovalDir:   approvalDir,
+			Policy:        policyA,
+			Engine:        eng,
+			ServerCommand: "server-bin",
+			ServerArgs:    []string{"server.js"},
+			ResolvedIdentity: &serveridentity.Resolved{
+				Kind:   serveridentity.KindStdioInvocationSHA256V1,
+				Digest: digestA,
+			},
+		})
+	}()
+
+	select {
+	case <-regEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("registration stall was not entered")
+	}
+
+	// Committer is installed. On the vulnerable path this stall ran after
+	// unlock and before stale B reconciliation, so Reload C commits through
+	// the committer and is then overwritten. On the fixed path this stall
+	// runs after install+reconcile, so C is a later commit and must remain.
+	if err := os.WriteFile(policyPath, []byte(reloadIdentityPolicy(digestC, 3, "token_c", "TOKENC[0-9]+", "[REDACTED-C]")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	if got := w.Policy().Settings.ApprovalTimeoutSecs; got != 3 {
+		t.Fatalf("generation C must be published during the registration gap, got timeout %d", got)
+	}
+
+	close(regRelease)
+
+	var p *Proxy
+	select {
+	case p = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("constructor did not complete")
+	}
+	defer p.audit.Close()
+
+	if got := p.engine.Policy().Settings.ApprovalTimeoutSecs; got != 3 {
+		t.Fatalf("engine policy must be generation C, got timeout %d", got)
+	}
+
+	red := p.currentRedactor()
+	if out, res := red.RedactArgs(map[string]any{"secret": "TOKENC42"}); !res.Redacted || out["secret"] != "[REDACTED-C]" {
+		t.Fatalf("redactor must correspond to generation C, got %+v %+v", out, res)
+	}
+	if out, res := red.RedactArgs(map[string]any{"secret": "TOKENB42"}); res.Redacted {
+		t.Fatalf("redactor must not keep generation B after C, got %+v %+v", out, res)
+	}
+
+	if got := p.currentApproval().Timeout(); got != 3*time.Second {
+		t.Fatalf("approval timeout must correspond to generation C, got %v", got)
+	}
+
+	p.logAudit(audit.Event{
+		EventType: audit.EventToolAllowed,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    "it-support",
+		Tool:      "open_ticket",
+		Reason:    "token TOKENC77",
+	})
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "TOKENC77") {
+		t.Fatalf("audit redaction patterns must correspond to generation C, log contains TOKENC77: %s", data)
+	}
+
+	if !p.identityResolved || p.resolvedIdentity.Digest != digestA {
+		t.Fatalf("launch identity must stay snapshot A, got %+v resolved=%v", p.resolvedIdentity, p.identityResolved)
+	}
+
+	if action, resp := restartCall(t, p, 1); action != "denied" {
+		t.Fatalf("call under changed attestation contract must fail closed, got %q; response=%s", action, resp)
+	}
+	denied := findAuditEvent(t, auditPath, audit.EventToolDenied, "open_ticket")
+	if denied.ServerAttested == nil || *denied.ServerAttested {
+		t.Fatalf("changed attestation contract must never attest the running process, got %+v", denied.ServerAttested)
+	}
+	if denied.ServerIdentityExpected != digestC {
+		t.Fatalf("expected digest must be generation C on deny, got %q", denied.ServerIdentityExpected)
+	}
+	if denied.ServerIdentityResolved != digestA {
+		t.Fatalf("resolved digest must stay the captured snapshot A on deny, got %q", denied.ServerIdentityResolved)
+	}
+	if !strings.Contains(denied.Reason, "restart") {
+		t.Fatalf("changed-attestation deny must require restart, got reason %q", denied.Reason)
+	}
+}

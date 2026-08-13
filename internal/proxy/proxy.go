@@ -353,17 +353,45 @@ func (p *Proxy) prepareIdentity(pol *policy.Policy) (serveridentity.Resolved, bo
 }
 
 // wirePolicyReload attaches an atomic policy/runtime transaction to reloads.
-// After registration it reconciles runtime surfaces with the watcher's current
-// published generation so a nil-committer reload that completed before
-// registration cannot leave redactor/audit/approval on the prior generation.
+// Registration installs the committer and reconciles the currently published
+// generation inside the watcher/engine lock so a later reload cannot publish
+// between selecting that generation and applying its runtime surfaces.
 func (p *Proxy) wirePolicyReload() {
 	if p.engine == nil {
 		return
 	}
-	current := p.engine.SetReloadCommitter(p.commitPolicyRuntime)
-	if current != nil && current != p.cfg.Policy {
-		p.commitPolicyRuntime(current, func() {})
+	p.engine.SetReloadCommitter(p.commitPolicyRuntime, p.reconcilePublishedRuntime)
+}
+
+// reconcilePublishedRuntime refreshes redactor, audit patterns, and approval
+// timeout to match an already-published policy generation. It is invoked while
+// the watcher/engine registration lock is held, so it must not publish() or
+// call back into Watcher/Engine methods that acquire that lock.
+func (p *Proxy) reconcilePublishedRuntime(pol *policy.Policy) {
+	if pol == nil || pol == p.cfg.Policy {
+		return
 	}
+	p.refreshPolicyRuntime(pol)
+}
+
+// refreshPolicyRuntime applies policy-derived runtime surfaces without
+// publishing a watcher/engine snapshot. Callers that already hold the
+// registration lock use this so they cannot deadlock on publish().
+func (p *Proxy) refreshPolicyRuntime(pol *policy.Policy) {
+	if pol == nil {
+		return
+	}
+	newRedactor := redaction.NewEngine(pol.Redaction)
+	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
+	p.runtimeMu.Lock()
+	p.redactor = newRedactor
+	if p.approval != nil {
+		p.approval.SetTimeout(timeout)
+	}
+	if p.audit != nil {
+		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
+	}
+	p.runtimeMu.Unlock()
 }
 
 // commitPolicyRuntime publishes the policy snapshot and refreshes redactor,
