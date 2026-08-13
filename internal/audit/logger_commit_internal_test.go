@@ -138,6 +138,102 @@ func TestNewLoggerFailClosedOnParentDirSyncError(t *testing.T) {
 	}
 }
 
+// TestNewLoggerSyncsParentDirWhenFileRotatedBeforeOpen proves create detection
+// is atomic with the open: if the ledger is rotated away after chain recovery
+// and before open, NewLogger must still fsync the parent directory for the
+// new inode. A pre-open Stat TOCTOU would see the old file, skip dir sync,
+// and leave the replacement entry non-durable.
+func TestNewLoggerSyncsParentDirWhenFileRotatedBeforeOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	rotated := []byte(`{"event_type":"session_started","session_id":"rotated","policy_decision":"n/a"}` + "\n")
+	if err := os.WriteFile(path, rotated, 0o600); err != nil {
+		t.Fatalf("pre-create audit file: %v", err)
+	}
+
+	var (
+		mu         sync.Mutex
+		syncedDirs []string
+	)
+	syncDir = func(f *os.File) error {
+		mu.Lock()
+		defer mu.Unlock()
+		syncedDirs = append(syncedDirs, f.Name())
+		return f.Sync()
+	}
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+	origOpen := openFile
+	t.Cleanup(func() { openFile = origOpen })
+	openFile = func(p string, flags int, perm os.FileMode) (*os.File, error) {
+		_ = os.Remove(path)
+		return origOpen(p, flags, perm)
+	}
+
+	l, err := NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger after rotation-before-open: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	mu.Lock()
+	gotSyncs := append([]string(nil), syncedDirs...)
+	mu.Unlock()
+	if len(gotSyncs) != 1 {
+		t.Fatalf("parent dir sync after rotation-before-open: want 1, got %d (%v)", len(gotSyncs), gotSyncs)
+	}
+	if gotSyncs[0] != dir {
+		t.Fatalf("parent dir sync: want %q, got %q", dir, gotSyncs[0])
+	}
+}
+
+// TestNewLoggerDoesNotUnlinkForeignFileOnSyncFailure proves cleanup never
+// unlinks a ledger this call did not create. If another process creates the
+// file in the TOCTOU window between Stat and open, fail-closed dir-sync
+// cleanup must not Remove that foreign inode.
+func TestNewLoggerDoesNotUnlinkForeignFileOnSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	foreign := []byte(`{"event_type":"session_started","session_id":"foreign","policy_decision":"n/a"}` + "\n")
+
+	syncErr := errors.New("injected parent dir sync failure")
+	var syncCalls int
+	syncDir = func(f *os.File) error {
+		syncCalls++
+		return syncErr
+	}
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+	origOpen := openFile
+	t.Cleanup(func() { openFile = origOpen })
+	var openCalls int
+	openFile = func(p string, flags int, perm os.FileMode) (*os.File, error) {
+		openCalls++
+		if openCalls == 1 {
+			if err := os.WriteFile(path, foreign, 0o600); err != nil {
+				return nil, err
+			}
+		}
+		return origOpen(p, flags, perm)
+	}
+
+	l, err := NewLogger(path)
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("foreign audit file was unlinked: %v (NewLogger err: %v)", readErr, err)
+	}
+	if string(got) != string(foreign) {
+		t.Fatalf("foreign audit content: got %q want %q", got, foreign)
+	}
+	if syncCalls != 0 {
+		t.Fatalf("syncDir calls for a file this call did not create: want 0, got %d", syncCalls)
+	}
+	if err != nil {
+		t.Fatalf("NewLogger (foreign file in TOCTOU window): %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+}
+
 func TestCommitAuthorizationWriteFailurePoisonsLoggerInternal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	l, err := NewLogger(path)

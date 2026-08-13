@@ -100,16 +100,33 @@ type Logger struct {
 // directory entry durable. Constructors default it to (*os.File).Sync.
 var syncDir = func(f *os.File) error { return f.Sync() }
 
+// openFile is an unexported seam for package-audit tests to deterministically
+// inject the rotation/creation TOCTOU window between chain recovery and the
+// create-vs-existing open. Constructors default it to os.OpenFile.
+var openFile = func(path string, flags int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, flags, perm)
+}
+
 func NewLogger(path string) (*Logger, error) {
 	prevHash, chainIndex, err := recoverChainState(path)
 	if err != nil {
 		return nil, err
 	}
-	_, statErr := os.Stat(path)
-	created := os.IsNotExist(statErr)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_SYNC, 0o600)
-	if err != nil {
+	// Detect creation atomically with the open. A pre-open Stat TOCTOU can
+	// leave created=false after O_CREATE makes a new inode (parent dir never
+	// synced) or created=true after opening another process's ledger (cleanup
+	// would unlink it). O_EXCL is the create-vs-existing seam.
+	created := false
+	f, err := openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		f, err = openFile(path, os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_APPEND, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("open audit log: %w", err)
+		}
+	} else if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
+	} else {
+		created = true
 	}
 	st, err := f.Stat()
 	if err != nil {
@@ -117,16 +134,18 @@ func NewLogger(path string) (*Logger, error) {
 		return nil, fmt.Errorf("stat audit log: %w", err)
 	}
 	if created {
-		// The audit file did not exist before this open, so O_CREATE just
-		// created it. The O_SYNC data write does not persist the filename->
-		// inode directory entry; without syncing the parent directory, a
-		// power loss shortly after the first authorization could make the
-		// durable record vanish on reboot. Sync the parent directory before
-		// any authorization commit is permitted, and fail closed if the
-		// directory cannot be opened or synced.
+		// This call created the audit file. The O_SYNC data write does not
+		// persist the filename->inode directory entry; without syncing the
+		// parent directory, a power loss shortly after the first
+		// authorization could make the durable record vanish on reboot.
+		// Sync the parent directory before any authorization commit is
+		// permitted, and fail closed if the directory cannot be opened or
+		// synced. Cleanup may unlink only the file this call created.
 		if err := syncParentDir(path); err != nil {
 			_ = f.Close()
-			_ = os.Remove(path)
+			if created {
+				_ = os.Remove(path)
+			}
 			return nil, fmt.Errorf("sync audit log parent directory: %w", err)
 		}
 	}
