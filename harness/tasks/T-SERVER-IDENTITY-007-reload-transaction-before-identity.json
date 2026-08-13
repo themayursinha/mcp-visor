@@ -35,7 +35,9 @@
   "docs/architecture.md",
   "docs/threat-model.md",
   "SECURITY.md",
-  "internal/proxy/server_identity_reload_reconcile_test.go"
+  "internal/proxy/server_identity_reload_reconcile_test.go",
+  "internal/policy/engine.go",
+  "internal/policy/watcher.go"
  ],
  "approval_gated_paths": [
   "harness/invariants.md",
@@ -48,7 +50,9 @@
   "docs/architecture.md",
   "docs/threat-model.md",
   "SECURITY.md",
-  "internal/proxy/server_identity_reload_reconcile_test.go"
+  "internal/proxy/server_identity_reload_reconcile_test.go",
+  "internal/policy/engine.go",
+  "internal/policy/watcher.go"
  ],
  "max_attempts": 3,
  "required_commands": [
