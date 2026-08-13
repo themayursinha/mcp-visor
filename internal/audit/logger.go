@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"regexp"
@@ -21,6 +22,12 @@ var (
 	ErrIncompleteAuditTail = errors.New("audit log incomplete trailing line")
 	// ErrCorruptAuditRecord is returned when the last complete audit record is invalid.
 	ErrCorruptAuditRecord = errors.New("audit log corrupt last record")
+	// ErrNonDurableSink is returned when authorization commit is attempted on a
+	// sink that is not a regular O_SYNC file opened by NewLogger.
+	ErrNonDurableSink = errors.New("audit sink is not a durable regular file")
+	// ErrAuditSinkUnhealthy is returned when a prior write/short-write failure
+	// has poisoned the logger until process restart.
+	ErrAuditSinkUnhealthy = errors.New("audit sink is unhealthy")
 )
 
 type EventType string
@@ -80,6 +87,11 @@ type Logger struct {
 	patterns   []*regexp.Regexp
 	prevHash   string
 	chainIndex uint64
+	durable    bool
+	poisoned   bool
+	// write is an unexported seam for package-audit tests to inject short
+	// writes. Constructors default it to (*os.File).Write.
+	write func(f *os.File, data []byte) (int, error)
 }
 
 func NewLogger(path string) (*Logger, error) {
@@ -91,17 +103,24 @@ func NewLogger(path string) (*Logger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat audit log: %w", err)
+	}
 	return &Logger{
 		path:       path,
 		file:       f,
 		prevHash:   prevHash,
 		chainIndex: chainIndex,
+		durable:    st.Mode().IsRegular(),
+		write:      (*os.File).Write,
 	}, nil
 }
 
 func MustLogger(path string) *Logger {
 	if path == "" {
-		return &Logger{file: os.Stderr}
+		return stderrLogger()
 	}
 	l, err := NewLogger(path)
 	if err != nil {
@@ -109,9 +128,13 @@ func MustLogger(path string) *Logger {
 			log.Fatalf("audit: refusing to start with corrupt/incomplete audit log %q: %v", path, err)
 		}
 		fmt.Fprintf(os.Stderr, "audit logger: %v, falling back to stderr\n", err)
-		return &Logger{file: os.Stderr}
+		return stderrLogger()
 	}
 	return l
+}
+
+func stderrLogger() *Logger {
+	return &Logger{file: os.Stderr, write: (*os.File).Write}
 }
 
 func recoverChainState(path string) (prevHash string, chainIndex uint64, err error) {
@@ -230,51 +253,107 @@ func (l *Logger) SetRedactionPatterns(patterns []policy.RedactionPattern) {
 	}
 }
 
-func (l *Logger) Log(event Event) {
+func (l *Logger) Log(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	prepared, data, err := l.prepareCandidateLocked(event)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "audit logger: marshal error: %v\n", err)
+		return err
+	}
+	if err := l.writeRecordLocked(data); err != nil {
+		fmt.Fprintf(os.Stderr, "audit logger: write error: %v\n", err)
+		return err
+	}
+	l.prevHash = prepared.Hash
+	l.chainIndex++
+	return nil
+}
+
+// CommitAuthorization durably appends a terminal allow event to the hash-linked
+// JSONL ledger. It accepts only EventToolAllowed with Decision "allow", requires
+// a regular O_SYNC sink that has not been poisoned, and advances chain state
+// only after a full write. Existing O_SYNC is the durability boundary.
+func (l *Logger) CommitAuthorization(event Event) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if event.EventType != EventToolAllowed || event.Decision != "allow" {
+		return fmt.Errorf("authorization commit requires %s with decision allow", EventToolAllowed)
+	}
+	if !l.durable {
+		return ErrNonDurableSink
+	}
+	if l.poisoned {
+		return ErrAuditSinkUnhealthy
+	}
+
+	prepared, data, err := l.prepareCandidateLocked(event)
+	if err != nil {
+		return err
+	}
+	if err := l.writeRecordLocked(data); err != nil {
+		return err
+	}
+	l.prevHash = prepared.Hash
+	l.chainIndex++
+	return nil
+}
+
+func (l *Logger) prepareCandidateLocked(event Event) (Event, []byte, error) {
 	if event.Timestamp == "" {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-
 	if event.Arguments != nil {
 		event.Arguments = l.redactMap(event.Arguments)
 	}
-
 	event.ResultPreview = l.redactString(event.ResultPreview)
-
 	if event.Reason != "" {
 		event.Reason = l.redactString(event.Reason)
 	}
 
 	event.PrevHash = l.prevHash
 	event.ChainIndex = l.chainIndex
-	l.chainIndex++
 
-	hashData := l.eventHashPayload(event)
+	hashData, err := l.eventHashPayload(event)
+	if err != nil {
+		return Event{}, nil, err
+	}
 	h := sha256.Sum256(hashData)
 	event.Hash = hex.EncodeToString(h[:])
-	l.prevHash = event.Hash
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "audit logger: marshal error: %v\n", err)
-		return
+		return Event{}, nil, err
 	}
-
-	data = append(data, '\n')
-
-	if _, err := l.file.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "audit logger: write error: %v\n", err)
-	}
+	return event, append(data, '\n'), nil
 }
 
-func (l *Logger) eventHashPayload(event Event) []byte {
+func (l *Logger) writeRecordLocked(data []byte) error {
+	n, err := l.sinkWrite(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		l.poisoned = true
+		return err
+	}
+	return nil
+}
+
+func (l *Logger) sinkWrite(data []byte) (int, error) {
+	fn := l.write
+	if fn == nil {
+		fn = (*os.File).Write
+	}
+	return fn(l.file, data)
+}
+
+func (l *Logger) eventHashPayload(event Event) ([]byte, error) {
 	e := event
 	e.Hash = ""
-	data, _ := json.Marshal(e)
-	return data
+	return json.Marshal(e)
 }
 
 func (l *Logger) Close() error {

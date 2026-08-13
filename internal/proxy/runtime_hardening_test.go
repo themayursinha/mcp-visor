@@ -49,9 +49,11 @@ servers:
 
 func TestApprovalRequiredWithFileBackendAllowsAfterMarker(t *testing.T) {
 	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
 	p := New(Config{
-		ServerName:  "slack",
-		ApprovalDir: dir,
+		ServerName:   "slack",
+		ApprovalDir:  dir,
+		AuditLogPath: auditPath,
 		Policy: mustLoadPolicy(t, `
 version: "1.0"
 default_action: deny
@@ -348,12 +350,13 @@ servers:
 	}
 	defer w.Close()
 	p := New(Config{
-		ServerName:  "filesystem",
-		Policy:      w.Policy(),
-		Engine:      policy.NewEngineWithWatcher(w),
-		ApprovalDir: dir,
-		SessionID:   "snapshot-taint",
-		ClientID:    "agent-test",
+		ServerName:   "filesystem",
+		Policy:       w.Policy(),
+		Engine:       policy.NewEngineWithWatcher(w),
+		ApprovalDir:  dir,
+		AuditLogPath: filepath.Join(dir, "audit.jsonl"),
+		SessionID:    "snapshot-taint",
+		ClientID:     "agent-test",
 	})
 
 	requestSeen := make(chan string, 1)
@@ -527,7 +530,7 @@ func toolCallRaw(id int, name string, args map[string]any) json.RawMessage {
 		},
 	}
 	data, _ := json.Marshal(msg)
-	return append(data, '\n')
+	return data
 }
 
 func TestApprovalRequiredReleasesRuntimeBarrierBeforeWait(t *testing.T) {

@@ -628,3 +628,152 @@ func TestNewLoggerRejectsHashStrippedChainRecord(t *testing.T) {
 		t.Fatalf("expected ErrCorruptAuditRecord, got %v", err)
 	}
 }
+
+func allowCommitEvent() audit.Event {
+	return audit.Event{
+		EventType: audit.EventToolAllowed,
+		SessionID: "sess-commit",
+		AgentID:   "agent-commit",
+		Server:    "workspace",
+		Tool:      "file_read",
+		Decision:  "allow",
+		Reason:    "allowed by policy",
+	}
+}
+
+func TestCommitAuthorizationRejectsNonDurableSink(t *testing.T) {
+	l := audit.MustLogger("")
+	t.Cleanup(func() { _ = l.Close() })
+
+	err := l.CommitAuthorization(allowCommitEvent())
+	if !errors.Is(err, audit.ErrNonDurableSink) {
+		t.Fatalf("CommitAuthorization on stderr logger: want ErrNonDurableSink, got %v", err)
+	}
+
+	fallback := audit.MustLogger("/nonexistent/dir/should/fail/audit.jsonl")
+	t.Cleanup(func() { _ = fallback.Close() })
+	err = fallback.CommitAuthorization(allowCommitEvent())
+	if !errors.Is(err, audit.ErrNonDurableSink) {
+		t.Fatalf("CommitAuthorization on stderr fallback: want ErrNonDurableSink, got %v", err)
+	}
+}
+
+func TestCommitAuthorizationRejectsNonAllowEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	denied := audit.Event{
+		EventType: audit.EventToolDenied,
+		SessionID: "sess-commit",
+		Tool:      "file_read",
+		Decision:  "deny",
+	}
+	if err := l.CommitAuthorization(denied); err == nil {
+		t.Fatal("CommitAuthorization accepted EventToolDenied")
+	}
+	wrongDecision := allowCommitEvent()
+	wrongDecision.Decision = "deny"
+	if err := l.CommitAuthorization(wrongDecision); err == nil {
+		t.Fatal("CommitAuthorization accepted allow-type event with decision deny")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(bytes.TrimSpace(data)) != 0 {
+		t.Fatalf("rejected commit must not write, got %q", data)
+	}
+
+	if err := l.CommitAuthorization(allowCommitEvent()); err != nil {
+		t.Fatalf("subsequent valid commit: %v", err)
+	}
+	lines := readAuditLines(t, path)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line after valid commit, got %d", len(lines))
+	}
+	var ev audit.Event
+	if err := json.Unmarshal([]byte(lines[0]), &ev); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ev.ChainIndex != 0 {
+		t.Fatalf("rejected commits must not advance chain, chain_index=%d", ev.ChainIndex)
+	}
+}
+
+func TestCommitAuthorizationWriteFailurePoisonsLogger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if err := l.CommitAuthorization(allowCommitEvent()); err == nil {
+		t.Fatal("first commit on closed logger should fail")
+	}
+	if err := l.CommitAuthorization(allowCommitEvent()); !errors.Is(err, audit.ErrAuditSinkUnhealthy) {
+		t.Fatalf("second commit: want ErrAuditSinkUnhealthy, got %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(bytes.TrimSpace(data)) != 0 {
+		t.Fatalf("failed commits must not advance the ledger, got %q", data)
+	}
+}
+
+func TestCommitAuthorizationPreservesHashLinkage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	first := allowCommitEvent()
+	first.Tool = "file_read"
+	if err := l.CommitAuthorization(first); err != nil {
+		t.Fatalf("first commit: %v", err)
+	}
+	second := allowCommitEvent()
+	second.Tool = "http_post"
+	if err := l.CommitAuthorization(second); err != nil {
+		t.Fatalf("second commit: %v", err)
+	}
+
+	lines := readAuditLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 audit lines, got %d", len(lines))
+	}
+	var a, b audit.Event
+	if err := json.Unmarshal([]byte(lines[0]), &a); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &b); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	if a.ChainIndex != 0 {
+		t.Errorf("first chain_index: want 0, got %d", a.ChainIndex)
+	}
+	if b.ChainIndex != 1 {
+		t.Errorf("second chain_index: want 1, got %d", b.ChainIndex)
+	}
+	if b.PrevHash != a.Hash {
+		t.Errorf("prev_hash linkage: second.PrevHash=%q first.Hash=%q", b.PrevHash, a.Hash)
+	}
+	if got := recomputeAuditHash(t, a); got != a.Hash {
+		t.Errorf("first hash mismatch: recomputed %q stored %q", got, a.Hash)
+	}
+	if got := recomputeAuditHash(t, b); got != b.Hash {
+		t.Errorf("second hash mismatch: recomputed %q stored %q", got, b.Hash)
+	}
+}

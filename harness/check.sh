@@ -63,6 +63,13 @@ Covered by tests in this run:
 - H11 audit hash chain — \`TestAuditLogHashChain\`
 - H12 notification-form \`tools/call\` blocked, including duplicate-key parser differentials, JSON-RPC batches, leading whitespace, and the post-initialize handshake slot (stdio + remote); non-tools notifications and batches forward — see the H12 tests in \`harness/invariants.md\`
 - H13 denied handshake cleanup terminates a waiting stdio server — \`TestStopServerProcessTerminatesWaitingChild\`
+- H14 plain allowed \`tools/call\` emits a standalone JSONL audit event — \`TestAllowedToolsCallEmitsStandaloneJSONLAuditEvent\`
+- H15 terminal-only redaction audit — \`TestRedactionDoesNotEmitPrematureAllowAudit\`, \`TestDeniedAfterRedactionEmitsOnlyDenyAudit\`
+- H16 TLS fail-closed + concurrent HTTP SSE read/write — \`internal/transport/transport_test.go\`
+- H17 atomic hot reload — \`internal/proxy/hot_reload_test.go\`
+- H18 SIEM JSON export is not a JSONL substitute — \`internal/siem/siem_test.go\`
+- H19 durable authorization-commit before relay — \`internal/proxy/tools_call_authorization_commit_test.go\` + \`internal/audit/logger_commit_internal_test.go\`
+- H20 stdio server identity attestation — see the H20 tests in \`harness/invariants.md\`
 
 ## Result
 

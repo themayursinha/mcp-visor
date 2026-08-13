@@ -1,0 +1,67 @@
+{
+  "task_id": "T-AUDIT-001-authorization-commit",
+  "invariant_ids": ["H11", "H14", "H15", "H19"],
+  "security_sensitive": true,
+  "security_problem": "A valid tools/call can reach the downstream stdio or remote transport even when its final allow event was never durably appended to the hash-linked JSONL audit ledger: Logger.Log swallows write/short-write errors and advances chain state before the write is known to have succeeded, and all three terminal allow branches forward unconditionally after best-effort logging.",
+  "required_behavior": "For every valid tools/call C, downstream_transport_received(C) implies a full, hash-linked EventToolAllowed record for C completed on the configured regular O_SYNC JSONL ledger before the downstream write began. Logger.CommitAuthorization accepts only terminal allow events, requires a regular durable sink, performs a full-write check, poisons the logger on write/short-write failure, and advances hash-chain state only after success. Approved, explicit, and default/fallback allow branches commit before returning \"forward\"; any commit failure produces a generic client deny and zero stdio/remote relay. Metrics and session taints mutate only after commit success. Omitted/invalid AuditLogPath fails closed.",
+  "failure_behavior": "Fail closed: sink failure, short write, closed logger, non-durable sink, or poisoned logger denies the valid tools/call with no relay on either transport.",
+  "allowed_paths": [
+    "harness/tasks/T-AUDIT-001-authorization-commit.json",
+    "harness/invariants.md",
+    "harness/check.sh",
+    "harness/project-contract.md",
+    "internal/audit/logger.go",
+    "internal/audit/logger_test.go",
+    "internal/audit/logger_commit_internal_test.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/tools_call_authorization_commit_test.go",
+    "internal/proxy/session_taint_test.go",
+    "internal/proxy/tools_call_audit_test.go",
+    "internal/proxy/tools_call_audit_terminal_test.go",
+    "internal/proxy/tools_call_envelope_test.go",
+    "internal/proxy/hot_reload_test.go",
+    "internal/proxy/runtime_hardening_test.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_reload_order_test.go",
+    "internal/proxy/server_identity_reload_reconcile_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/tracing_test.go",
+    "tests/integration"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/audit/logger_test.go",
+    "internal/proxy/tools_call_authorization_commit_test.go",
+    "internal/proxy/session_taint_test.go",
+    "tests/integration"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/proxy", "-run", "^TestAuditCommitFailureFailClosedNoRelay$", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/audit", "./internal/proxy", "-run", "TestCommitAuthorization|TestAllowRequiresDurableAuditBeforeDownstream|TestAuditCommitFailureFailClosedNoRelay|TestApprovedAllowRequiresDurableAuditBeforeDownstream|TestNonDurableAuditSinkFailClosedNoRelay|TestAuditCommitFailureFailClosedRemoteNoRelay", "-count=1"]
+    },
+    {
+      "name": "race",
+      "expect": "pass",
+      "argv": ["go", "test", "-race", "./internal/audit", "./internal/proxy", "-run", "TestCommitAuthorization|TestAllowRequiresDurableAuditBeforeDownstream|TestAuditCommitFailureFailClosedNoRelay|TestApprovedAllowRequiresDurableAuditBeforeDownstream|TestNonDurableAuditSinkFailClosedNoRelay|TestAuditCommitFailureFailClosedRemoteNoRelay", "-count=1"]
+    },
+    {
+      "name": "full_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}

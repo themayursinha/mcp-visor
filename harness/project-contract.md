@@ -10,7 +10,7 @@ MCP Visor is a deterministic MCP proxy for valid JSON-RPC `tools/call` requests 
 2. **No LLM in decisions** — Allow, deny, redact, chain, and approval gating are rule-based only.
 3. **Single request enforcement path** — Stdio and remote transports share processing for valid `tools/call` requests with IDs. Remote transport remains experimental.
 4. **Startup parse/schema failure is closed** — Invalid YAML and schema errors prevent startup. Lint is supplemental, not a complete fail-closed gate: the linter-only composite rule passes strict mode, and `--strict --no-warnings` can suppress warning failures.
-5. **Audit selected security events** — Denies, approvals, chain detections, argument redactions, session taints, and session lifecycle emit structured events. Plain allows and output-only redaction do not yet have standalone JSONL events.
+5. **Audit selected security events** — Denies, approvals, chain detections, argument redactions, session taints, and session lifecycle emit structured events. Plain allows emit a standalone JSONL event that must be durably committed to the configured regular `O_SYNC` audit ledger **before** the `tools/call` is relayed downstream (H19 authorization-commit): a failed, short, non-durable, closed, or poisoned ledger append denies the call with zero relay on both transports. Output-only redaction has no standalone event beyond the terminal decision.
 6. **OTLP excludes raw argument maps, not all argument-derived data** — spans omit the argument object, but `policy.reason` can contain values such as a denied path. Trace/dashboard surfaces can expose additional redacted-but-sensitive data.
 
 ## Public CLI contract (stable)

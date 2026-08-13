@@ -150,7 +150,7 @@ func TestAllowedFileAccess(t *testing.T) {
 	visor := buildVisor(t)
 	policyFile := writeRestrictivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile, "-audit-log", tempAuditLog(t))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -361,7 +361,7 @@ func TestMultipleToolCalls(t *testing.T) {
 	visor := buildVisor(t)
 	policyFile := writeRestrictivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile, "-audit-log", tempAuditLog(t))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)

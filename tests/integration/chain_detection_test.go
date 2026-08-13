@@ -68,7 +68,7 @@ func startVisorWithChainPolicy(t *testing.T, mockServer string) (*exec.Cmd, *buf
 	visor := buildVisor(t)
 	policyFile := writeChainPolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile, "-audit-log", tempAuditLog(t))
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

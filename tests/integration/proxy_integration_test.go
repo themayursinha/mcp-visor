@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -44,6 +45,11 @@ func buildVisor(t *testing.T) string {
 	}
 	t.Cleanup(func() { os.Remove(tmp.Name()) })
 	return tmp.Name()
+}
+
+func tempAuditLog(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "audit.jsonl")
 }
 
 func writePermissivePolicy(t *testing.T, serverPath string) string {
@@ -186,7 +192,7 @@ func TestProxyIntegrationToolsCall(t *testing.T) {
 	visor := buildVisor(t)
 	policyFile := writePermissivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile, "-audit-log", tempAuditLog(t))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -256,7 +262,7 @@ func TestProxyIntegrationNotificationToolsCallNotRelayed(t *testing.T) {
 	visor := buildVisor(t)
 	policyFile := writePermissivePolicy(t, mockServer)
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile, "-audit-log", tempAuditLog(t))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)

@@ -278,57 +278,92 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
-		p.logAudit(allowEvent)
+		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			return p.denyAuthorizationCommit(req, raw, respond, release, err, serverName, callReq.Name, risk, chainTriggered, started)
+		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
 		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
 		p.metrics.IncrementApproved()
+		p.forwardAudit(allowEvent)
 		p.observeToolCall("approved", "approved by human operator", serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	case policy.ActionAllow:
-		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
 		allowEvent := audit.Event{
-			EventType: audit.EventToolAllowed,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  string(policy.ActionAllow),
-			Reason:    reason,
-			RiskLevel: string(risk),
+			EventType:   audit.EventToolAllowed,
+			SessionID:   p.session.ID,
+			AgentID:     p.cfg.ClientID,
+			Server:      serverName,
+			Tool:        callReq.Name,
+			Arguments:   redactedArgs,
+			Decision:    string(policy.ActionAllow),
+			Reason:      reason,
+			RiskLevel:   string(risk),
+			RequestHash: sha256Hex(originalRaw),
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
-		p.audit.Log(allowEvent)
+		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			return p.denyAuthorizationCommit(req, raw, respond, release, err, serverName, callReq.Name, risk, chainTriggered, started)
+		}
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
+		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(allowEvent)
 		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	default:
-		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
 		defaultAllowEvent := audit.Event{
-			EventType: audit.EventToolAllowed,
-			SessionID: p.session.ID,
-			AgentID:   p.cfg.ClientID,
-			Server:    serverName,
-			Tool:      callReq.Name,
-			Arguments: redactedArgs,
-			Decision:  string(policy.ActionAllow),
-			Reason:    reason,
-			RiskLevel: string(risk),
+			EventType:   audit.EventToolAllowed,
+			SessionID:   p.session.ID,
+			AgentID:     p.cfg.ClientID,
+			Server:      serverName,
+			Tool:        callReq.Name,
+			Arguments:   redactedArgs,
+			Decision:    string(policy.ActionAllow),
+			Reason:      reason,
+			RiskLevel:   string(risk),
+			RequestHash: sha256Hex(originalRaw),
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
-		p.audit.Log(defaultAllowEvent)
+		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
+			return p.denyAuthorizationCommit(req, raw, respond, release, err, serverName, callReq.Name, risk, chainTriggered, started)
+		}
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
+		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(defaultAllowEvent)
 		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 	}
+}
+
+const durableAuthCommitFailed = "execution denied: durable authorization audit commit failed"
+
+func (p *Proxy) denyAuthorizationCommit(
+	req mcp.Request,
+	raw json.RawMessage,
+	respond toolsCallResponder,
+	release func(),
+	commitErr error,
+	serverName, tool string,
+	risk policy.RiskLevel,
+	chainTriggered bool,
+	started time.Time,
+) (json.RawMessage, string) {
+	release()
+	respond(req.ID, durableAuthCommitFailed)
+	p.metrics.IncrementDenied()
+	p.logger.Error("durable authorization audit commit failed",
+		"error", commitErr,
+		"tool", tool,
+		"server", serverName,
+		"session", p.session.ID,
+	)
+	p.observeToolCall("denied", durableAuthCommitFailed, serverName, tool, string(risk), chainTriggered, started)
+	return raw, "denied"
 }
 
 func withRedactionNote(reason string, result redaction.Result) string {
