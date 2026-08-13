@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -52,6 +53,88 @@ func TestCommitAuthorizationShortWriteDoesNotAdvanceChain(t *testing.T) {
 		Decision:  "allow",
 	}); !errors.Is(err, ErrAuditSinkUnhealthy) {
 		t.Fatalf("commit after short-write poison: want ErrAuditSinkUnhealthy, got %v", err)
+	}
+}
+
+// TestNewLoggerSyncsParentDirOnCreate proves the Codex P1 directory-sync fix:
+// when NewLogger creates a fresh audit file, the parent directory must be
+// synced (making the filename->inode entry durable) before any authorization
+// commit is permitted. The sync must happen exactly once on creation and not
+// on reopens of an existing file.
+func TestNewLoggerSyncsParentDirOnCreate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	var (
+		mu         sync.Mutex
+		syncedDirs []string
+	)
+	syncDir = func(f *os.File) error {
+		mu.Lock()
+		defer mu.Unlock()
+		syncedDirs = append(syncedDirs, f.Name())
+		return f.Sync()
+	}
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+	l, err := NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger (create): %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	mu.Lock()
+	createdSyncs := append([]string(nil), syncedDirs...)
+	mu.Unlock()
+	if len(createdSyncs) != 1 {
+		t.Fatalf("parent dir sync on create: want 1, got %d (%v)", len(createdSyncs), createdSyncs)
+	}
+	if createdSyncs[0] != dir {
+		t.Fatalf("parent dir sync: want %q, got %q", dir, createdSyncs[0])
+	}
+
+	// Reopen the existing file: the directory entry already exists, so no
+	// additional directory sync is permitted.
+	reopened, err := NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger (reopen): %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	mu.Lock()
+	totalSyncs := len(syncedDirs)
+	mu.Unlock()
+	if totalSyncs != 1 {
+		t.Fatalf("directory sync on reopen of existing file: want 1 total, got %d", totalSyncs)
+	}
+
+	if err := l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-sync",
+		Tool:      "file_read",
+		Decision:  "allow",
+	}); err != nil {
+		t.Fatalf("commit after create+sync: %v", err)
+	}
+}
+
+// TestNewLoggerFailClosedOnParentDirSyncError proves the fail-closed half of
+// the Codex P1 fix: if the parent directory cannot be synced after creating
+// the audit file, NewLogger must refuse to start (an authorization commit must
+// never be permitted while the audit entry may vanish on reboot).
+func TestNewLoggerFailClosedOnParentDirSyncError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	syncErr := errors.New("injected parent dir sync failure")
+	syncDir = func(f *os.File) error { return syncErr }
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+	if _, err := NewLogger(path); !errors.Is(err, syncErr) {
+		t.Fatalf("NewLogger with failing parent dir sync: want injected error, got %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("fail-closed NewLogger must not leave a half-created audit file (got %v)", err)
 	}
 }
 

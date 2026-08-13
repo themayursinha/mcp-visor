@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
@@ -94,11 +95,18 @@ type Logger struct {
 	write func(f *os.File, data []byte) (int, error)
 }
 
+// syncDir is an unexported seam for package-audit tests to assert and inject
+// the parent-directory fsync that makes a newly created audit file's
+// directory entry durable. Constructors default it to (*os.File).Sync.
+var syncDir = func(f *os.File) error { return f.Sync() }
+
 func NewLogger(path string) (*Logger, error) {
 	prevHash, chainIndex, err := recoverChainState(path)
 	if err != nil {
 		return nil, err
 	}
+	_, statErr := os.Stat(path)
+	created := os.IsNotExist(statErr)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_SYNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
@@ -108,6 +116,20 @@ func NewLogger(path string) (*Logger, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("stat audit log: %w", err)
 	}
+	if created {
+		// The audit file did not exist before this open, so O_CREATE just
+		// created it. The O_SYNC data write does not persist the filename->
+		// inode directory entry; without syncing the parent directory, a
+		// power loss shortly after the first authorization could make the
+		// durable record vanish on reboot. Sync the parent directory before
+		// any authorization commit is permitted, and fail closed if the
+		// directory cannot be opened or synced.
+		if err := syncParentDir(path); err != nil {
+			_ = f.Close()
+			_ = os.Remove(path)
+			return nil, fmt.Errorf("sync audit log parent directory: %w", err)
+		}
+	}
 	return &Logger{
 		path:       path,
 		file:       f,
@@ -116,6 +138,24 @@ func NewLogger(path string) (*Logger, error) {
 		durable:    st.Mode().IsRegular(),
 		write:      (*os.File).Write,
 	}, nil
+}
+
+// syncParentDir makes the directory entry for a newly created audit file
+// durable by fsyncing its parent directory. It opens the directory read-only,
+// syncs it, and closes it; any failure is returned so NewLogger can fail
+// closed rather than permit an authorization commit whose audit record could
+// disappear on reboot.
+func syncParentDir(path string) error {
+	parent := filepath.Dir(path)
+	if parent == "" {
+		parent = "."
+	}
+	dir, err := os.Open(parent)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return syncDir(dir)
 }
 
 func MustLogger(path string) *Logger {
