@@ -30,6 +30,10 @@ type Watcher struct {
 
 	fw   *fsnotify.Watcher
 	done chan struct{}
+
+	// reloadStall is a test-only seam invoked immediately before the locked
+	// committer decision during reload. Production leaves it nil.
+	reloadStall func()
 }
 
 func NewWatcher(path string) (*Watcher, error) {
@@ -131,9 +135,16 @@ func (w *Watcher) reload() {
 	reg := NewRegistry(pol)
 
 	w.mu.RLock()
-	committer := w.committer
-	hooks := append([]ReloadHook(nil), w.hooks...)
+	stall := w.reloadStall
 	w.mu.RUnlock()
+
+	// Test seam: hold an in-flight reload that began before committer
+	// registration so the locked decision below can observe a committer
+	// installed concurrently (or a completed nil-committer publish can be
+	// reconciled after SetReloadCommitter returns).
+	if stall != nil {
+		stall()
+	}
 
 	var publishOnce sync.Once
 	publish := func() {
@@ -145,13 +156,20 @@ func (w *Watcher) reload() {
 		})
 	}
 
-	// A committer holds the proxy's call barrier while it publishes this policy
-	// and refreshes its dependent runtime surfaces. Without one, publish first so
-	// observers always see a complete watcher snapshot.
-	if committer != nil {
-		committer(pol, publish)
+	// Hold the lock across the nil-committer publish decision so:
+	// 1. an in-flight reload re-reads a committer registered after LoadFile,
+	// 2. SetReloadCommitter cannot observe a committed generation that
+	//    bypassed the atomic runtime transaction.
+	w.mu.Lock()
+	committer := w.committer
+	hooks := append([]ReloadHook(nil), w.hooks...)
+	if committer == nil {
+		w.policy = pol
+		w.registry = reg
+		w.mu.Unlock()
 	} else {
-		publish()
+		w.mu.Unlock()
+		committer(pol, publish)
 	}
 
 	for _, hook := range hooks {
@@ -181,11 +199,23 @@ func (w *Watcher) OnReload(hook ReloadHook) {
 
 // SetReloadCommitter installs the single transaction responsible for publishing
 // the watcher snapshot with dependent runtime surfaces. It is configured during
-// proxy construction, before the watcher is used for live reloads.
-func (w *Watcher) SetReloadCommitter(committer ReloadCommitter) {
+// proxy construction, before the watcher is used for live reloads. It returns
+// the watcher's currently published policy so the caller can reconcile runtime
+// surfaces that may already have advanced via a nil-committer publish.
+func (w *Watcher) SetReloadCommitter(committer ReloadCommitter) *Policy {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.committer = committer
+	return w.policy
+}
+
+// SetReloadStallForTest installs a synchronous stall invoked during reload.
+// Production code must leave this nil; it exists so tests can hold an
+// in-flight reload across committer registration without sleeps.
+func (w *Watcher) SetReloadStallForTest(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.reloadStall = fn
 }
 
 func (w *Watcher) Reload() {

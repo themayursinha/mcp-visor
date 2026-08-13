@@ -74,25 +74,22 @@ func (e *Engine) OnReload(hook ReloadHook) {
 
 // SetReloadCommitter installs the transaction that publishes an engine policy
 // with dependent runtime surfaces. With a watcher, it delegates to the watcher.
-func (e *Engine) SetReloadCommitter(committer ReloadCommitter) {
+// It returns the currently published policy so callers can reconcile runtime
+// surfaces after registration.
+func (e *Engine) SetReloadCommitter(committer ReloadCommitter) *Policy {
 	if e.watcher != nil {
-		e.watcher.SetReloadCommitter(committer)
-		return
+		return e.watcher.SetReloadCommitter(committer)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.committer = committer
+	return e.policy
 }
 
 func (e *Engine) Reload(p *Policy) {
 	if p == nil {
 		return
 	}
-	e.mu.RLock()
-	committer := e.committer
-	hooks := append([]ReloadHook(nil), e.hooks...)
-	e.mu.RUnlock()
-
 	var publishOnce sync.Once
 	publish := func() {
 		publishOnce.Do(func() {
@@ -102,10 +99,21 @@ func (e *Engine) Reload(p *Policy) {
 			e.mu.Unlock()
 		})
 	}
-	if committer != nil {
-		committer(p, publish)
+
+	// Hold the lock across the nil-committer publish decision so a concurrent
+	// SetReloadCommitter cannot observe a committed generation without the
+	// committer installed, and so an in-flight reload re-reads a committer
+	// registered while LoadFile was running.
+	e.mu.Lock()
+	committer := e.committer
+	hooks := append([]ReloadHook(nil), e.hooks...)
+	if committer == nil {
+		e.policy = p
+		e.registry = NewRegistry(p)
+		e.mu.Unlock()
 	} else {
-		publish()
+		e.mu.Unlock()
+		committer(p, publish)
 	}
 	for _, hook := range hooks {
 		if hook != nil {

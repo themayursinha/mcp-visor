@@ -174,6 +174,7 @@ func New(cfg Config) *Proxy {
 	p := cfg.Policy
 	if p == nil {
 		p = policy.DefaultPolicy()
+		cfg.Policy = p
 	}
 
 	al := audit.MustLogger(cfg.AuditLogPath)
@@ -228,6 +229,7 @@ func NewWithTracing(cfg Config) *Proxy {
 	p := cfg.Policy
 	if p == nil {
 		p = policy.DefaultPolicy()
+		cfg.Policy = p
 	}
 
 	al := audit.MustLogger(cfg.AuditLogPath)
@@ -351,11 +353,17 @@ func (p *Proxy) prepareIdentity(pol *policy.Policy) (serveridentity.Resolved, bo
 }
 
 // wirePolicyReload attaches an atomic policy/runtime transaction to reloads.
+// After registration it reconciles runtime surfaces with the watcher's current
+// published generation so a nil-committer reload that completed before
+// registration cannot leave redactor/audit/approval on the prior generation.
 func (p *Proxy) wirePolicyReload() {
 	if p.engine == nil {
 		return
 	}
-	p.engine.SetReloadCommitter(p.commitPolicyRuntime)
+	current := p.engine.SetReloadCommitter(p.commitPolicyRuntime)
+	if current != nil && current != p.cfg.Policy {
+		p.commitPolicyRuntime(current, func() {})
+	}
 }
 
 // commitPolicyRuntime publishes the policy snapshot and refreshes redactor,
