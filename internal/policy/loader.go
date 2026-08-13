@@ -3,9 +3,13 @@ package policy
 import (
 	"fmt"
 	"os"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
+
+// serverAttestationDigestRe validates the pinned stdio invocation digest.
+var serverAttestationDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func LoadFile(path string) (*Policy, error) {
 	data, err := os.ReadFile(path)
@@ -90,6 +94,25 @@ func (p *Policy) Validate() error {
 			return fmt.Errorf("duplicate server: %s", srv.Name)
 		}
 		seenServers[srv.Name] = true
+
+		if srv.Attestation != nil {
+			if srv.Attestation.Kind != "stdio_invocation_sha256_v1" {
+				return fmt.Errorf("server %s: unsupported attestation kind '%s' (supported: stdio_invocation_sha256_v1)", srv.Name, srv.Attestation.Kind)
+			}
+			if !serverAttestationDigestRe.MatchString(srv.Attestation.Digest) {
+				return fmt.Errorf("server %s: attestation digest must match sha256:<64 lowercase hex>", srv.Name)
+			}
+			seenPos := make(map[int]bool)
+			for _, pos := range srv.Attestation.EntryArgPositions {
+				if pos < 0 {
+					return fmt.Errorf("server %s: attestation entry_arg_positions must be non-negative, got %d", srv.Name, pos)
+				}
+				if seenPos[pos] {
+					return fmt.Errorf("server %s: duplicate attestation entry_arg_positions %d", srv.Name, pos)
+				}
+				seenPos[pos] = true
+			}
+		}
 
 		seenTools := make(map[string]bool)
 		for j, tool := range srv.Tools {

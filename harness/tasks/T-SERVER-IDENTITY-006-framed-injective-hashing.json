@@ -1,0 +1,68 @@
+{
+  "task_id": "T-SERVER-IDENTITY-006-framed-injective-hashing",
+  "invariant_ids": ["H20"],
+  "security_sensitive": true,
+  "security_problem": "Round-7 Codex P1: the stdio invocation digest is built by concatenating executable bytes and each literal argv value with NUL separator bytes. The serialization is not injective: executable X with args [\"--safe\"] hashes identically to a different executable whose content is X + NUL + \"--safe\" with no args; args [\"a\",\"b\"] hash identically to a single arg \"a\\x00b\"; and identical bytes can be interpreted interchangeably as executable content or argument content. An attacker who controls the on-disk artifact (or a confusing policy author) can therefore construct a different invocation that satisfies a pin on the intended one.",
+  "required_behavior": "The stdio invocation digest is computed over a versioned, injectively framed serialization (kind stdio_invocation_sha256_v1): each component carries a domain tag, a fixed-width big-endian index (ordinal position for argv, declared arg position for entry payloads), an explicit byte length, and the exact bytes; the serialization is prefixed by a format-marker field. Different component structures never serialize to the same hash input: executable+argv differs from an executable embedding the same bytes; [a b] differs from [a\\x00b]; reordered args differ; identical bytes in the executable-content domain vs the argument domain differ; identical payload files at different declared entry positions differ; payload mutation changes the digest; and resolution is deterministic across repeats. The policy loader accepts exactly one attestation kind (stdio_invocation_sha256_v1) and rejects unknown and legacy scheme names. The executable field streams bytes under the length declared by the same Stat that validated the artifact, and a size change between Stat and read fails closed. All prior round-1 through round-6 behavior is preserved: immutable launch identity, restart-bound replacement/introduction, changed-shape fail closed, normalized-order compatibility, single-snapshot launch shape, no-attestation zero resolver work, approval allow/signing-failure snapshots, all 11 canonical registry-runner rejects, undeclared runtime files never hashed, entry-artifact-not-transitive boundary, no argument leak on identity denial, and confused-deputy demo behavior.",
+  "failure_behavior": "Fail closed for tools/call when the framed serialization is not injective (never allow a different invocation structure to satisfy a pin); reject unknown or legacy attestation kinds at policy load; fail closed if a declared entry or launcher artifact changes size during resolution.",
+  "allowed_paths": [
+    "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
+    "harness/tasks/T-SERVER-IDENTITY-002-registry-runners.json",
+    "harness/tasks/T-SERVER-IDENTITY-003-declared-entry-payloads.json",
+    "harness/tasks/T-SERVER-IDENTITY-004-process-bound-snapshot.json",
+    "harness/tasks/T-SERVER-IDENTITY-005-single-snapshot-launch.json",
+    "harness/tasks/T-SERVER-IDENTITY-006-framed-injective-hashing.json",
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity",
+    "internal/audit/logger.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/confuseddeputydemo",
+    "examples/confused-deputy-demo",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity/framing_collision_test.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/serveridentity", "-run", "TestFramingCodexExecutableArgCollision|TestFramingArgumentNULNotBoundary", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestFraming|TestServerIdentity|TestResolveStdioInvocation", "-count=1"]
+    },
+    {
+      "name": "demo_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}

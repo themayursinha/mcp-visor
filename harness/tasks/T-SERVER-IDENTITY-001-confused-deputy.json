@@ -1,0 +1,57 @@
+{
+  "task_id": "T-SERVER-IDENTITY-001-confused-deputy",
+  "invariant_ids": ["H20"],
+  "security_sensitive": true,
+  "security_problem": "Untrusted MCP metadata can steer a call to a process that reuses an allowed logical server name without proving the invoked server artifact identity.",
+  "required_behavior": "A configured stdio invocation digest binds a locally resolved launcher executable and local payload file content selected by the args, and is checked before all argument-dependent authorization and relay; mismatch or unresolved identity denies with identity-bound audit evidence; recognized dynamic registry launchers (npx, uvx, npm exec) are unpinnable and fail closed when attestation is configured; a matching local digest passes without false denial.",
+  "failure_behavior": "Fail closed for tools/call when attestation is configured and identity resolution is missing, unsupported, or mismatched.",
+  "allowed_paths": [
+    "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity",
+    "internal/audit/logger.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/confuseddeputydemo",
+    "examples/confused-deputy-demo",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/engine_test.go",
+    "internal/proxy/server_identity_test.go",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/proxy", "-run", "TestServerIdentity", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity", "-count=1"]
+    },
+    {
+      "name": "demo_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}

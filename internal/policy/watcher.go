@@ -30,6 +30,14 @@ type Watcher struct {
 
 	fw   *fsnotify.Watcher
 	done chan struct{}
+
+	// reloadStall is a test-only seam invoked immediately before the locked
+	// committer decision during reload. Production leaves it nil.
+	reloadStall func()
+
+	// registrationStall is a test-only seam invoked after the registration
+	// transaction releases the watcher lock. Production leaves it nil.
+	registrationStall func()
 }
 
 func NewWatcher(path string) (*Watcher, error) {
@@ -131,9 +139,16 @@ func (w *Watcher) reload() {
 	reg := NewRegistry(pol)
 
 	w.mu.RLock()
-	committer := w.committer
-	hooks := append([]ReloadHook(nil), w.hooks...)
+	stall := w.reloadStall
 	w.mu.RUnlock()
+
+	// Test seam: hold an in-flight reload that began before committer
+	// registration so the locked decision below can observe a committer
+	// installed concurrently (or so a completed nil-committer publish can be
+	// reconciled inside SetReloadCommitter before later reloads publish).
+	if stall != nil {
+		stall()
+	}
 
 	var publishOnce sync.Once
 	publish := func() {
@@ -145,13 +160,22 @@ func (w *Watcher) reload() {
 		})
 	}
 
-	// A committer holds the proxy's call barrier while it publishes this policy
-	// and refreshes its dependent runtime surfaces. Without one, publish first so
-	// observers always see a complete watcher snapshot.
-	if committer != nil {
-		committer(pol, publish)
+	// Hold the lock across the nil-committer publish decision so:
+	// 1. an in-flight reload re-reads a committer registered after LoadFile,
+	// 2. SetReloadCommitter cannot observe a committed generation that
+	//    bypassed the atomic runtime transaction,
+	// 3. SetReloadCommitter's install+reconcile transaction excludes any
+	//    later reload from publishing until reconciliation finishes.
+	w.mu.Lock()
+	committer := w.committer
+	hooks := append([]ReloadHook(nil), w.hooks...)
+	if committer == nil {
+		w.policy = pol
+		w.registry = reg
+		w.mu.Unlock()
 	} else {
-		publish()
+		w.mu.Unlock()
+		committer(pol, publish)
 	}
 
 	for _, hook := range hooks {
@@ -180,12 +204,46 @@ func (w *Watcher) OnReload(hook ReloadHook) {
 }
 
 // SetReloadCommitter installs the single transaction responsible for publishing
-// the watcher snapshot with dependent runtime surfaces. It is configured during
-// proxy construction, before the watcher is used for live reloads.
-func (w *Watcher) SetReloadCommitter(committer ReloadCommitter) {
+// the watcher snapshot with dependent runtime surfaces and reconciles the
+// currently published generation before returning.
+//
+// The install and reconcile run under w.mu, which is the same lock reload()
+// must acquire before publishing. That is the happens-before:
+// a later reload cannot snapshot the committer or publish until reconcile
+// returns. reconcile must refresh dependent runtime surfaces without calling
+// publish() or any Watcher method that acquires w.mu (the already-authoritative
+// snapshot must not be re-published, or the same goroutine deadlocks).
+func (w *Watcher) SetReloadCommitter(committer ReloadCommitter, reconcile func(*Policy)) {
+	w.mu.Lock()
+	w.committer = committer
+	current := w.policy
+	stall := w.registrationStall
+	if reconcile != nil {
+		reconcile(current)
+	}
+	w.mu.Unlock()
+	if stall != nil {
+		stall()
+	}
+}
+
+// SetReloadStallForTest installs a synchronous stall invoked during reload.
+// Production code must leave this nil; it exists so tests can hold an
+// in-flight reload across committer registration without sleeps.
+func (w *Watcher) SetReloadStallForTest(fn func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.committer = committer
+	w.reloadStall = fn
+}
+
+// SetRegistrationStallForTest installs a synchronous stall invoked after the
+// registration transaction (install + reconcile) has released the watcher lock.
+// Production code must leave this nil. Tests use it to run a subsequent reload
+// that must not be overwritten by a stale post-return reconciliation.
+func (w *Watcher) SetRegistrationStallForTest(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.registrationStall = fn
 }
 
 func (w *Watcher) Reload() {

@@ -932,3 +932,198 @@ time_restrictions:
 		}
 	}
 }
+
+func TestServerIdentityPolicyAcceptsPinnedStdioSHA256(t *testing.T) {
+	valid := "sha256:" + strings.Repeat("a", 64)
+	p, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "%s"
+`, valid)))
+	if err != nil {
+		t.Fatalf("pinned stdio sha256 policy must load: %v", err)
+	}
+	if len(p.Servers) != 1 || p.Servers[0].Attestation == nil {
+		t.Fatalf("expected parsed attestation, got %+v", p.Servers)
+	}
+	if p.Servers[0].Attestation.Kind != "stdio_invocation_sha256_v1" {
+		t.Fatalf("unexpected kind: %s", p.Servers[0].Attestation.Kind)
+	}
+	if p.Servers[0].Attestation.Digest != valid {
+		t.Fatalf("unexpected digest: %s", p.Servers[0].Attestation.Digest)
+	}
+}
+
+func TestServerIdentityPolicyRejectsUnsupportedKind(t *testing.T) {
+	for _, kind := range []string{
+		"tpm_quote",
+		// Round-7: the old unversioned scheme name is no longer accepted;
+		// exactly one supported scheme exists (stdio_invocation_sha256_v1).
+		"stdio_executable_sha256",
+	} {
+		_, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "%s"
+      digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+`, kind)))
+		if err == nil {
+			t.Fatalf("unsupported attestation kind %q must fail policy load", kind)
+		}
+	}
+}
+
+func TestServerIdentityPolicyRejectsMalformedDigest(t *testing.T) {
+	for _, digest := range []string{
+		"sha256:ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123AB",
+		"sha256:" + strings.Repeat("a", 63),
+		"md5:" + strings.Repeat("a", 32),
+		"",
+	} {
+		_, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "%s"
+`, digest)))
+		if err == nil {
+			t.Fatalf("malformed digest %q must fail policy load", digest)
+		}
+	}
+}
+
+func TestServerIdentityPolicyRejectsIncompleteAttestation(t *testing.T) {
+	_, err := policy.Load([]byte(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    attestation: {}
+`))
+	if err == nil {
+		t.Fatal("incomplete attestation must fail policy load")
+	}
+}
+
+func TestServerIdentityPolicyKeepsLegacyServerValid(t *testing.T) {
+	p, err := policy.Load([]byte(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    tools:
+      - name: "open_ticket"
+        allowed: true
+`))
+	if err != nil {
+		t.Fatalf("legacy server without attestation must remain valid: %v", err)
+	}
+	if p.Servers[0].Attestation != nil {
+		t.Fatal("legacy server must not gain an attestation")
+	}
+}
+
+// Round-4 RED: a pinned server may declare entry_arg_positions as zero-based
+// indexes into ServerArgs excluding the executable. Single and multiple
+// declared positions load and round-trip into the policy structure.
+func TestServerIdentityPolicyAcceptsDeclaredEntryPositions(t *testing.T) {
+	valid := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name     string
+		yaml     string
+		expected []int
+	}{
+		{"omitted", `attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "` + valid + `"`, nil},
+		{"single zero", `attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "` + valid + `"
+      entry_arg_positions: [0]`, []int{0}},
+		{"multiple positions", `attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "` + valid + `"
+      entry_arg_positions: [0, 2]`, []int{0, 2}},
+		{"explicit empty", `attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "` + valid + `"
+      entry_arg_positions: []`, []int{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    %s
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        risk: low
+`, tt.yaml)))
+			if err != nil {
+				t.Fatalf("policy with declared entry positions must load: %v", err)
+			}
+			got := p.Servers[0].Attestation.EntryArgPositions
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected positions %v, got %v", tt.expected, got)
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Fatalf("expected positions %v, got %v", tt.expected, got)
+				}
+			}
+		})
+	}
+}
+
+// Round-4 RED: negative and duplicate declared entry positions must fail
+// policy load with a server-specific error.
+func TestServerIdentityPolicyRejectsInvalidEntryPositions(t *testing.T) {
+	valid := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"negative", `attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "` + valid + `"
+      entry_arg_positions: [-1]`},
+		{"duplicate", `attestation:
+      kind: "stdio_invocation_sha256_v1"
+      digest: "` + valid + `"
+      entry_arg_positions: [1, 1]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := policy.Load([]byte(fmt.Sprintf(`version: "1.0"
+default_action: deny
+servers:
+  - name: "it-support"
+    allowed: true
+    %s
+    tools:
+      - name: "open_ticket"
+        allowed: true
+        risk: low
+`, tt.yaml)))
+			if err == nil {
+				t.Fatalf("invalid entry_arg_positions must fail policy load")
+			}
+			if !strings.Contains(err.Error(), "it-support") {
+				t.Fatalf("expected server-specific validation error, got %v", err)
+			}
+		})
+	}
+}

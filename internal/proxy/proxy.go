@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
+	"github.com/themayursinha/mcp-visor/internal/serveridentity"
 	"github.com/themayursinha/mcp-visor/internal/siem"
 	"github.com/themayursinha/mcp-visor/internal/signer"
 	"github.com/themayursinha/mcp-visor/internal/trace"
@@ -42,6 +44,29 @@ type Proxy struct {
 	siem           *siem.Exporter
 	approvalSigner signer.Signer
 	obs            *observability.Runtime
+
+	// resolvedIdentity is the immutable stdio executable identity resolved
+	// once per launched proxy process. identityResolved records whether the
+	// launcher command could be resolved to an artifact digest at startup.
+	// launchShape records the attestation resolution shape (kind and
+	// normalized declared entry positions) of the pin that produced the
+	// digest: a reload whose pin has a different shape measures different
+	// bytes and can never be satisfied by the cached launch identity.
+	resolvedIdentity     serveridentity.Resolved
+	identityResolved     bool
+	launchShape          *attestationShape
+	serverClaimedName    string
+	serverClaimedVersion string
+}
+
+// attestationShape is the immutable resolution shape of the launch-time pin:
+// the attestation kind and the normalized (sorted) declared entry argument
+// positions. Two pins with the same shape measure the same bytes; a changed
+// shape means the expected digest cannot be compared against the cached
+// launch digest even when the digest strings are equal.
+type attestationShape struct {
+	kind  string
+	entry []int
 }
 
 type Config struct {
@@ -57,20 +82,30 @@ type Config struct {
 	ApprovalCLI        bool
 	ApprovalSigningKey string
 	ApprovalSigner     signer.Signer
-	Tracing            TracingConfig
-	ServerURL          string
-	SSEPath            string
-	InsecureTLS        bool
-	RemoteCert         string
-	RemoteKey          string
-	RemoteCA           string
-	RemoteServerName   string
-	WebhookURLs        []string
-	WebhookHMACSecret  string
-	SIEMTargets        []string
-	SIEMFormat         string
-	Vault              VaultConfig
-	Observability      observability.Config
+	// ResolvedIdentity is a test-only seam that pins the resolved stdio
+	// executable identity without launching a real server. It is consumed
+	// only when the logical server policy declares an attestation; an
+	// unattested server performs zero resolver work.
+	ResolvedIdentity *serveridentity.Resolved
+	// resolveIdentity is an unexported test-only seam that replaces the real
+	// stdio invocation resolver. It is consulted only when the logical server
+	// policy declares an attestation, so unattested construction and reload
+	// never invoke it.
+	resolveIdentity   func(command string, args []string, entryArgPositions []int) (serveridentity.Resolved, error)
+	Tracing           TracingConfig
+	ServerURL         string
+	SSEPath           string
+	InsecureTLS       bool
+	RemoteCert        string
+	RemoteKey         string
+	RemoteCA          string
+	RemoteServerName  string
+	WebhookURLs       []string
+	WebhookHMACSecret string
+	SIEMTargets       []string
+	SIEMFormat        string
+	Vault             VaultConfig
+	Observability     observability.Config
 }
 
 type VaultConfig struct {
@@ -88,6 +123,23 @@ type approvalOutcome struct {
 	Receipt  *receipt.DecisionReceipt
 }
 
+// serverIdentityEvidence is the immutable attestation evidence captured with
+// a runtime snapshot. It binds the configured pin, the resolved launch-time
+// identity, the attestation verdict, and the server's self-claimed
+// name/version for ONE policy generation. Terminal audit helpers copy it
+// verbatim; no path after the identity gate may recompute it from mutable
+// live proxy state or from the current filesystem artifact.
+type serverIdentityEvidence struct {
+	configured     bool
+	kind           string
+	expected       string
+	resolved       string
+	attested       bool
+	reason         string
+	claimedName    string
+	claimedVersion string
+}
+
 // runtimeSnapshot pins all policy-dependent proxy surfaces to one generation.
 // Callers that need coherence across a reload must capture it while holding
 // runtimeMu.RLock and use the returned immutable values after releasing it.
@@ -96,6 +148,7 @@ type runtimeSnapshot struct {
 	redactor        *redaction.Engine
 	approval        *approval.Engine
 	approvalTimeout time.Duration
+	identity        serverIdentityEvidence
 }
 
 type approvalEvidence struct {
@@ -121,6 +174,7 @@ func New(cfg Config) *Proxy {
 	p := cfg.Policy
 	if p == nil {
 		p = policy.DefaultPolicy()
+		cfg.Policy = p
 	}
 
 	al := audit.MustLogger(cfg.AuditLogPath)
@@ -158,6 +212,7 @@ func New(cfg Config) *Proxy {
 		approvalSigner: approvalSigner,
 	}
 	proxy.wirePolicyReload()
+	proxy.resolveLaunchedIdentity(cfg)
 	return proxy
 }
 
@@ -174,6 +229,7 @@ func NewWithTracing(cfg Config) *Proxy {
 	p := cfg.Policy
 	if p == nil {
 		p = policy.DefaultPolicy()
+		cfg.Policy = p
 	}
 
 	al := audit.MustLogger(cfg.AuditLogPath)
@@ -211,20 +267,143 @@ func NewWithTracing(cfg Config) *Proxy {
 		approvalSigner: approvalSigner,
 	}
 	proxy.wirePolicyReload()
+	proxy.resolveLaunchedIdentity(cfg)
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
 }
 
+// resolveLaunchedIdentity captures the immutable stdio executable identity
+// for this proxy process at construction. It performs zero resolver work
+// when the logical server policy has no attestation pin. A test may pin it
+// directly via Config.ResolvedIdentity (consumed only when a pin is
+// configured). Remote proxies never launch a stdio command, so their
+// identity stays unresolved: any configured stdio attestation then fails
+// closed. The captured identity is NEVER re-resolved or replaced after
+// construction: attestation is restart-bound, so policy reloads cannot bind
+// a replacement filesystem artifact to the already-running stdio child.
+func (p *Proxy) resolveLaunchedIdentity(cfg Config) {
+	pol := p.engine.Policy()
+	resolved, ok := p.prepareIdentity(pol)
+	p.resolvedIdentity = resolved
+	p.identityResolved = ok
+	if srv := findServerByName(pol, p.cfg.ServerName); srv != nil && srv.Attestation != nil {
+		entry := append([]int(nil), srv.Attestation.EntryArgPositions...)
+		sort.Ints(entry)
+		p.launchShape = &attestationShape{kind: srv.Attestation.Kind, entry: entry}
+	}
+}
+
+// attestationShapeMatches reports whether the supplied pin has the same
+// resolution shape (attestation kind and normalized declared entry
+// positions) as the launch-time pin whose digest was captured for the running
+// stdio child. A different shape measures different bytes, so the expected
+// digest can never be satisfied by the cached launch identity: it fails
+// closed until restart even when the digest strings are equal.
+func (p *Proxy) attestationShapeMatches(pin *policy.ServerAttestation) bool {
+	if p.launchShape == nil {
+		return false
+	}
+	if p.launchShape.kind != pin.Kind {
+		return false
+	}
+	if len(p.launchShape.entry) != len(pin.EntryArgPositions) {
+		return false
+	}
+	entry := append([]int(nil), pin.EntryArgPositions...)
+	sort.Ints(entry)
+	for i := range entry {
+		if entry[i] != p.launchShape.entry[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// prepareIdentity resolves the stdio invocation identity for the logical
+// server under the supplied policy snapshot, returning ok=false (unresolved)
+// when the server has no attestation, the launcher cannot be resolved, or the
+// configured stdio attestation cannot be satisfied locally. It performs zero
+// resolver work for an unattested logical server in every path, and it never
+// mutates proxy state. It is called EXACTLY ONCE at proxy construction by
+// resolveLaunchedIdentity; policy reloads must not call it because the
+// running stdio child's identity cannot change while it is running.
+func (p *Proxy) prepareIdentity(pol *policy.Policy) (serveridentity.Resolved, bool) {
+	srv := findServerByName(pol, p.cfg.ServerName)
+	if srv == nil || srv.Attestation == nil {
+		return serveridentity.Resolved{}, false
+	}
+	if p.cfg.ResolvedIdentity != nil {
+		return *p.cfg.ResolvedIdentity, true
+	}
+	if p.cfg.ServerURL != "" || p.cfg.ServerCommand == "" {
+		// Remote stdio attestation cannot be satisfied locally; leave
+		// unresolved so the configured pin fails closed.
+		return serveridentity.Resolved{}, false
+	}
+	resolve := p.cfg.resolveIdentity
+	if resolve == nil {
+		resolve = serveridentity.ResolveStdioInvocation
+	}
+	r, err := resolve(p.cfg.ServerCommand, p.cfg.ServerArgs, srv.Attestation.EntryArgPositions)
+	if err != nil {
+		p.logger.Warn("server identity resolution failed", "error", err)
+		return serveridentity.Resolved{}, false
+	}
+	return r, true
+}
+
 // wirePolicyReload attaches an atomic policy/runtime transaction to reloads.
+// Registration installs the committer and reconciles the currently published
+// generation inside the watcher/engine lock so a later reload cannot publish
+// between selecting that generation and applying its runtime surfaces.
 func (p *Proxy) wirePolicyReload() {
 	if p.engine == nil {
 		return
 	}
-	p.engine.SetReloadCommitter(p.commitPolicyRuntime)
+	p.engine.SetReloadCommitter(p.commitPolicyRuntime, p.reconcilePublishedRuntime)
+}
+
+// reconcilePublishedRuntime refreshes redactor, audit patterns, and approval
+// timeout to match an already-published policy generation. It is invoked while
+// the watcher/engine registration lock is held, so it must not publish() or
+// call back into Watcher/Engine methods that acquire that lock.
+func (p *Proxy) reconcilePublishedRuntime(pol *policy.Policy) {
+	if pol == nil || pol == p.cfg.Policy {
+		return
+	}
+	p.refreshPolicyRuntime(pol)
+}
+
+// refreshPolicyRuntime applies policy-derived runtime surfaces without
+// publishing a watcher/engine snapshot. Callers that already hold the
+// registration lock use this so they cannot deadlock on publish().
+func (p *Proxy) refreshPolicyRuntime(pol *policy.Policy) {
+	if pol == nil {
+		return
+	}
+	newRedactor := redaction.NewEngine(pol.Redaction)
+	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
+	p.runtimeMu.Lock()
+	p.redactor = newRedactor
+	if p.approval != nil {
+		p.approval.SetTimeout(timeout)
+	}
+	if p.audit != nil {
+		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
+	}
+	p.runtimeMu.Unlock()
 }
 
 // commitPolicyRuntime publishes the policy snapshot and refreshes redactor,
 // audit patterns, and approval timeout while tools/call is excluded by runtimeMu.
+// It deliberately does NOT re-resolve or re-install server identity: the stdio
+// identity is captured ONCE for the launched child at proxy construction and
+// is immutable for the lifetime of the running process. Attestation is
+// restart-bound, so a reload that introduces or materially changes a pin
+// fails closed on the next tools/call (the gate compares the new expectation
+// against the captured launch identity) and reports that a server restart is
+// required. Removing an attestation may restore the explicitly requested
+// unattested legacy path.
 func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	if pol == nil {
 		return
@@ -277,17 +456,22 @@ func (p *Proxy) currentApproval() *approval.Engine {
 func (p *Proxy) currentRuntimeSnapshot() runtimeSnapshot {
 	p.runtimeMu.RLock()
 	defer p.runtimeMu.RUnlock()
-	return p.runtimeSnapshotLocked()
+	return p.runtimeSnapshotLocked(p.cfg.ServerName)
 }
 
-// runtimeSnapshotLocked captures policy-dependent surfaces while runtimeMu is held.
-func (p *Proxy) runtimeSnapshotLocked() runtimeSnapshot {
+// runtimeSnapshotLocked captures policy-dependent surfaces while runtimeMu is
+// held, including the immutable server identity evidence for the logical
+// server. Callers must hold runtimeMu.RLock (or be inside the commit
+// transaction) so the identity evidence is computed while the same policy
+// generation that will authorize the call is authoritative.
+func (p *Proxy) runtimeSnapshotLocked(serverName string) runtimeSnapshot {
 	pol := p.engine.Policy()
 	return runtimeSnapshot{
 		policy:          pol,
 		redactor:        p.redactor,
 		approval:        p.approval,
 		approvalTimeout: time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second,
+		identity:        p.identityEvidence(pol, serverName),
 	}
 }
 
@@ -435,6 +619,10 @@ func (p *Proxy) runHandshake(client, server *mcp.Parser) error {
 
 	var initResp mcp.InitializeResult
 	if err := json.Unmarshal(resp.Result, &initResp); err == nil {
+		// serverInfo name/version are untrusted claims logged for context.
+		// They never satisfy identity attestation.
+		p.serverClaimedName = initResp.ServerInfo.Name
+		p.serverClaimedVersion = initResp.ServerInfo.Version
 		p.logger.Info("server init", "server", initResp.ServerInfo.Name, "version", initResp.ServerInfo.Version)
 	}
 
@@ -818,8 +1006,29 @@ func (p *Proxy) evaluateRuntimeLimits(callReq mcp.ToolsCallRequest) policy.Decis
 	return policy.Decision{Action: policy.ActionAllow, Reason: "runtime limits passed"}
 }
 
+// logDenied attaches server identity evidence derived from the CURRENT policy
+// for pre-gate envelope denials (malformed or notification-form tools/call
+// that never reached the identity gate). It captures a synchronized current
+// runtime snapshot so the terminal record cannot race a concurrent reload;
+// the launched identity fields are immutable after construction, so this only
+// reads the current policy generation at denial time and never resolves the
+// filesystem.
 func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel) {
-	p.logAudit(audit.Event{
+	p.runtimeMu.RLock()
+	snapshot := p.runtimeSnapshotLocked(serverName)
+	p.runtimeMu.RUnlock()
+	p.logDeniedWithEvidence(serverName, toolName, args, reason, risk, snapshot.identity)
+}
+
+// logDeniedWithEvidence builds the terminal deny event and attaches identity
+// evidence that was captured with the runtime snapshot that attempted the
+// call. requestApproval paths that run after the runtime barrier is released
+// must pass snapshot.identity so a hot reload cannot pair a later terminal
+// record with a different policy generation than the one that authorized the
+// call, and so the terminal record cannot read mutable live identity state
+// after release.
+func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel, identity serverIdentityEvidence) {
+	ev := audit.Event{
 		EventType: audit.EventToolDenied,
 		SessionID: p.session.ID,
 		AgentID:   p.cfg.ClientID,
@@ -829,7 +1038,9 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 		Decision:  string(policy.ActionDeny),
 		Reason:    reason,
 		RiskLevel: string(risk),
-	})
+	}
+	p.attachServerIdentity(&ev, identity)
+	p.logAudit(ev)
 }
 
 func approvalRequiredEvent(p *Proxy, serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, chainContext []string, evidence approvalEvidence) audit.Event {
@@ -863,13 +1074,13 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 
 	if snapshot.approval == nil {
 		denyReason := withRedactionNote("approval denied: approval backend is not configured", redactionResult)
-		p.logDenied(serverName, callReq.Name, redactedArgs, denyReason, risk)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, denyReason, risk, snapshot.identity)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
 	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
 	if err != nil || !approved {
 		denyReason := withRedactionNote(fmt.Sprintf("approval denied: %v", err), redactionResult)
-		p.logAudit(audit.Event{
+		deniedEv := audit.Event{
 			EventType:            audit.EventToolDenied,
 			SessionID:            p.session.ID,
 			AgentID:              p.cfg.ClientID,
@@ -884,7 +1095,9 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 			RedactedArgumentHash: evidence.RedactedArgumentHash,
 			PolicyHash:           evidence.PolicyHash,
 			ChainContextHash:     evidence.ChainContextHash,
-		})
+		}
+		p.attachServerIdentity(&deniedEv, snapshot.identity)
+		p.logAudit(deniedEv)
 		p.logger.Warn("approval denied", "tool", callReq.Name, "session", p.session.ID)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
@@ -908,17 +1121,17 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	)
 	if err != nil {
 		errReason := fmt.Sprintf("approval receipt creation failed: %v", err)
-		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if p.approvalSigner == nil {
 		errReason := "approval receipt signing failed: signer is not configured"
-		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if err := rec.SignWith(p.approvalSigner); err != nil {
 		errReason := fmt.Sprintf("approval receipt signing failed: %v", err)
-		p.logDenied(serverName, callReq.Name, redactedArgs, errReason, risk)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 

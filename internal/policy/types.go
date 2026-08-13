@@ -44,12 +44,33 @@ type Settings struct {
 }
 
 type Server struct {
-	Name                string     `yaml:"name"`
-	Transport           string     `yaml:"transport"`
-	Allowed             bool       `yaml:"allowed"`
-	AllowedDestinations []string   `yaml:"allowed_destinations"`
-	DeniedDestinations  []string   `yaml:"denied_destinations"`
-	Tools               []ToolRule `yaml:"tools"`
+	Name                string             `yaml:"name"`
+	Transport           string             `yaml:"transport"`
+	Allowed             bool               `yaml:"allowed"`
+	AllowedDestinations []string           `yaml:"allowed_destinations"`
+	DeniedDestinations  []string           `yaml:"denied_destinations"`
+	Attestation         *ServerAttestation `yaml:"attestation,omitempty"`
+	Tools               []ToolRule         `yaml:"tools"`
+}
+
+// ServerAttestation pins an out-of-band identity claim for a logical server.
+// For this slice only kind "stdio_invocation_sha256_v1" is supported: the
+// digest is a versioned SHA-256 of the canonical framed serialization of the
+// launched stdio invocation (resolved launcher executable, every literal argv
+// value in order, and only declared entry payload contents) and is never
+// derived from MCP metadata. The v1 suffix is part of the contract: future
+// serialization changes use a new kind rather than silently reinterpreting
+// existing pins.
+//
+// EntryArgPositions declares which ServerArgs entries (zero-based, excluding
+// the executable) select local entry payload files whose resolved regular-file
+// content is part of the digest. Omitted or empty means launcher + literal
+// argv only: undeclared file-valued args (logs, databases, datasets, output
+// paths) are never opened or hashed.
+type ServerAttestation struct {
+	Kind              string `yaml:"kind"`
+	Digest            string `yaml:"digest"`
+	EntryArgPositions []int  `yaml:"entry_arg_positions,omitempty"`
 }
 
 type ToolRule struct {

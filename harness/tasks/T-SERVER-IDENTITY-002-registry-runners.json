@@ -1,0 +1,58 @@
+{
+  "task_id": "T-SERVER-IDENTITY-002-registry-runners",
+  "invariant_ids": ["H20"],
+  "security_sensitive": true,
+  "security_problem": "Canonical registry runners (npx, uvx, bunx, pnpx, pnx, npm exec, npm x, yarn dlx, pnpm dlx, bun x, uv tool run) select executable package bytes from a registry or package cache at runtime; a local package-manager binary plus a literal package spec does not bind the artifact that will execute, so launcher+literal-argv hashing must not satisfy attestation.",
+  "required_behavior": "A configured stdio invocation digest binds a locally resolved launcher executable and local payload file content selected by the args, and is checked before all argument-dependent authorization and relay; every recognized canonical registry-runner form (npx, uvx, bunx, pnpx, pnx, npm exec, npm x, yarn dlx, pnpm dlx, bun x, uv tool run) fails identity resolution and reaches the configured-attestation fail-closed gate before argument policy or relay; exact non-registry subcommands (npm run, npm run x, npm install, npm ci, yarn add, pnpm add, pnpm exec, bun run, bun add, uv run, uv tool install) remain resolvable; mismatch or unresolved identity denies with identity-bound audit evidence.",
+  "failure_behavior": "Fail closed for tools/call when attestation is configured and identity resolution is missing, unsupported, or mismatched.",
+  "allowed_paths": [
+    "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
+    "harness/tasks/T-SERVER-IDENTITY-002-registry-runners.json",
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity",
+    "internal/audit/logger.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/confuseddeputydemo",
+    "examples/confused-deputy-demo",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/engine_test.go",
+    "internal/proxy/server_identity_test.go",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/proxy", "-run", "TestServerIdentityDocumentedRegistryRunners", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity", "-count=1"]
+    },
+    {
+      "name": "demo_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}
