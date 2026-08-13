@@ -429,7 +429,7 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	if p.audit != nil {
 		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
 		// Record the generation transition before exposing it to tools/call.
-		p.audit.Log(reloadEvent)
+		_ = p.audit.Log(reloadEvent)
 	}
 	p.runtimeMu.Unlock()
 
@@ -1173,7 +1173,7 @@ func (p *Proxy) attachReceiptEvidence(event *audit.Event, rec *receipt.DecisionR
 }
 
 func (p *Proxy) logAudit(event audit.Event) {
-	p.audit.Log(event)
+	_ = p.audit.Log(event)
 	p.forwardAudit(event)
 }
 

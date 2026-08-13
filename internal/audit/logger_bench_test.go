@@ -32,7 +32,7 @@ func BenchmarkAuditLogEvent(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		logger.Log(benchEvent())
+		_ = logger.Log(benchEvent())
 	}
 }
 
@@ -48,7 +48,7 @@ func BenchmarkAuditLogEventWithArguments(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		logger.Log(evt)
+		_ = logger.Log(evt)
 	}
 }
 
@@ -65,6 +65,6 @@ func BenchmarkAuditLogEventSimple(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		logger.Log(evt)
+		_ = logger.Log(evt)
 	}
 }
