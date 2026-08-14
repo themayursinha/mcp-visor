@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -120,6 +121,24 @@ var openFile = func(path string, flags int, perm os.FileMode) (*os.File, error) 
 }
 
 func NewLogger(path string) (*Logger, error) {
+	// Canonicalize the configured path once: reject empty and lexically
+	// non-clean paths, then convert a clean relative path to an absolute
+	// path. Every open, walk, and parent sync uses this stored absolute
+	// path, so the binding can never drift with a later CWD change.
+	abs, err := canonicalAuditPath(path)
+	if err != nil {
+		return nil, err
+	}
+	path = abs
+
+	l := &Logger{path: path, write: (*os.File).Write}
+	// Pre-open no-follow component walk: every ancestor must already exist
+	// as a non-symlink directory; only the final component may be absent
+	// (the create-vs-existing state machine creates it).
+	if _, err := l.walkBindingLocked(false); err != nil {
+		return nil, fmt.Errorf("validate audit binding: %w", err)
+	}
+
 	// Open the actual append sink FIRST, then recover or initialize the chain
 	// from that exact fd. A pre-open pathname recovery can read inode A while
 	// the create-vs-existing state machine later opens or creates inode B,
@@ -179,35 +198,61 @@ func NewLogger(path string) (*Logger, error) {
 		}
 	}
 
-	l := &Logger{
-		path:       path,
-		file:       f,
-		sinkInfo:   st,
-		prevHash:   prevHash,
-		chainIndex: chainIndex,
-		write:      (*os.File).Write,
-	}
-	// Constructor acceptance: prove live fd/path identity and make the
-	// accepted binding's parent directory durable. This runs for both a
-	// fresh exclusive-create (the filename->inode directory entry must be
-	// durable before any authorization commit is permitted) and an existing
-	// inode (a retained binding is re-validated and re-synced in place, so a
-	// later retry after a transient sync failure can safely leave the
-	// created inode as found). On failure the fd is closed and the error
-	// returned; nothing is ever pathname-unlinked, because the configured
-	// pathname may now reference an inode this call did not create.
+	l.file = f
+	l.sinkInfo = st
+	l.prevHash = prevHash
+	l.chainIndex = chainIndex
+	// Constructor acceptance: full post-open no-follow walk plus final
+	// identity/link-count validation, then the single parent-directory sync
+	// that makes the accepted binding durable, then a full post-sync
+	// revalidation. This runs for both a fresh exclusive-create (the
+	// filename->inode directory entry must be durable before any
+	// authorization commit is permitted) and an existing inode (a retained
+	// binding is re-validated and re-synced in place). On failure the fd is
+	// closed and the error returned; nothing is ever pathname-unlinked,
+	// because the configured pathname may now reference an inode this call
+	// did not create.
 	if err := l.validateDurableBindingLocked(); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("validate audit binding: %w", err)
 	}
+	if err := syncParentDir(l.path); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("sync configured audit parent directory: %w", err)
+	}
+	if err := l.validateDurableBindingLocked(); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("validate audit binding after parent sync: %w", err)
+	}
 	return l, nil
+}
+
+// canonicalAuditPath validates and canonicalizes the configured ledger path:
+// it must be non-empty and lexically clean (path == filepath.Clean(path)),
+// and it is converted once to an absolute path. Relative input is accepted
+// but resolved exactly once at construction through the current working
+// directory; the stored absolute path is used for every open, walk, and sync
+// afterwards, so later CWD changes cannot re-resolve it.
+func canonicalAuditPath(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("audit log path must not be empty")
+	}
+	if path != filepath.Clean(path) {
+		return "", fmt.Errorf("audit log path must be lexically clean: %q", path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve audit log path: %w", err)
+	}
+	return abs, nil
 }
 
 // syncParentDir makes an accepted audit binding durable by fsyncing its parent
 // directory. It opens the directory read-only, syncs it, and closes it; any
-// failure is returned so NewLogger and CommitAuthorization can fail closed
-// rather than permit an authorization commit whose audit record or binding
-// could disappear on reboot.
+// failure is returned so NewLogger can fail closed rather than permit an
+// authorization commit whose audit record or binding could disappear on
+// reboot. This is the single constructor-only directory sync that establishes
+// the accepted binding; commit-time validation deliberately performs no fsync.
 func syncParentDir(path string) error {
 	parent := filepath.Dir(path)
 	if parent == "" {
@@ -376,16 +421,16 @@ func (l *Logger) Log(event Event) error {
 // CommitAuthorization durably appends a terminal allow event to the hash-linked
 // JSONL ledger. It accepts only EventToolAllowed with Decision "allow", requires
 // a regular O_SYNC sink that has not been poisoned, and advances chain state
-// only after a full write. Every commit validates that the live fd is still the
-// constructor-bound regular sink and that the configured path itself is a
-// non-symlink regular directory entry referencing that exact inode immediately
-// before and immediately after the write — and that the accepted binding's
-// parent directory can be fsynced — so any rotation/rebinding, observed
-// symlink, or durability failure before, during, or after the append fails
-// closed and poisons the logger. Existing O_SYNC is the write-durability
-// boundary; the parent-directory fsync makes a same-inode hard-link binding
-// durable. Any observed symlink, including one resolving to the opened inode,
-// is rejected without following it.
+// only after a full write. Every commit runs the complete no-follow component
+// walk (every ancestor and the final component, plus final SameFile and
+// nlink==1) immediately before and immediately after the write, so any
+// rotation/rebinding, observed symlink in any component, visible hard-link or
+// cross-directory rebound, or durability failure before, during, or after the
+// append fails closed and poisons the logger. Commit-time validation performs
+// no fsync; the single parent-directory sync belongs only to the constructor's
+// accepted binding. Existing O_SYNC is the write-durability boundary. Any
+// observed symlink, including one resolving to the opened inode, is rejected
+// without following it.
 func (l *Logger) CommitAuthorization(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -422,15 +467,17 @@ func (l *Logger) CommitAuthorization(event Event) error {
 
 // validateDurableBindingLocked checks, under Logger.mu, that the live sink is
 // still the regular constructor-bound inode and that the configured audit path
-// itself is a non-symlink regular directory entry referencing that exact inode.
-// Inspection is no-follow (Lstat): any observed symlink, including one that
-// would resolve to the opened inode, fails closed as ErrAuditSinkChanged
+// itself is a non-symlink regular directory entry referencing that exact
+// inode, with every pathname component (including every ancestor) non-symlink
+// and the final entry single-link (nlink==1). Inspection is no-follow (Lstat
+// on every component): any observed symlink in any component, including one
+// that would resolve to the opened inode, fails closed as ErrAuditSinkChanged
 // without following the target. Any missing, non-regular, renamed, unlinked,
-// replaced, atomic-renamed-over, or different-inode condition also fails
-// closed without writing. After the identity checks succeed, the containing
-// parent directory is fsynced so the accepted binding is durable: a fresh
-// directory entry and a same-inode hard-link rebind both survive power loss
-// only through that durability boundary.
+// replaced, atomic-renamed-over, hard-linked, cross-directory-rebound, or
+// different-inode condition also fails closed without writing. This
+// validation performs NO fsync: runtime namespace mutation is rejected, never
+// made durable; the single parent-directory sync belongs only to the
+// constructor's accepted binding.
 func (l *Logger) validateDurableBindingLocked() error {
 	if l.path == "" || l.sinkInfo == nil || l.file == nil {
 		return ErrNonDurableSink
@@ -445,26 +492,100 @@ func (l *Logger) validateDurableBindingLocked() error {
 	if !os.SameFile(l.sinkInfo, fdInfo) {
 		return fmt.Errorf("%w: opened sink inode changed since construction", ErrAuditSinkChanged)
 	}
-	pathInfo, err := os.Lstat(l.path)
+	pathInfo, err := l.walkBindingLocked(true)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%w: configured audit path missing", ErrAuditSinkChanged)
-		}
-		return fmt.Errorf("%w: stat configured audit path: %v", ErrAuditSinkChanged, err)
-	}
-	if pathInfo.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%w: configured audit path is a symlink", ErrAuditSinkChanged)
-	}
-	if !pathInfo.Mode().IsRegular() {
-		return ErrNonDurableSink
+		return err
 	}
 	if !os.SameFile(fdInfo, pathInfo) {
 		return fmt.Errorf("%w: configured audit path no longer references the opened sink", ErrAuditSinkChanged)
 	}
-	if err := syncParentDir(l.path); err != nil {
-		return fmt.Errorf("sync configured audit parent directory: %w", err)
+	// The supported model requires a single-link regular final entry. A
+	// visible second hard link (nlink>1), or a lingering fd-side nlink==0
+	// after unlink, fails closed.
+	if n, ok := nlinkOf(fdInfo); !ok || n != 1 {
+		return fmt.Errorf("%w: opened sink link count %d (want 1)", ErrAuditSinkChanged, n)
+	}
+	if n, ok := nlinkOf(pathInfo); !ok || n != 1 {
+		return fmt.Errorf("%w: configured audit path link count %d (want 1)", ErrAuditSinkChanged, n)
 	}
 	return nil
+}
+
+// walkBindingLocked walks every pathname component of the stored absolute
+// configured path with no-follow Lstat, from the root down to the final
+// component. Every ancestor must exist, be a non-symlink, and be a directory.
+// When requireFinal is true (full walk), the final component must exist, be a
+// non-symlink regular file, and its FileInfo is returned; when false
+// (pre-open constructor walk) only the final component may be absent. Any
+// stat/access/type uncertainty, missing ancestor, symlink in any component,
+// non-directory ancestor, or non-regular final fails closed as a binding
+// error.
+func (l *Logger) walkBindingLocked(requireFinal bool) (os.FileInfo, error) {
+	if l.path == "" {
+		return nil, ErrNonDurableSink
+	}
+	// Split the clean absolute path into components. Every ancestor prefix is
+	// walked individually so a symlinked ancestor is seen directly instead of
+	// being followed by the kernel.
+	clean := filepath.Clean(l.path)
+	rest := strings.TrimPrefix(clean, string(os.PathSeparator))
+	var comps []string
+	if rest != "" {
+		comps = strings.Split(rest, string(os.PathSeparator))
+	}
+	prefix := string(os.PathSeparator)
+	for i, comp := range comps {
+		prefix = filepath.Join(prefix, comp)
+		fi, err := os.Lstat(prefix)
+		if err != nil {
+			if os.IsNotExist(err) && !requireFinal && i == len(comps)-1 {
+				// Pre-open constructor walk: only the final component may
+				// be absent (the create-vs-existing state machine creates
+				// it); every ancestor must already exist.
+				return nil, nil
+			}
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("%w: configured audit path component %q missing", ErrAuditSinkChanged, prefix)
+			}
+			return nil, fmt.Errorf("%w: stat configured audit path component %q: %v", ErrAuditSinkChanged, prefix, err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%w: configured audit path component %q is a symlink", ErrAuditSinkChanged, prefix)
+		}
+		if i == len(comps)-1 {
+			// Final component.
+			if !requireFinal {
+				// Pre-open: an existing final must already be a non-symlink
+				// regular entry (regularity is fully re-checked post-open).
+				if !fi.Mode().IsRegular() {
+					return nil, ErrNonDurableSink
+				}
+				return fi, nil
+			}
+			if !fi.Mode().IsRegular() {
+				return nil, ErrNonDurableSink
+			}
+			return fi, nil
+		}
+		// Ancestor: must be a directory.
+		if !fi.IsDir() {
+			return nil, fmt.Errorf("%w: configured audit path ancestor %q is not a directory", ErrAuditSinkChanged, prefix)
+		}
+	}
+	if !requireFinal {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("%w: configured audit path missing", ErrAuditSinkChanged)
+}
+
+// nlinkOf returns the link count from a FileInfo's underlying stat, or ok=false
+// when the Sys() value is not the expected platform stat type (fail closed).
+func nlinkOf(fi os.FileInfo) (uint64, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return uint64(st.Nlink), true
 }
 
 // poisonCommitLocked marks the logger permanently unhealthy after a live

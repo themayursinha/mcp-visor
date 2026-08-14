@@ -564,6 +564,139 @@ servers:
 	}
 }
 
+// TestAuditLedgerAncestorSymlinkFailClosedNoRelay is the H19 round-7 RED test
+// for both transports: after the logger is constructed on a clean absolute
+// path, replacing an ancestor directory with a symlink to the same directory
+// must deny the next allowed tools/call with zero downstream writes, exactly
+// one denied metric, zero allow/approved metrics, no session taint mutation,
+// and no candidate tool_call_allowed record in the at-path ledger. On the
+// vulnerable baseline the final-component Lstat and SameFile still look
+// healthy through the ancestor symlink, so CommitAuthorization authorizes and
+// the call is relayed.
+func TestAuditLedgerAncestorSymlinkFailClosedNoRelay(t *testing.T) {
+	setup := func(t *testing.T) (*Proxy, string) {
+		root := t.TempDir()
+		liveDir := filepath.Join(root, "live")
+		if err := os.Mkdir(liveDir, 0o700); err != nil {
+			t.Fatalf("mkdir live: %v", err)
+		}
+		auditPath := filepath.Join(liveDir, "audit.jsonl")
+		p := New(Config{
+			ServerName:   "workspace",
+			SessionID:    "sess-ancestor-stdio",
+			ClientID:     "agent-ancestor-stdio",
+			AuditLogPath: auditPath,
+			Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "workspace"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+taints:
+  - name: "sensitive_file_accessed"
+    description: "Session has read sensitive workspace data"
+    source_tools: ["file_read"]
+    source_patterns: ["**/secrets/**", "**/*.env"]
+`),
+		})
+		t.Cleanup(func() { _ = p.audit.Close() })
+
+		// Install the ancestor symlink after construction: rename live
+		// aside and replace it with a symlink to the same directory.
+		renamed := filepath.Join(root, "renamed")
+		if err := os.Rename(liveDir, renamed); err != nil {
+			t.Fatalf("rename live aside: %v", err)
+		}
+		if err := os.Symlink(renamed, liveDir); err != nil {
+			t.Fatalf("symlink ancestor: %v", err)
+		}
+		return p, filepath.Join(renamed, "audit.jsonl")
+	}
+
+	t.Run("stdio", func(t *testing.T) {
+		p, ledgerPath := setup(t)
+
+		clientOut := &bytes.Buffer{}
+		downstream := &observingWriter{}
+		raw := toolCallRaw(1, "file_read", map[string]any{"path": "/workspace/secrets/customer-tokens.txt"})
+		client := mcp.NewParser(bytes.NewReader(append(raw, '\n')), clientOut)
+		server := mcp.NewParser(nil, downstream)
+
+		err := p.relayClientToServer(context.Background(), client, server)
+		if err == nil {
+			t.Fatalf("expected relay to return when the client stream ends")
+		}
+		if !strings.Contains(clientOut.String(), "durable authorization audit commit failed") {
+			t.Fatalf("expected generic audit-commit denial to the client, got %q", clientOut.String())
+		}
+		if got := downstream.Count(); got != 0 {
+			t.Fatalf("downstream write count=%d, want 0 (relay must be denied after ancestor symlink); bytes=%q", got, downstream.Bytes())
+		}
+		if got := downstream.Bytes(); len(got) != 0 {
+			t.Fatalf("downstream bytes=%q, want empty", got)
+		}
+		if p.metrics.MessagesAllowed != 0 {
+			t.Fatalf("allowed metric=%d, want 0 on ancestor symlink", p.metrics.MessagesAllowed)
+		}
+		if p.metrics.MessagesApproved != 0 {
+			t.Fatalf("approved metric=%d, want 0 on ancestor symlink", p.metrics.MessagesApproved)
+		}
+		if p.metrics.MessagesDenied != 1 {
+			t.Fatalf("denied metric=%d, want 1 on ancestor symlink", p.metrics.MessagesDenied)
+		}
+		if p.session.HasTaint("sensitive_file_accessed") {
+			t.Fatalf("session taint must not mutate on ancestor symlink, taints=%+v", p.session.TaintsSnapshot())
+		}
+		ledger, err := os.ReadFile(ledgerPath)
+		if err != nil {
+			t.Fatalf("read at-path ledger: %v", err)
+		}
+		if strings.Contains(string(ledger), "tool_call_allowed") {
+			t.Fatalf("at-path ledger must not contain a tool_call_allowed record, got %q", ledger)
+		}
+	})
+
+	t.Run("remote", func(t *testing.T) {
+		p, ledgerPath := setup(t)
+
+		clientOut := &bytes.Buffer{}
+		remote := &observingTransport{}
+		raw := toolCallRaw(1, "file_read", map[string]any{"path": "/workspace/public/readme.md"})
+		client := mcp.NewParser(bytes.NewReader(append(raw, '\n')), clientOut)
+
+		err := p.relayClientToRemoteServer(context.Background(), client, remote)
+		if err == nil {
+			t.Fatalf("expected remote relay to return when the client stream ends")
+		}
+		if !strings.Contains(clientOut.String(), "durable authorization audit commit failed") {
+			t.Fatalf("expected generic audit-commit denial to the client, got %q", clientOut.String())
+		}
+		if got := remote.Count(); got != 0 {
+			t.Fatalf("remote EncodeRaw count=%d, want 0 on ancestor symlink", got)
+		}
+		if p.metrics.MessagesAllowed != 0 {
+			t.Fatalf("allowed metric=%d, want 0 on ancestor symlink", p.metrics.MessagesAllowed)
+		}
+		if p.metrics.MessagesApproved != 0 {
+			t.Fatalf("approved metric=%d, want 0 on ancestor symlink", p.metrics.MessagesApproved)
+		}
+		if p.metrics.MessagesDenied != 1 {
+			t.Fatalf("denied metric=%d, want 1 on ancestor symlink", p.metrics.MessagesDenied)
+		}
+		ledger, err := os.ReadFile(ledgerPath)
+		if err != nil {
+			t.Fatalf("read at-path ledger: %v", err)
+		}
+		if strings.Contains(string(ledger), "tool_call_allowed") {
+			t.Fatalf("at-path ledger must not contain a tool_call_allowed record, got %q", ledger)
+		}
+	})
+}
+
 type observingTransport struct {
 	mu    sync.Mutex
 	count int
