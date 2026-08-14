@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -185,8 +186,9 @@ func TestProxyIntegrationToolsCall(t *testing.T) {
 	mockServer := buildMockServer(t)
 	visor := buildVisor(t)
 	policyFile := writePermissivePolicy(t, mockServer)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile, "-audit-log", auditPath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -255,8 +257,9 @@ func TestProxyIntegrationNotificationToolsCallNotRelayed(t *testing.T) {
 	mockServer := buildMockServer(t)
 	visor := buildVisor(t)
 	policyFile := writePermissivePolicy(t, mockServer)
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 
-	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile)
+	cmd := exec.Command(visor, "serve", "-server", mockServer, "-policy", policyFile, "-audit-log", auditPath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)

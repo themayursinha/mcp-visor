@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -21,7 +24,23 @@ var (
 	ErrIncompleteAuditTail = errors.New("audit log incomplete trailing line")
 	// ErrCorruptAuditRecord is returned when the last complete audit record is invalid.
 	ErrCorruptAuditRecord = errors.New("audit log corrupt last record")
+	// ErrAuditSinkUnhealthy is returned by Log and CommitAuthorization once a
+	// sink has been poisoned by a failed marshal/write/sync/short-write.
+	ErrAuditSinkUnhealthy = errors.New("audit sink unhealthy")
 )
+
+// syncParentDir syncs the audit file's parent directory. NewLogger calls it
+// exactly once per construction so a freshly created ledger entry is durable
+// before the first record. It is a package-private seam for the
+// unconditional-sync test; tests that replace it must not run in parallel.
+var syncParentDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
 
 type EventType string
 
@@ -80,28 +99,62 @@ type Logger struct {
 	patterns   []*regexp.Regexp
 	prevHash   string
 	chainIndex uint64
+	// durable is false for the stderr fallback so authorization commits
+	// always fail closed when no trusted JSONL sink was opened.
+	durable bool
+	// poisoned latches after any failed marshal/write/sync/short-write;
+	// Log and CommitAuthorization return ErrAuditSinkUnhealthy afterwards.
+	poisoned bool
+	// writeFn and syncFn are narrow seams for deterministic internal tests;
+	// production construction binds them to the opened file descriptor.
+	writeFn func([]byte) (int, error)
+	syncFn  func() error
 }
 
 func NewLogger(path string) (*Logger, error) {
-	prevHash, chainIndex, err := recoverChainState(path)
-	if err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|os.O_SYNC, 0o600)
+	// Open the final component with no-follow so a symlink is rejected at
+	// construction. The descriptor is kept for both recovery and appends.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
-	return &Logger{
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat audit log: %w", err)
+	}
+	if !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("audit log is not a regular file")
+	}
+	// Recover the hash chain from the SAME opened descriptor; never reopen by
+	// pathname and never walk the filesystem namespace.
+	prevHash, chainIndex, err := recoverChainState(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	// Unconditional one-time parent-directory sync whether the ledger is new
+	// or existing. A failure here is a constructor failure: close and return.
+	if err := syncParentDir(filepath.Dir(path)); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("sync audit directory: %w", err)
+	}
+	l := &Logger{
 		path:       path,
 		file:       f,
 		prevHash:   prevHash,
 		chainIndex: chainIndex,
-	}, nil
+		durable:    true,
+	}
+	l.writeFn = f.Write
+	l.syncFn = f.Sync
+	return l, nil
 }
 
 func MustLogger(path string) *Logger {
 	if path == "" {
-		return &Logger{file: os.Stderr}
+		return stderrLogger()
 	}
 	l, err := NewLogger(path)
 	if err != nil {
@@ -109,21 +162,19 @@ func MustLogger(path string) *Logger {
 			log.Fatalf("audit: refusing to start with corrupt/incomplete audit log %q: %v", path, err)
 		}
 		fmt.Fprintf(os.Stderr, "audit logger: %v, falling back to stderr\n", err)
-		return &Logger{file: os.Stderr}
+		return stderrLogger()
 	}
 	return l
 }
 
-func recoverChainState(path string) (prevHash string, chainIndex uint64, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", 0, nil
-		}
-		return "", 0, fmt.Errorf("open audit log for chain recovery: %w", err)
-	}
-	defer f.Close()
+func stderrLogger() *Logger {
+	l := &Logger{file: os.Stderr}
+	l.writeFn = os.Stderr.Write
+	l.syncFn = os.Stderr.Sync
+	return l
+}
 
+func recoverChainState(f *os.File) (prevHash string, chainIndex uint64, err error) {
 	st, err := f.Stat()
 	if err != nil {
 		return "", 0, fmt.Errorf("stat audit log: %w", err)
@@ -230,10 +281,74 @@ func (l *Logger) SetRedactionPatterns(patterns []policy.RedactionPattern) {
 	}
 }
 
-func (l *Logger) Log(event Event) {
+func (l *Logger) Log(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.poisoned {
+		return ErrAuditSinkUnhealthy
+	}
 
+	prepared, data, err := l.prepareRecord(event)
+	if err != nil {
+		l.poisoned = true
+		return err
+	}
+	if err := l.appendFull(data); err != nil {
+		l.poisoned = true
+		return err
+	}
+	l.prevHash = prepared.Hash
+	l.chainIndex++
+	return nil
+}
+
+// CommitAuthorization durably commits the FINAL allow record before the proxy
+// may relay the call. It accepts only a tool_call_allowed event with an allow
+// decision on the durable JSONL sink opened by NewLogger. Under the mutex it
+// prepares a hash-linked candidate without mutating chain state, performs a
+// full append, explicitly syncs the file, and only then advances the in-memory
+// chain. Any marshal/write/short-write/sync failure poisons the sink and
+// returns an error so the caller denies the call with zero relay.
+func (l *Logger) CommitAuthorization(event Event) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.poisoned {
+		return ErrAuditSinkUnhealthy
+	}
+	if !l.durable {
+		// A non-durable sink (stderr fallback or empty AuditLogPath) cannot
+		// satisfy the durable-commit precondition. Latch the sink so the
+		// failure is sticky: no later Log write and no chain advance.
+		l.poisoned = true
+		return fmt.Errorf("%w: audit sink is not durable (stderr fallback)", ErrAuditSinkUnhealthy)
+	}
+	if event.EventType != EventToolAllowed || event.Decision != string(policy.ActionAllow) {
+		return fmt.Errorf("commit authorization: only tool_call_allowed allow events are commit-able")
+	}
+
+	prepared, data, err := l.prepareRecord(event)
+	if err != nil {
+		l.poisoned = true
+		return err
+	}
+	if err := l.appendFull(data); err != nil {
+		l.poisoned = true
+		return err
+	}
+	if err := l.syncFn(); err != nil {
+		l.poisoned = true
+		return fmt.Errorf("audit sync: %w", err)
+	}
+	l.prevHash = prepared.Hash
+	l.chainIndex++
+	return nil
+}
+
+// prepareRecord applies timestamp/redaction and computes the hash-linked JSONL
+// record for event using the CURRENT chain state WITHOUT mutating prevHash or
+// chainIndex. It returns the prepared event (with Hash set) and the
+// newline-terminated record bytes.
+func (l *Logger) prepareRecord(event Event) (Event, []byte, error) {
 	if event.Timestamp == "" {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
@@ -250,24 +365,32 @@ func (l *Logger) Log(event Event) {
 
 	event.PrevHash = l.prevHash
 	event.ChainIndex = l.chainIndex
-	l.chainIndex++
 
 	hashData := l.eventHashPayload(event)
 	h := sha256.Sum256(hashData)
 	event.Hash = hex.EncodeToString(h[:])
-	l.prevHash = event.Hash
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "audit logger: marshal error: %v\n", err)
-		return
+		return Event{}, nil, fmt.Errorf("audit marshal: %w", err)
 	}
 
 	data = append(data, '\n')
+	return event, data, nil
+}
 
-	if _, err := l.file.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "audit logger: write error: %v\n", err)
+// appendFull performs one append and requires the full record length. A short
+// write is an explicit failure so a partial record can never advance the chain
+// or be followed by an authorization commit.
+func (l *Logger) appendFull(data []byte) error {
+	n, err := l.writeFn(data)
+	if err != nil {
+		return fmt.Errorf("audit write: %w", err)
 	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func (l *Logger) eventHashPayload(event Event) []byte {

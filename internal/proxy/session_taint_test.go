@@ -87,8 +87,10 @@ egress_controls:
 }
 
 func TestSessionTaintEgressAllowsSinkBeforeTaint(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	p := New(Config{
-		ServerName: "workspace",
+		ServerName:   "workspace",
+		AuditLogPath: auditPath,
 		Policy: mustLoadPolicy(t, `
 version: "1.0"
 default_action: deny

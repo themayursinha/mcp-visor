@@ -76,7 +76,7 @@ func (p *Proxy) processToolsCall(
 			ServerClaimedName:      identity.claimedName,
 			ServerClaimedVersion:   identity.claimedVersion,
 		}
-		p.audit.Log(identityDeniedEvent)
+		_ = p.audit.Log(identityDeniedEvent)
 		release()
 		p.forwardAudit(identityDeniedEvent)
 		p.logger.Warn("server identity attestation failed",
@@ -103,7 +103,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
 		}
 		p.attachServerIdentity(&rtDeniedEvent, snapshot.identity)
-		p.audit.Log(rtDeniedEvent)
+		_ = p.audit.Log(rtDeniedEvent)
 		release()
 		p.forwardAudit(rtDeniedEvent)
 		p.observeToolCall("denied", decision.Reason, serverName, callReq.Name, string(p.engine.GetRiskLevel(serverName, callReq.Name)), false, started)
@@ -145,7 +145,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&sensitiveDeniedEvent, snapshot.identity)
-		p.audit.Log(sensitiveDeniedEvent)
+		_ = p.audit.Log(sensitiveDeniedEvent)
 		release()
 		p.forwardAudit(sensitiveDeniedEvent)
 		p.logger.Warn("sensitive file denied",
@@ -192,7 +192,7 @@ func (p *Proxy) processToolsCall(
 				ChainContext: previousCalls,
 			}
 			p.attachServerIdentity(&chainDeniedEvent, snapshot.identity)
-			p.audit.Log(chainDeniedEvent)
+			_ = p.audit.Log(chainDeniedEvent)
 			release()
 			p.forwardAudit(chainDeniedEvent)
 			p.observeToolCall("denied", chainDecision.Reason, serverName, callReq.Name, string(risk), true, started)
@@ -229,7 +229,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
-		p.audit.Log(deniedEvent)
+		_ = p.audit.Log(deniedEvent)
 		release()
 		p.forwardAudit(deniedEvent)
 		p.logger.Warn("policy denied",
@@ -251,7 +251,7 @@ func (p *Proxy) processToolsCall(
 		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
 		// Write the JSONL ledger record while holding runtimeMu to
 		// preserve audit ordering with respect to policy reloads.
-		p.audit.Log(approvalEvent)
+		_ = p.audit.Log(approvalEvent)
 		// Release barrier before the blocking wait and before SIEM
 		// forwarding so slow SIEM/webhook sinks cannot stall reloads.
 		release()
@@ -278,16 +278,21 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
-		p.logAudit(allowEvent)
+		// Durable commit before any relay: the runtime barrier is already
+		// released (approval wait happened above), so a failure here only
+		// denies; it does not touch chain/taint/metric state.
+		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
+			return raw, "denied"
+		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
 		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
 		p.metrics.IncrementApproved()
+		p.forwardAudit(allowEvent)
 		p.observeToolCall("approved", "approved by human operator", serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	case policy.ActionAllow:
-		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
 		allowEvent := audit.Event{
 			EventType: audit.EventToolAllowed,
@@ -301,15 +306,19 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
-		p.audit.Log(allowEvent)
+		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			release()
+			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
+			return raw, "denied"
+		}
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
+		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(allowEvent)
 		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 
 	default:
-		p.metrics.IncrementAllowed()
-		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, p.engine.Policy())
 		reason := withRedactionNote(decision.Reason, redactionResult)
 		defaultAllowEvent := audit.Event{
 			EventType: audit.EventToolAllowed,
@@ -323,12 +332,28 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
-		p.audit.Log(defaultAllowEvent)
+		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
+			release()
+			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
+			return raw, "denied"
+		}
+		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
+		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(defaultAllowEvent)
 		p.observeToolCall("allowed", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
 		return raw, "forward"
 	}
+}
+
+// denyCommitFailure responds to a durable authorization commit failure and
+// records the denied metric/observation without touching chain, taint, or
+// allowed/approved state. Callers must release the runtime barrier if held.
+func (p *Proxy) denyCommitFailure(req mcp.Request, respond toolsCallResponder, serverName, toolName string, risk policy.RiskLevel, chainTriggered bool, started time.Time) {
+	reason := "execution denied: durable authorization audit commit failed"
+	respond(req.ID, reason)
+	p.metrics.IncrementDenied()
+	p.observeToolCall("denied", reason, serverName, toolName, string(risk), chainTriggered, started)
 }
 
 func withRedactionNote(reason string, result redaction.Result) string {
