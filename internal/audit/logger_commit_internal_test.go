@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -58,12 +59,15 @@ func TestCommitAuthorizationShortWriteDoesNotAdvanceChain(t *testing.T) {
 	}
 }
 
-// TestNewLoggerSyncsParentDirOnCreate proves the Codex P1 directory-sync fix:
-// when NewLogger creates a fresh audit file, the parent directory must be
-// synced (making the filename->inode entry durable) before any authorization
-// commit is permitted. The sync must happen exactly once on creation and not
-// on reopens of an existing file.
-func TestNewLoggerSyncsParentDirOnCreate(t *testing.T) {
+// TestNewLoggerSyncsParentDirForEveryAcceptedBinding proves the round-5
+// constructor-acceptance durability: every accepted constructor binding
+// (fresh exclusive-create or reopened existing inode) fsyncs the parent
+// directory exactly once before NewLogger returns. The directory entry for a
+// freshly created file must be durable before any authorization commit is
+// permitted, and a retained/reopened existing binding must be re-synced so a
+// later retry after a transient sync failure can leave the created inode in
+// place safely.
+func TestNewLoggerSyncsParentDirForEveryAcceptedBinding(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 
@@ -95,8 +99,9 @@ func TestNewLoggerSyncsParentDirOnCreate(t *testing.T) {
 		t.Fatalf("parent dir sync: want %q, got %q", dir, createdSyncs[0])
 	}
 
-	// Reopen the existing file: the directory entry already exists, so no
-	// additional directory sync is permitted.
+	// Reopen the existing file: the retained existing binding is accepted
+	// only through another parent-directory sync, so a later retry after a
+	// transient sync failure can safely resync the same inode in place.
 	reopened, err := NewLogger(path)
 	if err != nil {
 		t.Fatalf("NewLogger (reopen): %v", err)
@@ -106,8 +111,8 @@ func TestNewLoggerSyncsParentDirOnCreate(t *testing.T) {
 	mu.Lock()
 	totalSyncs := len(syncedDirs)
 	mu.Unlock()
-	if totalSyncs != 1 {
-		t.Fatalf("directory sync on reopen of existing file: want 1 total, got %d", totalSyncs)
+	if totalSyncs != 2 {
+		t.Fatalf("constructor acceptance sync on create+reopen: want 2 total, got %d", totalSyncs)
 	}
 
 	if err := l.CommitAuthorization(Event{
@@ -135,8 +140,15 @@ func TestNewLoggerFailClosedOnParentDirSyncError(t *testing.T) {
 	if _, err := NewLogger(path); !errors.Is(err, syncErr) {
 		t.Fatalf("NewLogger with failing parent dir sync: want injected error, got %v", err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("fail-closed NewLogger must not leave a half-created audit file (got %v)", err)
+	// Round 5: a constructor sync failure never pathname-unlinks anything.
+	// The just-created empty pathname may remain; a later successful
+	// constructor revalidates and resyncs an existing binding.
+	if fi, statErr := os.Stat(path); statErr == nil {
+		if fi.Size() != 0 {
+			t.Fatalf("sync-failure constructor must leave an empty audit pathname, got size %d", fi.Size())
+		}
+	} else if !os.IsNotExist(statErr) {
+		t.Fatalf("stat after constructor sync failure: %v", statErr)
 	}
 }
 
@@ -219,21 +231,26 @@ func TestNewLoggerDoesNotUnlinkForeignFileOnSyncFailure(t *testing.T) {
 		return origOpen(p, flags, perm)
 	}
 
-	l, err := NewLogger(path)
+	_, err := NewLogger(path)
+	if err == nil {
+		t.Fatalf("NewLogger with failing parent dir sync on an existing foreign binding: want error, got nil")
+	}
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("NewLogger error on existing foreign binding: want injected sync error, got %v", err)
+	}
 	got, readErr := os.ReadFile(path)
 	if readErr != nil {
-		t.Fatalf("foreign audit file was unlinked: %v (NewLogger err: %v)", readErr, err)
+		t.Fatalf("foreign audit file was unlinked: %v", readErr)
 	}
 	if string(got) != string(foreign) {
 		t.Fatalf("foreign audit content: got %q want %q", got, foreign)
 	}
-	if syncCalls != 0 {
-		t.Fatalf("syncDir calls for a file this call did not create: want 0, got %d", syncCalls)
+	// Round 5: the retained existing binding is accepted only through a
+	// constructor parent-directory sync, which fails closed here; the foreign
+	// inode must remain untouched (no pathname removal).
+	if syncCalls != 1 {
+		t.Fatalf("constructor acceptance sync for existing foreign binding: want 1, got %d", syncCalls)
 	}
-	if err != nil {
-		t.Fatalf("NewLogger (foreign file in TOCTOU window): %v", err)
-	}
-	t.Cleanup(func() { _ = l.Close() })
 }
 
 // TestNewLoggerFallbackNeverCreatesUnsyncedFile proves the Codex P1 EEXIST
@@ -996,4 +1013,356 @@ func TestCommitAuthorizationAllowsSameInodePathBinding(t *testing.T) {
 			t.Fatalf("commit after same-inode symlink rebind: %v", err)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// H19 round 5: rebind directory-sync, Log-after-poison, pathname cleanup, and
+// constructor no-follow. All RED tests in this section must FAIL on the
+// vulnerable baseline (f3828956) for the intended reason: a same-inode rebind
+// authorizes with zero parent-dir sync, ordinary Log appends after poison,
+// constructor sync-failure cleanup unlinks a replacement, or constructor
+// opens follow a pre-existing symlink.
+// ---------------------------------------------------------------------------
+
+// TestCommitAuthorizationSyncsParentDirForSameInodeRebind proves a same-inode
+// rebind (hard link or symlink to the same inode) is accepted only through the
+// parent-directory durability boundary: at least one fsync of the configured
+// parent must occur after the rebind and before a successful commit return.
+func TestCommitAuthorizationSyncsParentDirForSameInodeRebind(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rebind func(t *testing.T, path string)
+	}{
+		{"hard_link_same_inode", func(t *testing.T, path string) {
+			link := path + ".hard"
+			if err := os.Link(path, link); err != nil {
+				t.Fatalf("hard link: %v", err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("remove original binding: %v", err)
+			}
+			if err := os.Rename(link, path); err != nil {
+				t.Fatalf("rebind through hard link: %v", err)
+			}
+		}},
+		{"symlink_to_backup_same_inode", func(t *testing.T, path string) {
+			backup := path + ".backup"
+			if err := os.Rename(path, backup); err != nil {
+				t.Fatalf("rename away: %v", err)
+			}
+			if err := os.Symlink(backup, path); err != nil {
+				t.Fatalf("symlink to same inode: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "audit.jsonl")
+			l, err := NewLogger(path)
+			if err != nil {
+				t.Fatalf("NewLogger: %v", err)
+			}
+			t.Cleanup(func() { _ = l.Close() })
+			if err := l.CommitAuthorization(Event{
+				EventType: EventToolAllowed,
+				SessionID: "sess-warm",
+				Tool:      "file_read",
+				Decision:  "allow",
+			}); err != nil {
+				t.Fatalf("warmup commit: %v", err)
+			}
+
+			var (
+				mu         sync.Mutex
+				postRebind int
+			)
+			syncDir = func(f *os.File) error {
+				mu.Lock()
+				defer mu.Unlock()
+				postRebind++
+				return f.Sync()
+			}
+			t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+			tc.rebind(t, path)
+
+			if err := l.CommitAuthorization(Event{
+				EventType: EventToolAllowed,
+				SessionID: "sess-rebound",
+				Tool:      "http_post",
+				Decision:  "allow",
+			}); err != nil {
+				t.Fatalf("commit after same-inode rebind: %v", err)
+			}
+
+			mu.Lock()
+			got := postRebind
+			mu.Unlock()
+			if got < 1 {
+				t.Fatalf("same-inode rebind authorized with zero parent-dir syncs (got %d)", got)
+			}
+			lines := readLedgerLines(t, path)
+			if len(lines) != 2 {
+				t.Fatalf("ledger after rebind: want 2 linked records, got %d", len(lines))
+			}
+		})
+	}
+}
+
+// TestCommitAuthorizationSameInodeRebindSyncFailurePoisons proves a parent-dir
+// sync failure during the post-rebind binding validation poisons the logger,
+// leaves chain state unchanged, and makes every later commit return
+// ErrAuditSinkUnhealthy without another write.
+func TestCommitAuthorizationSameInodeRebindSyncFailurePoisons(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	l, err := NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	if err := l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-warm",
+		Tool:      "file_read",
+		Decision:  "allow",
+	}); err != nil {
+		t.Fatalf("warmup commit: %v", err)
+	}
+
+	link := path + ".hard"
+	if err := os.Link(path, link); err != nil {
+		t.Fatalf("hard link: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove original binding: %v", err)
+	}
+	if err := os.Rename(link, path); err != nil {
+		t.Fatalf("rebind through hard link: %v", err)
+	}
+
+	prevHash := l.prevHash
+	chainIndex := l.chainIndex
+	syncErr := errors.New("injected parent dir sync failure")
+	syncDir = func(*os.File) error { return syncErr }
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+	err = l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-syncfail",
+		Tool:      "http_post",
+		Decision:  "allow",
+	})
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("commit with failing rebind dir sync: want injected error, got %v", err)
+	}
+	if !l.poisoned {
+		t.Fatal("logger must be poisoned after rebind dir-sync failure")
+	}
+	if l.prevHash != prevHash || l.chainIndex != chainIndex {
+		t.Fatalf("chain advanced after rebind dir-sync failure: prevHash=%q chainIndex=%d", l.prevHash, l.chainIndex)
+	}
+
+	l.write = func(*os.File, []byte) (int, error) {
+		t.Fatal("poisoned logger must not attempt another write")
+		return 0, nil
+	}
+	if err := l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-after-poison",
+		Tool:      "file_read",
+		Decision:  "allow",
+	}); !errors.Is(err, ErrAuditSinkUnhealthy) {
+		t.Fatalf("commit after poison: want ErrAuditSinkUnhealthy, got %v", err)
+	}
+}
+
+// TestLogRefusesAfterPoison proves ordinary Log writes are blocked after any
+// poison source: a short-write poison or a post-write binding poison must make
+// Log return ErrAuditSinkUnhealthy without appending, without advancing chain
+// state, and without touching the file.
+func TestLogRefusesAfterPoison(t *testing.T) {
+	t.Run("short_write_poison", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "audit.jsonl")
+		l, err := NewLogger(path)
+		if err != nil {
+			t.Fatalf("NewLogger: %v", err)
+		}
+		t.Cleanup(func() { _ = l.Close() })
+
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read ledger before: %v", err)
+		}
+		prevHash := l.prevHash
+		chainIndex := l.chainIndex
+
+		l.write = func(f *os.File, data []byte) (int, error) {
+			return len(data) - 1, nil
+		}
+		if err := l.CommitAuthorization(Event{
+			EventType: EventToolAllowed,
+			SessionID: "sess-short",
+			Tool:      "file_read",
+			Decision:  "allow",
+		}); !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("short-write commit: want io.ErrShortWrite, got %v", err)
+		}
+		if !l.poisoned {
+			t.Fatal("logger must be poisoned after short write")
+		}
+
+		l.write = func(*os.File, []byte) (int, error) {
+			t.Fatal("poisoned logger must not attempt a Log write")
+			return 0, nil
+		}
+		if err := l.Log(Event{
+			EventType: EventToolDenied,
+			SessionID: "sess-log-after-poison",
+			Tool:      "file_read",
+			Decision:  "deny",
+		}); !errors.Is(err, ErrAuditSinkUnhealthy) {
+			t.Fatalf("Log after short-write poison: want ErrAuditSinkUnhealthy, got %v", err)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read ledger after: %v", err)
+		}
+		if !bytes.Equal(after, before) {
+			t.Fatalf("ledger bytes changed after poisoned Log: before=%q after=%q", before, after)
+		}
+		if l.prevHash != prevHash || l.chainIndex != chainIndex {
+			t.Fatalf("chain advanced after poisoned Log: prevHash=%q chainIndex=%d", l.prevHash, l.chainIndex)
+		}
+	})
+
+	t.Run("post_write_binding_poison", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "audit.jsonl")
+		l, err := NewLogger(path)
+		if err != nil {
+			t.Fatalf("NewLogger: %v", err)
+		}
+		t.Cleanup(func() { _ = l.Close() })
+		if err := l.CommitAuthorization(Event{
+			EventType: EventToolAllowed,
+			SessionID: "sess-warm",
+			Tool:      "file_read",
+			Decision:  "allow",
+		}); err != nil {
+			t.Fatalf("warmup commit: %v", err)
+		}
+
+		backup := path + ".backup"
+		l.write = func(f *os.File, data []byte) (int, error) {
+			n, werr := (*os.File).Write(f, data)
+			if rerr := os.Rename(path, backup); rerr != nil {
+				return n, rerr
+			}
+			return n, werr
+		}
+		if err := l.CommitAuthorization(Event{
+			EventType: EventToolAllowed,
+			SessionID: "sess-inwrite",
+			Tool:      "http_post",
+			Decision:  "allow",
+		}); err == nil {
+			t.Fatal("commit with rotation after write: want error, got nil")
+		}
+		if !l.poisoned {
+			t.Fatal("logger must be poisoned after post-write rotation")
+		}
+
+		before, err := os.ReadFile(backup)
+		if err != nil {
+			t.Fatalf("read rotated-away ledger before: %v", err)
+		}
+		prevHash := l.prevHash
+		chainIndex := l.chainIndex
+
+		l.write = func(*os.File, []byte) (int, error) {
+			t.Fatal("poisoned logger must not attempt a Log write")
+			return 0, nil
+		}
+		if err := l.Log(Event{
+			EventType: EventToolDenied,
+			SessionID: "sess-log-after-poison",
+			Tool:      "file_read",
+			Decision:  "deny",
+		}); !errors.Is(err, ErrAuditSinkUnhealthy) {
+			t.Fatalf("Log after post-write poison: want ErrAuditSinkUnhealthy, got %v", err)
+		}
+		after, err := os.ReadFile(backup)
+		if err != nil {
+			t.Fatalf("read rotated-away ledger after: %v", err)
+		}
+		if !bytes.Equal(after, before) {
+			t.Fatalf("rotated-away ledger bytes changed after poisoned Log: before=%q after=%q", before, after)
+		}
+		if l.prevHash != prevHash || l.chainIndex != chainIndex {
+			t.Fatalf("chain advanced after poisoned Log: prevHash=%q chainIndex=%d", l.prevHash, l.chainIndex)
+		}
+	})
+}
+
+// TestNewLoggerDoesNotRemoveReplacementOnSyncFailure proves a constructor
+// sync failure never pathname-unlinks anything: if the just-created audit
+// path is atomically replaced while the parent-dir sync fails, the
+// replacement pathname and its bytes must remain untouched.
+func TestNewLoggerDoesNotRemoveReplacementOnSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	replacement := filepath.Join(dir, "replacement.jsonl")
+	sentinel := []byte("replacement-sentinel-content")
+
+	if err := os.WriteFile(replacement, sentinel, 0o600); err != nil {
+		t.Fatalf("prepare replacement: %v", err)
+	}
+
+	syncErr := errors.New("injected parent dir sync failure")
+	syncDir = func(*os.File) error {
+		if err := os.Rename(path, path+".removed"); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Rename(replacement, path); err != nil {
+			return err
+		}
+		return syncErr
+	}
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+	if _, err := NewLogger(path); !errors.Is(err, syncErr) {
+		t.Fatalf("NewLogger with sync failure after replacement: want injected error, got %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("replacement pathname was removed by constructor cleanup: %v", err)
+	}
+	if string(got) != string(sentinel) {
+		t.Fatalf("replacement bytes changed: got %q want %q", got, sentinel)
+	}
+}
+
+// TestNewLoggerRejectsSymlinkSink proves every constructor open rejects a
+// pre-existing symlink with kernel no-follow semantics: NewLogger must fail
+// and the symlink target bytes must remain unchanged.
+func TestNewLoggerRejectsSymlinkSink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "victim.jsonl")
+	sentinel := []byte(`{"event_type":"session_started","session_id":"victim","policy_decision":"n/a"}` + "\n")
+	if err := os.WriteFile(target, sentinel, 0o600); err != nil {
+		t.Fatalf("write victim target: %v", err)
+	}
+	path := filepath.Join(dir, "audit.jsonl")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink configured audit path to victim: %v", err)
+	}
+
+	if _, err := NewLogger(path); err == nil {
+		t.Fatal("NewLogger over a pre-existing symlink: want error, got nil")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read victim target: %v", err)
+	}
+	if string(got) != string(sentinel) {
+		t.Fatalf("symlink target bytes changed: got %q want %q", got, sentinel)
+	}
 }

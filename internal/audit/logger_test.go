@@ -777,3 +777,39 @@ func TestCommitAuthorizationPreservesHashLinkage(t *testing.T) {
 		t.Errorf("second hash mismatch: recomputed %q stored %q", got, b.Hash)
 	}
 }
+
+// TestMustLoggerSymlinkFallbackCannotCommitAuthorization proves a pre-existing
+// symlink sink cannot become a committing logger: MustLogger falls back to
+// stderr and CommitAuthorization returns ErrNonDurableSink, leaving the
+// symlink target bytes unchanged.
+func TestMustLoggerSymlinkFallbackCannotCommitAuthorization(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "victim.jsonl")
+	sentinel := []byte(`{"event_type":"session_started","session_id":"victim","policy_decision":"n/a"}` + "\n")
+	if err := os.WriteFile(target, sentinel, 0o600); err != nil {
+		t.Fatalf("write victim target: %v", err)
+	}
+	path := filepath.Join(dir, "audit.jsonl")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink configured audit path to victim: %v", err)
+	}
+
+	l := audit.MustLogger(path)
+	t.Cleanup(func() { _ = l.Close() })
+	err := l.CommitAuthorization(audit.Event{
+		EventType: audit.EventToolAllowed,
+		SessionID: "sess-symlink",
+		Tool:      "file_read",
+		Decision:  "allow",
+	})
+	if !errors.Is(err, audit.ErrNonDurableSink) {
+		t.Fatalf("CommitAuthorization on symlink-fallback logger: want ErrNonDurableSink, got %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read victim target: %v", err)
+	}
+	if string(got) != string(sentinel) {
+		t.Fatalf("symlink target bytes changed: got %q want %q", got, sentinel)
+	}
+}

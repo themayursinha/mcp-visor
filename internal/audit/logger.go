@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -127,20 +128,24 @@ func NewLogger(path string) (*Logger, error) {
 	// actually opens is exactly the inode whose chain is recovered and later
 	// appended.
 	//
+	// Every open uses O_NOFOLLOW so a pre-existing symlink at the configured
+	// path is rejected by the kernel instead of being followed onto an
+	// unrelated victim file that would then be treated as the durable ledger.
+	//
 	// Detect creation atomically with the open. A pre-open Stat TOCTOU can
 	// leave created=false after O_CREATE makes a new inode (parent dir never
 	// synced) or created=true after opening another process's ledger (cleanup
 	// would unlink it). O_EXCL is the create-vs-existing seam.
 	created := false
-	f, err := openFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
+	f, err := openFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		// Existing file: open append-only without O_CREATE. If the ledger
 		// was rotated away between EEXIST and this open (ENOENT), retry the
 		// exclusive-create path so created=true and the parent dir is synced.
 		// Any other error, including a second EEXIST on retry, fails closed.
-		f, err = openFile(path, os.O_RDWR|os.O_SYNC|os.O_APPEND, 0o600)
+		f, err = openFile(path, os.O_RDWR|os.O_SYNC|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
 		if errors.Is(err, os.ErrNotExist) {
-			f, err = openFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
+			f, err = openFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
 			if err != nil {
 				return nil, fmt.Errorf("open audit log: %w", err)
 			}
@@ -165,44 +170,43 @@ func NewLogger(path string) (*Logger, error) {
 
 	var prevHash string
 	var chainIndex uint64
-	if created {
-		// This call created the audit file. A fresh inode always starts at
-		// genesis; no recovered chain state may cross onto it. The O_SYNC
-		// data write does not persist the filename->inode directory entry;
-		// without syncing the parent directory, a power loss shortly after
-		// the first authorization could make the durable record vanish on
-		// reboot. Sync the parent directory before any authorization commit
-		// is permitted, and fail closed if the directory cannot be opened or
-		// synced. Cleanup may unlink only the file this call created.
-		if err := syncParentDir(path); err != nil {
-			_ = f.Close()
-			if created {
-				_ = os.Remove(path)
-			}
-			return nil, fmt.Errorf("sync audit log parent directory: %w", err)
-		}
-	} else {
+	if !created {
 		prevHash, chainIndex, err = recoverChainStateFromFile(f, st)
 		if err != nil {
 			_ = f.Close()
 			return nil, err
 		}
 	}
-	return &Logger{
+
+	l := &Logger{
 		path:       path,
 		file:       f,
 		sinkInfo:   st,
 		prevHash:   prevHash,
 		chainIndex: chainIndex,
 		write:      (*os.File).Write,
-	}, nil
+	}
+	// Constructor acceptance: prove live fd/path identity and make the
+	// accepted binding's parent directory durable. This runs for both a
+	// fresh exclusive-create (the filename->inode directory entry must be
+	// durable before any authorization commit is permitted) and an existing
+	// inode (a retained binding is re-validated and re-synced in place, so a
+	// later retry after a transient sync failure can safely leave the
+	// created inode as found). On failure the fd is closed and the error
+	// returned; nothing is ever pathname-unlinked, because the configured
+	// pathname may now reference an inode this call did not create.
+	if err := l.validateDurableBindingLocked(); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("validate audit binding: %w", err)
+	}
+	return l, nil
 }
 
-// syncParentDir makes the directory entry for a newly created audit file
-// durable by fsyncing its parent directory. It opens the directory read-only,
-// syncs it, and closes it; any failure is returned so NewLogger can fail
-// closed rather than permit an authorization commit whose audit record could
-// disappear on reboot.
+// syncParentDir makes an accepted audit binding durable by fsyncing its parent
+// directory. It opens the directory read-only, syncs it, and closes it; any
+// failure is returned so NewLogger and CommitAuthorization can fail closed
+// rather than permit an authorization commit whose audit record or binding
+// could disappear on reboot.
 func syncParentDir(path string) error {
 	parent := filepath.Dir(path)
 	if parent == "" {
@@ -347,6 +351,13 @@ func (l *Logger) Log(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// A poisoned logger must never append again: any write/validation/sync
+	// failure means the ledger cannot be trusted, so ordinary logging fails
+	// closed before candidate preparation or any write attempt.
+	if l.poisoned {
+		return ErrAuditSinkUnhealthy
+	}
+
 	prepared, data, err := l.prepareCandidateLocked(event)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "audit logger: marshal error: %v\n", err)
@@ -366,9 +377,11 @@ func (l *Logger) Log(event Event) error {
 // a regular O_SYNC sink that has not been poisoned, and advances chain state
 // only after a full write. Every commit validates that the live fd is still the
 // constructor-bound regular sink and that the configured path still resolves to
-// that exact inode immediately before and immediately after the write, so any
-// rotation/rebinding before, during, or after the append fails closed and
-// poisons the logger. Existing O_SYNC is the write-durability boundary.
+// that exact inode immediately before and immediately after the write — and
+// that the accepted binding's parent directory can be fsynced — so any
+// rotation/rebinding or durability failure before, during, or after the append
+// fails closed and poisons the logger. Existing O_SYNC is the write-durability
+// boundary; the parent-directory fsync makes the path binding durable.
 func (l *Logger) CommitAuthorization(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -407,7 +420,10 @@ func (l *Logger) CommitAuthorization(event Event) error {
 // still the regular constructor-bound inode and that the configured audit path
 // still resolves to that exact inode. Any missing, non-regular, renamed,
 // unlinked, replaced, atomic-renamed-over, or different-inode condition fails
-// closed without writing.
+// closed without writing. After the identity checks succeed, the containing
+// parent directory is fsynced so the accepted binding is durable: a fresh
+// directory entry and a same-inode hard-link/symlink rebind both survive power
+// loss only through that durability boundary.
 func (l *Logger) validateDurableBindingLocked() error {
 	if l.path == "" || l.sinkInfo == nil || l.file == nil {
 		return ErrNonDurableSink
@@ -434,6 +450,9 @@ func (l *Logger) validateDurableBindingLocked() error {
 	}
 	if !os.SameFile(fdInfo, pathInfo) {
 		return fmt.Errorf("%w: configured audit path no longer references the opened sink", ErrAuditSinkChanged)
+	}
+	if err := syncParentDir(l.path); err != nil {
+		return fmt.Errorf("sync configured audit parent directory: %w", err)
 	}
 	return nil
 }
