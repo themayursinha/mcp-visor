@@ -161,6 +161,9 @@ func cmdVerify(root string, args []string) int {
 		"head_sha":          rep.HeadSHA,
 		"workspace_digest":  rep.WorkspaceDigest,
 		"evidence_editable": rep.EvidenceEditable,
+		"spec_pass":         rep.SpecPass,
+		"contract_digest":   rep.ContractDigest,
+		"stop_loss":         rep.StopLoss,
 	})
 	if workflow.StatusRank(rep.DerivedStatus) >= workflow.StatusRank(need) {
 		return 0
