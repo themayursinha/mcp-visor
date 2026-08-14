@@ -1294,6 +1294,12 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 	}
 	canon := canonicalClasses(t)
 	streaks := map[string]int{}
+	// latched records classes that have already reached the threshold.
+	// Once latched, an implementation review without the class does NOT
+	// reset the streak (an interrupted pre-threshold run and an
+	// already-triggered stop-loss are distinct); only a current passing
+	// spec review listing the class in closed_failure_classes unlatches it.
+	latched := map[string]bool{}
 	for i := range reviews {
 		r := &reviews[i]
 		if r.Phase == "spec" {
@@ -1305,6 +1311,7 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 				for c := range streaks {
 					if _, ok := closed[c]; ok {
 						streaks[c] = 0
+						latched[c] = false
 					}
 				}
 			}
@@ -1315,8 +1322,16 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 			has[c] = struct{}{}
 		}
 		for c := range canon {
+			if latched[c] {
+				// Already triggered; cannot be unlatched by an
+				// implementation review, only by spec closure.
+				continue
+			}
 			if _, ok := has[c]; ok {
 				streaks[c]++
+				if streaks[c] >= threshold {
+					latched[c] = true
+				}
 			} else {
 				streaks[c] = 0
 			}
@@ -1324,7 +1339,7 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 	}
 	var candidates []string
 	for c, n := range streaks {
-		if n >= threshold {
+		if latched[c] || n >= threshold {
 			candidates = append(candidates, c)
 		}
 	}
@@ -1333,6 +1348,9 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 	}
 	sort.Strings(candidates)
 	first := candidates[0]
+	if latched[first] {
+		return first, threshold, true
+	}
 	return first, streaks[first], true
 }
 

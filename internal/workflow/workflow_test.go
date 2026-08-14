@@ -1214,6 +1214,38 @@ func TestStopLoss_XXEvenIfSecondReviewPassed(t *testing.T) {
 	}
 }
 
+func TestStopLoss_LatchedUntilSpecClosure(t *testing.T) {
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After 2/2 (latched), a THIRD implementation review WITHOUT X must NOT
+	// reset the streak: the stop-loss stays latched until a current passing
+	// spec review lists X in closed_failure_classes.
+	reviews := []workflow.ReviewArtifact{
+		specReview(true, 1, digest, nil),
+		implReview(false, []string{"X"}, nil),
+		implReview(false, []string{"X"}, nil),
+		implReview(false, nil, nil), // third review without X: must NOT unlatch
+	}
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	if st != workflow.StatusSpecified {
+		t.Fatalf("latched stop-loss must stay SPECIFIED, got %s %v", st, reasons)
+	}
+	if !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
+		t.Fatalf("expected latched same_failure_class_stop_loss:X:2/2, got %v", reasons)
+	}
+	// A current passing spec review closing X unlatches and restarts the cycle.
+	reviews = append(reviews, specReview(true, 1, digest, func(r *workflow.ReviewArtifact) {
+		r.ClosedFailureClasses = []string{"X"}
+	}))
+	st, reasons = workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	if st == workflow.StatusSpecified || hasReason(reasons, "same_failure_class_stop_loss") {
+		t.Fatalf("spec closure must clear the stop-loss and advance, got %s %v", st, reasons)
+	}
+}
+
 func TestStopLoss_DuplicateFindingCountsOnce(t *testing.T) {
 	tk := specTask(nil)
 	digest, err := workflow.ContractDigest(&tk)
