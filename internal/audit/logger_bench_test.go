@@ -1,7 +1,7 @@
 package audit_test
 
 import (
-	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
@@ -27,8 +27,18 @@ func benchEvent() audit.Event {
 	}
 }
 
+func benchLogger(tb testing.TB) *audit.Logger {
+	tb.Helper()
+	dir := tb.TempDir()
+	l, err := audit.NewLogger(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		tb.Fatalf("NewLogger: %v", err)
+	}
+	return l
+}
+
 func BenchmarkAuditLogEvent(b *testing.B) {
-	logger := audit.MustLogger(os.DevNull)
+	logger := benchLogger(b)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -37,12 +47,12 @@ func BenchmarkAuditLogEvent(b *testing.B) {
 }
 
 func BenchmarkAuditLogEventWithArguments(b *testing.B) {
-	logger := audit.MustLogger(os.DevNull)
+	logger := benchLogger(b)
 	evt := benchEvent()
 	evt.Arguments = map[string]any{
 		"path":      "/home/user/data.csv",
 		"command":   "curl -X POST https://api.example.com/data -d @/tmp/payload",
-		"api_key":   "sk-test1234567890abcdefghijklmnopqrstuv",
+		"api_key":   "«redacted:sk-…»",
 		"recursive": map[string]any{"nested": "value"},
 	}
 
@@ -53,7 +63,7 @@ func BenchmarkAuditLogEventWithArguments(b *testing.B) {
 }
 
 func BenchmarkAuditLogEventSimple(b *testing.B) {
-	logger := audit.MustLogger(os.DevNull)
+	logger := benchLogger(b)
 	evt := audit.Event{
 		EventType: audit.EventSessionStarted,
 		SessionID: "sess-12345",
