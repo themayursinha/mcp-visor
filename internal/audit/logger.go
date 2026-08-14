@@ -24,10 +24,16 @@ var (
 	// ErrCorruptAuditRecord is returned when the last complete audit record is invalid.
 	ErrCorruptAuditRecord = errors.New("audit log corrupt last record")
 	// ErrNonDurableSink is returned when authorization commit is attempted on a
-	// sink that is not a regular O_SYNC file opened by NewLogger.
+	// sink that is not a regular O_SYNC file opened by NewLogger, or when the
+	// configured audit path is rebound to a non-regular object at commit time.
 	ErrNonDurableSink = errors.New("audit sink is not a durable regular file")
-	// ErrAuditSinkUnhealthy is returned when a prior write/short-write failure
-	// has poisoned the logger until process restart.
+	// ErrAuditSinkChanged is returned when the configured audit path no longer
+	// references the opened audit sink inode (rotated, renamed, unlinked,
+	// replaced, atomic-renamed-over, or symlinked to a different inode), so an
+	// append through the stale fd could not be proven durable at the path.
+	ErrAuditSinkChanged = errors.New("configured audit path no longer references the opened audit sink")
+	// ErrAuditSinkUnhealthy is returned when a prior write/short-write or
+	// durability/binding failure has poisoned the logger until process restart.
 	ErrAuditSinkUnhealthy = errors.New("audit sink is unhealthy")
 )
 
@@ -82,13 +88,17 @@ type Event struct {
 }
 
 type Logger struct {
-	path       string
-	mu         sync.Mutex
-	file       *os.File
+	path string
+	mu   sync.Mutex
+	file *os.File
+	// sinkInfo is the immutable constructor identity snapshot of the opened
+	// sink (file opened by NewLogger). It is nil for the stderr fallback
+	// (path==""). Live path-to-fd validation at commit time compares the
+	// current fd and configured path against this identity.
+	sinkInfo   os.FileInfo
 	patterns   []*regexp.Regexp
 	prevHash   string
 	chainIndex uint64
-	durable    bool
 	poisoned   bool
 	// write is an unexported seam for package-audit tests to inject short
 	// writes. Constructors default it to (*os.File).Write.
@@ -108,24 +118,29 @@ var openFile = func(path string, flags int, perm os.FileMode) (*os.File, error) 
 }
 
 func NewLogger(path string) (*Logger, error) {
-	prevHash, chainIndex, err := recoverChainState(path)
-	if err != nil {
-		return nil, err
-	}
+	// Open the actual append sink FIRST, then recover or initialize the chain
+	// from that exact fd. A pre-open pathname recovery can read inode A while
+	// the create-vs-existing state machine later opens or creates inode B,
+	// carrying A's chain state onto a fresh ledger or appending A-linked
+	// metadata into B. Same-fd recovery makes stale-chain carry-over
+	// impossible by construction: whichever existing inode the fallback
+	// actually opens is exactly the inode whose chain is recovered and later
+	// appended.
+	//
 	// Detect creation atomically with the open. A pre-open Stat TOCTOU can
 	// leave created=false after O_CREATE makes a new inode (parent dir never
 	// synced) or created=true after opening another process's ledger (cleanup
 	// would unlink it). O_EXCL is the create-vs-existing seam.
 	created := false
-	f, err := openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
+	f, err := openFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		// Existing file: open append-only without O_CREATE. If the ledger
 		// was rotated away between EEXIST and this open (ENOENT), retry the
 		// exclusive-create path so created=true and the parent dir is synced.
 		// Any other error, including a second EEXIST on retry, fails closed.
-		f, err = openFile(path, os.O_WRONLY|os.O_SYNC|os.O_APPEND, 0o600)
+		f, err = openFile(path, os.O_RDWR|os.O_SYNC|os.O_APPEND, 0o600)
 		if errors.Is(err, os.ErrNotExist) {
-			f, err = openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
+			f, err = openFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
 			if err != nil {
 				return nil, fmt.Errorf("open audit log: %w", err)
 			}
@@ -143,13 +158,21 @@ func NewLogger(path string) (*Logger, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("stat audit log: %w", err)
 	}
+	if !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, ErrNonDurableSink
+	}
+
+	var prevHash string
+	var chainIndex uint64
 	if created {
-		// This call created the audit file. The O_SYNC data write does not
-		// persist the filename->inode directory entry; without syncing the
-		// parent directory, a power loss shortly after the first
-		// authorization could make the durable record vanish on reboot.
-		// Sync the parent directory before any authorization commit is
-		// permitted, and fail closed if the directory cannot be opened or
+		// This call created the audit file. A fresh inode always starts at
+		// genesis; no recovered chain state may cross onto it. The O_SYNC
+		// data write does not persist the filename->inode directory entry;
+		// without syncing the parent directory, a power loss shortly after
+		// the first authorization could make the durable record vanish on
+		// reboot. Sync the parent directory before any authorization commit
+		// is permitted, and fail closed if the directory cannot be opened or
 		// synced. Cleanup may unlink only the file this call created.
 		if err := syncParentDir(path); err != nil {
 			_ = f.Close()
@@ -158,13 +181,19 @@ func NewLogger(path string) (*Logger, error) {
 			}
 			return nil, fmt.Errorf("sync audit log parent directory: %w", err)
 		}
+	} else {
+		prevHash, chainIndex, err = recoverChainStateFromFile(f, st)
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 	return &Logger{
 		path:       path,
 		file:       f,
+		sinkInfo:   st,
 		prevHash:   prevHash,
 		chainIndex: chainIndex,
-		durable:    st.Mode().IsRegular(),
 		write:      (*os.File).Write,
 	}, nil
 }
@@ -206,20 +235,12 @@ func stderrLogger() *Logger {
 	return &Logger{file: os.Stderr, write: (*os.File).Write}
 }
 
-func recoverChainState(path string) (prevHash string, chainIndex uint64, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", 0, nil
-		}
-		return "", 0, fmt.Errorf("open audit log for chain recovery: %w", err)
-	}
-	defer f.Close()
-
-	st, err := f.Stat()
-	if err != nil {
-		return "", 0, fmt.Errorf("stat audit log: %w", err)
-	}
+// recoverChainStateFromFile recovers the hash-chain tip from the exact
+// append sink fd that will receive future records. It never reopens the
+// pathname (which could resolve to a different inode after rotation) and
+// never closes the caller's fd. The caller passes the fd's current FileInfo
+// so the function does not need to re-stat.
+func recoverChainStateFromFile(f *os.File, st os.FileInfo) (prevHash string, chainIndex uint64, err error) {
 	if st.Size() == 0 {
 		return "", 0, nil
 	}
@@ -343,7 +364,11 @@ func (l *Logger) Log(event Event) error {
 // CommitAuthorization durably appends a terminal allow event to the hash-linked
 // JSONL ledger. It accepts only EventToolAllowed with Decision "allow", requires
 // a regular O_SYNC sink that has not been poisoned, and advances chain state
-// only after a full write. Existing O_SYNC is the durability boundary.
+// only after a full write. Every commit validates that the live fd is still the
+// constructor-bound regular sink and that the configured path still resolves to
+// that exact inode immediately before and immediately after the write, so any
+// rotation/rebinding before, during, or after the append fails closed and
+// poisons the logger. Existing O_SYNC is the write-durability boundary.
 func (l *Logger) CommitAuthorization(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -351,11 +376,13 @@ func (l *Logger) CommitAuthorization(event Event) error {
 	if event.EventType != EventToolAllowed || event.Decision != "allow" {
 		return fmt.Errorf("authorization commit requires %s with decision allow", EventToolAllowed)
 	}
-	if !l.durable {
-		return ErrNonDurableSink
-	}
 	if l.poisoned {
 		return ErrAuditSinkUnhealthy
+	}
+	// Pre-write live validation: reject a known-stale fd before any write so
+	// no orphaned durable record is produced through a rotated sink.
+	if err := l.validateDurableBindingLocked(); err != nil {
+		return l.poisonCommitLocked(err)
 	}
 
 	prepared, data, err := l.prepareCandidateLocked(event)
@@ -365,9 +392,59 @@ func (l *Logger) CommitAuthorization(event Event) error {
 	if err := l.writeRecordLocked(data); err != nil {
 		return err
 	}
+	// Post-write live validation: close the stat-to-write rotation window. If
+	// the path was rebound while the O_SYNC write was in flight, the record
+	// may exist in the old inode but must not authorize this call.
+	if err := l.validateDurableBindingLocked(); err != nil {
+		return l.poisonCommitLocked(err)
+	}
 	l.prevHash = prepared.Hash
 	l.chainIndex++
 	return nil
+}
+
+// validateDurableBindingLocked checks, under Logger.mu, that the live sink is
+// still the regular constructor-bound inode and that the configured audit path
+// still resolves to that exact inode. Any missing, non-regular, renamed,
+// unlinked, replaced, atomic-renamed-over, or different-inode condition fails
+// closed without writing.
+func (l *Logger) validateDurableBindingLocked() error {
+	if l.path == "" || l.sinkInfo == nil || l.file == nil {
+		return ErrNonDurableSink
+	}
+	fdInfo, err := l.file.Stat()
+	if err != nil {
+		return fmt.Errorf("%w: stat opened sink: %v", ErrAuditSinkChanged, err)
+	}
+	if !fdInfo.Mode().IsRegular() {
+		return ErrNonDurableSink
+	}
+	if !os.SameFile(l.sinkInfo, fdInfo) {
+		return fmt.Errorf("%w: opened sink inode changed since construction", ErrAuditSinkChanged)
+	}
+	pathInfo, err := os.Stat(l.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: configured audit path missing", ErrAuditSinkChanged)
+		}
+		return fmt.Errorf("%w: stat configured audit path: %v", ErrAuditSinkChanged, err)
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return ErrNonDurableSink
+	}
+	if !os.SameFile(fdInfo, pathInfo) {
+		return fmt.Errorf("%w: configured audit path no longer references the opened sink", ErrAuditSinkChanged)
+	}
+	return nil
+}
+
+// poisonCommitLocked marks the logger permanently unhealthy after a live
+// durability/binding failure and returns the specific first failure cause.
+// Every later authorization commit returns ErrAuditSinkUnhealthy without
+// attempting a stat or write.
+func (l *Logger) poisonCommitLocked(err error) error {
+	l.poisoned = true
+	return err
 }
 
 func (l *Logger) prepareCandidateLocked(event Event) (Event, []byte, error) {

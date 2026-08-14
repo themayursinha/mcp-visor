@@ -424,6 +424,146 @@ servers:
 	}
 }
 
+// TestAuditLedgerRotationFailClosedNoRelay is the H19 round-4 RED test for
+// the stdio transport: if the configured audit ledger path is rotated or
+// rebound while the proxy is running, the next allowed tools/call must be
+// denied with zero downstream relay, no allow/approved metrics, no session
+// taint, and no tool_call_allowed record in the replacement ledger. On the
+// vulnerable baseline, CommitAuthorization writes through the stale fd and
+// the call is relayed.
+func TestAuditLedgerRotationFailClosedNoRelay(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:   "workspace",
+		SessionID:    "sess-rotation-stdio",
+		ClientID:     "agent-rotation-stdio",
+		AuditLogPath: auditPath,
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "workspace"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+taints:
+  - name: "sensitive_file_accessed"
+    description: "Session has read sensitive workspace data"
+    source_tools: ["file_read"]
+    source_patterns: ["**/secrets/**", "**/*.env"]
+`),
+	})
+	defer p.audit.Close()
+
+	// Rotate the configured audit ledger: rename the opened sink away and
+	// install a fresh regular replacement at the same path.
+	if err := os.Rename(auditPath, auditPath+".rotated"); err != nil {
+		t.Fatalf("rotate audit away: %v", err)
+	}
+	if err := os.WriteFile(auditPath, nil, 0o600); err != nil {
+		t.Fatalf("fresh replacement ledger: %v", err)
+	}
+
+	clientOut := &bytes.Buffer{}
+	downstream := &observingWriter{}
+	raw := toolCallRaw(1, "file_read", map[string]any{"path": "/workspace/secrets/customer-tokens.txt"})
+	client := mcp.NewParser(bytes.NewReader(append(raw, '\n')), clientOut)
+	server := mcp.NewParser(nil, downstream)
+
+	err := p.relayClientToServer(context.Background(), client, server)
+	if err == nil {
+		t.Fatalf("expected relay to return when the client stream ends")
+	}
+	if !strings.Contains(clientOut.String(), "durable authorization audit commit failed") {
+		t.Fatalf("expected generic audit-commit denial to the client, got %q", clientOut.String())
+	}
+	if got := downstream.Count(); got != 0 {
+		t.Fatalf("downstream write count=%d, want 0 (relay must be denied after audit rotation); bytes=%q", got, downstream.Bytes())
+	}
+	if got := downstream.Bytes(); len(got) != 0 {
+		t.Fatalf("downstream bytes=%q, want empty", got)
+	}
+	if p.metrics.MessagesAllowed != 0 {
+		t.Fatalf("allowed metric=%d, want 0 on audit rotation", p.metrics.MessagesAllowed)
+	}
+	if p.metrics.MessagesApproved != 0 {
+		t.Fatalf("approved metric=%d, want 0 on audit rotation", p.metrics.MessagesApproved)
+	}
+	if p.metrics.MessagesDenied != 1 {
+		t.Fatalf("denied metric=%d, want 1 on audit rotation", p.metrics.MessagesDenied)
+	}
+	if p.session.HasTaint("sensitive_file_accessed") {
+		t.Fatalf("session taint must not mutate on audit rotation, taints=%+v", p.session.TaintsSnapshot())
+	}
+	replacement, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read replacement ledger: %v", err)
+	}
+	if strings.Contains(string(replacement), "tool_call_allowed") {
+		t.Fatalf("replacement ledger must not contain a tool_call_allowed record, got %q", replacement)
+	}
+}
+
+// TestAuditLedgerRotationFailClosedRemoteNoRelay is the H19 round-4 RED test
+// for the remote transport: rotation of the configured audit path must deny
+// with zero EncodeRaw writes and no allowed-state mutation. On the vulnerable
+// baseline the call is relayed.
+func TestAuditLedgerRotationFailClosedRemoteNoRelay(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:   "workspace",
+		SessionID:    "sess-rotation-remote",
+		ClientID:     "agent-rotation-remote",
+		AuditLogPath: auditPath,
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "workspace"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+`),
+	})
+	defer p.audit.Close()
+
+	if err := os.Rename(auditPath, auditPath+".rotated"); err != nil {
+		t.Fatalf("rotate audit away: %v", err)
+	}
+	if err := os.WriteFile(auditPath, nil, 0o600); err != nil {
+		t.Fatalf("fresh replacement ledger: %v", err)
+	}
+
+	clientOut := &bytes.Buffer{}
+	remote := &observingTransport{}
+	raw := toolCallRaw(1, "file_read", map[string]any{"path": "/workspace/public/readme.md"})
+	client := mcp.NewParser(bytes.NewReader(append(raw, '\n')), clientOut)
+
+	err := p.relayClientToRemoteServer(context.Background(), client, remote)
+	if err == nil {
+		t.Fatalf("expected remote relay to return when the client stream ends")
+	}
+	if !strings.Contains(clientOut.String(), "durable authorization audit commit failed") {
+		t.Fatalf("expected generic audit-commit denial to the client, got %q", clientOut.String())
+	}
+	if got := remote.Count(); got != 0 {
+		t.Fatalf("remote EncodeRaw count=%d, want 0 on audit rotation", got)
+	}
+	if p.metrics.MessagesAllowed != 0 {
+		t.Fatalf("allowed metric=%d, want 0 on audit rotation", p.metrics.MessagesAllowed)
+	}
+	if p.metrics.MessagesApproved != 0 {
+		t.Fatalf("approved metric=%d, want 0 on audit rotation", p.metrics.MessagesApproved)
+	}
+	if p.metrics.MessagesDenied != 1 {
+		t.Fatalf("denied metric=%d, want 1 on audit rotation", p.metrics.MessagesDenied)
+	}
+}
+
 type observingTransport struct {
 	mu    sync.Mutex
 	count int
