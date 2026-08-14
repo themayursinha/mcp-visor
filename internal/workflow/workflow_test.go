@@ -1468,15 +1468,27 @@ func TestValidateReviewArtifact_RejectsFindingsWithoutClasses(t *testing.T) {
 	}
 }
 
-func TestValidateReviewArtifact_FailedReviewRequiresSnapshotBinding(t *testing.T) {
+func TestValidateReviewArtifact_UnboundReviewRejected(t *testing.T) {
 	tk := specTask(nil)
-	r := workflow.ReviewArtifact{
-		Phase: "implementation", Passed: false,
-		FailureClasses: []string{"X"},
-		// HeadSHA/WorkspaceDigest/BaseSHA intentionally empty.
-	}
-	if err := workflow.ValidateReviewArtifact(&r, &tk); err == nil {
-		t.Fatal("failed implementation review with findings must require snapshot binding")
+	// Any implementation review (classed or classless, passed or failed)
+	// without snapshot binding must be rejected — it could advance OR
+	// interrupt a failure-class streak for an unrelated tip.
+	for name, r := range map[string]workflow.ReviewArtifact{
+		"failed_classed": {
+			Phase: "implementation", Passed: false,
+			FailureClasses: []string{"X"},
+		},
+		"failed_classless": {
+			Phase: "implementation", Passed: false,
+		},
+		"passed_classed": {
+			Phase: "implementation", Passed: true,
+			FailureClasses: []string{"X"},
+		},
+	} {
+		if err := workflow.ValidateReviewArtifact(&r, &tk); err == nil {
+			t.Fatalf("%s: implementation review without snapshot binding must be rejected", name)
+		}
 	}
 }
 
@@ -1484,13 +1496,10 @@ func TestBuildReport_ExplicitReviewParticipatesInStopLoss(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
 	tk := specTask(nil)
-	digest, err := workflow.ContractDigest(&tk)
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Journal has ONE X review. The explicit -review artifact carries a
-	// SECOND X. Together they must reach 2/2 -> stop-loss, proving the
-	// explicit artifact participates in the ordered sequence.
+	// SECOND X (external, not in the journal). Together they must reach
+	// 2/2 -> stop-loss, and the explicit artifact must be persisted so a
+	// reload sees exactly one new entry.
 	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1499,6 +1508,7 @@ func TestBuildReport_ExplicitReviewParticipatesInStopLoss(t *testing.T) {
 		Phase: "implementation", Passed: false,
 		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
 		FailureClasses: []string{"X"},
+		Reviewer:       "r1",
 	})
 	if err := os.WriteFile(filepath.Join(dir, "1.json"), j1, 0o644); err != nil {
 		t.Fatal(err)
@@ -1507,15 +1517,58 @@ func TestBuildReport_ExplicitReviewParticipatesInStopLoss(t *testing.T) {
 		Phase: "implementation", Passed: false,
 		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
 		FailureClasses: []string{"X"},
+		Reviewer:       "r2", // distinct from the journal's r1 -> genuinely external
 	}
 	rep, err := workflow.BuildReport(root, &tk, "HEAD", &explicit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !hasReason(rep.Reasons, "same_failure_class_stop_loss:X:2/2") {
-		t.Fatalf("explicit -review artifact must accumulate strikes with journal, got %v", rep.Reasons)
+		t.Fatalf("external explicit -review must accumulate strikes with journal, got %v", rep.Reasons)
 	}
-	_ = digest
+	// The explicit review must be persisted as 2.json so later commands see it.
+	if _, err := os.Stat(filepath.Join(dir, "2.json")); err != nil {
+		t.Fatalf("external explicit review must be persisted to the journal: %v", err)
+	}
+}
+
+func TestBuildReport_ExplicitReviewMatchingJournalEntryNotDoubleCounted(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := specTask(nil)
+	// Journal has ONE X review. The explicit -review names that same journal
+	// entry (1.json). It must NOT be double-counted: one X stays at streak 1,
+	// no stop-loss.
+	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	j1, _ := json.Marshal(workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		FailureClasses: []string{"X"},
+		Reviewer:       "r1",
+	})
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), j1, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	explicit := workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		FailureClasses: []string{"X"},
+		Reviewer:       "r1",
+	}
+	rep, err := workflow.BuildReport(root, &tk, "HEAD", &explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasReason(rep.Reasons, "same_failure_class_stop_loss") {
+		t.Fatalf("explicit -review naming an existing journal entry must not double-count, got %v", rep.Reasons)
+	}
+	// No 2.json should be created.
+	if _, err := os.Stat(filepath.Join(dir, "2.json")); err == nil {
+		t.Fatal("matching explicit review must not create a duplicate journal entry")
+	}
 }
 
 func TestBuildReport_MalformedReviewEvidenceBlocked(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1075,10 +1076,13 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 		}
 	} else {
 		// An explicit -review artifact must participate in the ordered
-		// sequence exactly like a journal entry: validate it, append it as
-		// the latest review so stopLossClass accumulates its failure classes
-		// and a later failed journal review cannot be overridden by a stale
-		// explicit passing artifact.
+		// sequence exactly like a journal entry — exactly once, durably.
+		// If it is already the last contiguous journal entry (a reviewer
+		// naming evidence/workflow/<task>/reviews/<n>.json), use that copy
+		// and do NOT append a duplicate. If it is external (not yet in the
+		// journal), persist it as the next contiguous entry so later
+		// RunNamedCommand reloads enforce its failure classes; the
+		// in-memory append alone would vanish on reload and never count.
 		if err := ValidateReviewArtifact(review, t); err != nil {
 			return &Report{
 				TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
@@ -1089,8 +1093,34 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 				Notes: []string{"explicit -review artifact failed validation; status blocked"},
 			}, nil
 		}
-		reviews = append(reviews, *review)
-		review = &reviews[len(reviews)-1]
+		if latest := latestJournalReview(reviews); latest != nil && sameReview(latest, review) {
+			review = latest
+		} else {
+			if err := appendJournalReview(root, t, review); err != nil {
+				return &Report{
+					TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
+					BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
+					WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: StatusBlocked,
+					Reasons: []string{"invalid_review_evidence: " + err.Error()},
+					Scope:   scope, Commands: cmds, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
+					Notes: []string{"could not persist explicit -review artifact into the review journal"},
+				}, nil
+			}
+			// Reload the journal so the persisted entry is part of the
+			// ordered sequence and promotion uses the journal copy.
+			reviews, revErr = LoadReviewSequence(root, t)
+			if revErr != nil {
+				return &Report{
+					TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
+					BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
+					WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: StatusBlocked,
+					Reasons: []string{"invalid_review_evidence: " + revErr.Error()},
+					Scope:   scope, Commands: cmds, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
+					Notes: []string{"review journal is malformed/duplicated/gapped; status blocked"},
+				}, nil
+			}
+			review = latestJournalReview(reviews)
+		}
 	}
 	st, reasons := DeriveStatus(t, cmds, scope, review, reviews, snap)
 	digest, digestErr := ContractDigest(t)
@@ -1210,6 +1240,76 @@ func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
 	return out, nil
 }
 
+// latestJournalReview returns the most recent implementation review in the
+// ordered journal, or nil when there is none.
+func latestJournalReview(reviews []ReviewArtifact) *ReviewArtifact {
+	for i := len(reviews) - 1; i >= 0; i-- {
+		if reviews[i].Phase != "spec" {
+			return &reviews[i]
+		}
+	}
+	return nil
+}
+
+// sameReview reports whether two implementation reviews are the same logical
+// artifact: same verdict, same failure classes, same snapshot binding, same
+// reviewer. Used to avoid double-counting an explicit -review that names an
+// entry already loaded from the journal.
+func sameReview(a, b *ReviewArtifact) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Passed == b.Passed &&
+		a.HeadSHA == b.HeadSHA &&
+		a.WorkspaceDigest == b.WorkspaceDigest &&
+		a.BaseSHA == b.BaseSHA &&
+		slices.Equal(a.FailureClasses, b.FailureClasses) &&
+		a.Reviewer == b.Reviewer
+}
+
+// appendJournalReview persists an explicit review as the next contiguous
+// journal entry so later reloads see it exactly once. The entry is written
+// with the next sequence number and its RecordedUTC stamped now.
+func appendJournalReview(root string, t *Task, r *ReviewArtifact) error {
+	dir := filepath.Join(EvidenceDir(root, t.TaskID), "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	next := 1
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			stem, ok := strings.CutSuffix(e.Name(), ".json")
+			if !ok || stem == "" {
+				continue
+			}
+			if n, err := strconv.Atoi(stem); err == nil && n >= next {
+				next = n + 1
+			}
+		}
+	}
+	r.Sequence = next
+	if r.RecordedUTC.IsZero() {
+		r.RecordedUTC = time.Now().UTC()
+	}
+	b, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%d.json", next))
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ValidateReviewArtifact checks structural validity against the task taxonomy.
 // Phase "spec" requires a revision, contract digest, and (when passing on a
 // security task) full attack-class coverage plus counterexamples. Implementation
@@ -1258,18 +1358,12 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		}
 		return nil
 	}
-	if r.Passed {
-		if r.HeadSHA == "" || r.WorkspaceDigest == "" || r.BaseSHA == "" {
-			return errors.New("passing implementation review requires head_sha, workspace_digest, base_sha")
-		}
-	} else if len(r.FailureClasses) > 0 {
-		// Failed implementation reviews are precisely the ones whose
-		// findings count toward the stop-loss. A stale, copied, or
-		// otherwise unbound review must not be able to increment or
-		// interrupt a failure-class streak for an unrelated snapshot.
-		if r.HeadSHA == "" || r.WorkspaceDigest == "" || r.BaseSHA == "" {
-			return errors.New("failed implementation review with findings requires head_sha, workspace_digest, base_sha")
-		}
+	// Every implementation review that can advance OR interrupt the
+	// stop-loss streak (classed or classless, passed or failed) must be
+	// bound to a snapshot; otherwise a stale, copied, or unrelated artifact
+	// could increment or reset a failure-class streak for the wrong tip.
+	if r.HeadSHA == "" || r.WorkspaceDigest == "" || r.BaseSHA == "" {
+		return errors.New("implementation review requires head_sha, workspace_digest, base_sha")
 	}
 	// Findings without failure-class mappings would be silently treated as
 	// "no classes" by stopLossClass, resetting every non-latched streak and
