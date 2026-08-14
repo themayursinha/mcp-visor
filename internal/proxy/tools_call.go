@@ -76,7 +76,7 @@ func (p *Proxy) processToolsCall(
 			ServerClaimedName:      identity.claimedName,
 			ServerClaimedVersion:   identity.claimedVersion,
 		}
-		p.audit.Log(identityDeniedEvent)
+		_ = p.audit.Log(identityDeniedEvent)
 		release()
 		p.forwardAudit(identityDeniedEvent)
 		p.logger.Warn("server identity attestation failed",
@@ -103,7 +103,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
 		}
 		p.attachServerIdentity(&rtDeniedEvent, snapshot.identity)
-		p.audit.Log(rtDeniedEvent)
+		_ = p.audit.Log(rtDeniedEvent)
 		release()
 		p.forwardAudit(rtDeniedEvent)
 		p.observeToolCall("denied", decision.Reason, serverName, callReq.Name, string(p.engine.GetRiskLevel(serverName, callReq.Name)), false, started)
@@ -145,7 +145,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&sensitiveDeniedEvent, snapshot.identity)
-		p.audit.Log(sensitiveDeniedEvent)
+		_ = p.audit.Log(sensitiveDeniedEvent)
 		release()
 		p.forwardAudit(sensitiveDeniedEvent)
 		p.logger.Warn("sensitive file denied",
@@ -192,7 +192,7 @@ func (p *Proxy) processToolsCall(
 				ChainContext: previousCalls,
 			}
 			p.attachServerIdentity(&chainDeniedEvent, snapshot.identity)
-			p.audit.Log(chainDeniedEvent)
+			_ = p.audit.Log(chainDeniedEvent)
 			release()
 			p.forwardAudit(chainDeniedEvent)
 			p.observeToolCall("denied", chainDecision.Reason, serverName, callReq.Name, string(risk), true, started)
@@ -229,7 +229,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
-		p.audit.Log(deniedEvent)
+		_ = p.audit.Log(deniedEvent)
 		release()
 		p.forwardAudit(deniedEvent)
 		p.logger.Warn("policy denied",
@@ -251,7 +251,7 @@ func (p *Proxy) processToolsCall(
 		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
 		// Write the JSONL ledger record while holding runtimeMu to
 		// preserve audit ordering with respect to policy reloads.
-		p.audit.Log(approvalEvent)
+		_ = p.audit.Log(approvalEvent)
 		// Release barrier before the blocking wait and before SIEM
 		// forwarding so slow SIEM/webhook sinks cannot stall reloads.
 		release()

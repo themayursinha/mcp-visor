@@ -53,7 +53,7 @@ func TestLogEvent(t *testing.T) {
 		Reason:    "allowed by policy",
 		RiskLevel: "medium",
 	}
-	l.Log(event)
+	_ = l.Log(event)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestLogMultipleEvents(t *testing.T) {
 	t.Cleanup(func() { _ = l.Close() })
 
 	for i := 0; i < 5; i++ {
-		l.Log(audit.Event{
+		_ = l.Log(audit.Event{
 			EventType: audit.EventToolDenied,
 			SessionID: "sess-1",
 			Server:    "shell",
@@ -127,7 +127,7 @@ func TestRedactionInAuditLog(t *testing.T) {
 
 	l.SetRedactionPatterns(policy.DefaultRedactionPatterns())
 
-	l.Log(audit.Event{
+	_ = l.Log(audit.Event{
 		EventType: audit.EventToolAllowed,
 		SessionID: "sess-1",
 		Server:    "api",
@@ -184,7 +184,7 @@ func TestRedactionInResultPreview(t *testing.T) {
 
 	l.SetRedactionPatterns(policy.DefaultRedactionPatterns())
 
-	l.Log(audit.Event{
+	_ = l.Log(audit.Event{
 		EventType:     audit.EventToolAllowed,
 		SessionID:     "sess-1",
 		Server:        "database",
@@ -217,9 +217,9 @@ func TestSessionLifecycleEvents(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = l.Close() })
 
-	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-1", Server: "test"})
-	l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-1", Tool: "tool1", Decision: "allow"})
-	l.Log(audit.Event{EventType: audit.EventSessionEnded, SessionID: "sess-1", Server: "test"})
+	_ = l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-1", Server: "test"})
+	_ = l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-1", Tool: "tool1", Decision: "allow"})
+	_ = l.Log(audit.Event{EventType: audit.EventSessionEnded, SessionID: "sess-1", Server: "test"})
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestMustLoggerWithInvalidPath(t *testing.T) {
 	l := audit.MustLogger("/nonexistent/dir/should/fail/audit.jsonl")
 	t.Cleanup(func() { _ = l.Close() })
 
-	l.Log(audit.Event{
+	_ = l.Log(audit.Event{
 		EventType: audit.EventToolAllowed,
 		SessionID: "test",
 		Decision:  "allow",
@@ -259,7 +259,7 @@ func TestMustLoggerWithEmptyPath(t *testing.T) {
 	l := audit.MustLogger("")
 	t.Cleanup(func() { _ = l.Close() })
 
-	l.Log(audit.Event{
+	_ = l.Log(audit.Event{
 		EventType: audit.EventToolAllowed,
 		SessionID: "test",
 		Decision:  "allow",
@@ -276,8 +276,8 @@ func TestAuditLogHashChain(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = l.Close() })
 
-	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-chain", Server: "demo"})
-	l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-chain", Server: "demo", Tool: "file_read", Decision: "allow"})
+	_ = l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-chain", Server: "demo"})
+	_ = l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-chain", Server: "demo", Tool: "file_read", Decision: "allow"})
 
 	lines := readAuditLines(t, path)
 	if len(lines) != 2 {
@@ -320,8 +320,8 @@ func TestNewLoggerRecoversHashChainAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	first.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-restart", Server: "demo"})
-	first.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-restart", Server: "demo", Tool: "file_read", Decision: "allow"})
+	_ = first.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-restart", Server: "demo"})
+	_ = first.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-restart", Server: "demo", Tool: "file_read", Decision: "allow"})
 	if err := first.Close(); err != nil {
 		t.Fatalf("close first logger: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestNewLoggerRecoversHashChainAcrossRestart(t *testing.T) {
 		t.Fatalf("reopen NewLogger: %v", err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	second.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "sess-restart", Server: "demo", Tool: "shell_exec", Decision: "deny"})
+	_ = second.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "sess-restart", Server: "demo", Tool: "shell_exec", Decision: "deny"})
 
 	after := readAuditLines(t, path)
 	if len(after) != 3 {
@@ -384,7 +384,7 @@ func TestRecoverChainStateReadsOnlyTailOfLargeLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tipLogger.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "tip", Decision: "allow", Tool: "t"})
+	_ = tipLogger.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "tip", Decision: "allow", Tool: "t"})
 	if err := tipLogger.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +402,7 @@ func TestRecoverChainStateReadsOnlyTailOfLargeLog(t *testing.T) {
 		t.Fatalf("recover large log: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	reopened.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "tip", Decision: "deny", Tool: "u"})
+	_ = reopened.Log(audit.Event{EventType: audit.EventToolDenied, SessionID: "tip", Decision: "deny", Tool: "u"})
 
 	lines := readAuditLines(t, path)
 	last := lines[len(lines)-1]
@@ -430,7 +430,7 @@ func TestNewLoggerRejectsIncompleteTrailingLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-partial", Server: "demo"})
+	_ = l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-partial", Server: "demo"})
 	if err := l.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestLoggerConcurrency(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(id int) {
 			for j := 0; j < 50; j++ {
-				l.Log(audit.Event{
+				_ = l.Log(audit.Event{
 					EventType: audit.EventToolAllowed,
 					SessionID: "sess-concurrent",
 					Tool:      "tool",
@@ -576,7 +576,7 @@ func TestNewLoggerAcceptsLegacyRecordsWithoutHash(t *testing.T) {
 	defer l.Close()
 
 	// Append a new event — must succeed and carry hash chain fields.
-	l.Log(audit.Event{
+	_ = l.Log(audit.Event{
 		EventType: audit.EventToolAllowed,
 		SessionID: "new-session",
 		Tool:      "test_tool",
@@ -612,8 +612,8 @@ func TestNewLoggerRejectsHashStrippedChainRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-strip", Server: "test"})
-	l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-strip", Server: "test", Tool: "read", Decision: "allow"})
+	_ = l.Log(audit.Event{EventType: audit.EventSessionStarted, SessionID: "sess-strip", Server: "test"})
+	_ = l.Log(audit.Event{EventType: audit.EventToolAllowed, SessionID: "sess-strip", Server: "test", Tool: "read", Decision: "allow"})
 	if err := l.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
