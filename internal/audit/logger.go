@@ -29,8 +29,9 @@ var (
 	// configured audit path is rebound to a non-regular object at commit time.
 	ErrNonDurableSink = errors.New("audit sink is not a durable regular file")
 	// ErrAuditSinkChanged is returned when the configured audit path no longer
-	// references the opened audit sink inode (rotated, renamed, unlinked,
-	// replaced, atomic-renamed-over, or symlinked to a different inode), so an
+	// references the opened audit sink inode as a non-symlink regular directory
+	// entry (rotated, renamed, unlinked, replaced, atomic-renamed-over, or
+	// any observed symlink, including one resolving to that inode), so an
 	// append through the stale fd could not be proven durable at the path.
 	ErrAuditSinkChanged = errors.New("configured audit path no longer references the opened audit sink")
 	// ErrAuditSinkUnhealthy is returned when a prior write/short-write or
@@ -376,12 +377,15 @@ func (l *Logger) Log(event Event) error {
 // JSONL ledger. It accepts only EventToolAllowed with Decision "allow", requires
 // a regular O_SYNC sink that has not been poisoned, and advances chain state
 // only after a full write. Every commit validates that the live fd is still the
-// constructor-bound regular sink and that the configured path still resolves to
-// that exact inode immediately before and immediately after the write — and
-// that the accepted binding's parent directory can be fsynced — so any
-// rotation/rebinding or durability failure before, during, or after the append
-// fails closed and poisons the logger. Existing O_SYNC is the write-durability
-// boundary; the parent-directory fsync makes the path binding durable.
+// constructor-bound regular sink and that the configured path itself is a
+// non-symlink regular directory entry referencing that exact inode immediately
+// before and immediately after the write — and that the accepted binding's
+// parent directory can be fsynced — so any rotation/rebinding, observed
+// symlink, or durability failure before, during, or after the append fails
+// closed and poisons the logger. Existing O_SYNC is the write-durability
+// boundary; the parent-directory fsync makes a same-inode hard-link binding
+// durable. Any observed symlink, including one resolving to the opened inode,
+// is rejected without following it.
 func (l *Logger) CommitAuthorization(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -418,12 +422,15 @@ func (l *Logger) CommitAuthorization(event Event) error {
 
 // validateDurableBindingLocked checks, under Logger.mu, that the live sink is
 // still the regular constructor-bound inode and that the configured audit path
-// still resolves to that exact inode. Any missing, non-regular, renamed,
-// unlinked, replaced, atomic-renamed-over, or different-inode condition fails
+// itself is a non-symlink regular directory entry referencing that exact inode.
+// Inspection is no-follow (Lstat): any observed symlink, including one that
+// would resolve to the opened inode, fails closed as ErrAuditSinkChanged
+// without following the target. Any missing, non-regular, renamed, unlinked,
+// replaced, atomic-renamed-over, or different-inode condition also fails
 // closed without writing. After the identity checks succeed, the containing
 // parent directory is fsynced so the accepted binding is durable: a fresh
-// directory entry and a same-inode hard-link/symlink rebind both survive power
-// loss only through that durability boundary.
+// directory entry and a same-inode hard-link rebind both survive power loss
+// only through that durability boundary.
 func (l *Logger) validateDurableBindingLocked() error {
 	if l.path == "" || l.sinkInfo == nil || l.file == nil {
 		return ErrNonDurableSink
@@ -438,12 +445,15 @@ func (l *Logger) validateDurableBindingLocked() error {
 	if !os.SameFile(l.sinkInfo, fdInfo) {
 		return fmt.Errorf("%w: opened sink inode changed since construction", ErrAuditSinkChanged)
 	}
-	pathInfo, err := os.Stat(l.path)
+	pathInfo, err := os.Lstat(l.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("%w: configured audit path missing", ErrAuditSinkChanged)
 		}
 		return fmt.Errorf("%w: stat configured audit path: %v", ErrAuditSinkChanged, err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: configured audit path is a symlink", ErrAuditSinkChanged)
 	}
 	if !pathInfo.Mode().IsRegular() {
 		return ErrNonDurableSink

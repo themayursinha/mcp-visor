@@ -913,11 +913,13 @@ func TestCommitAuthorizationRejectsRotationDuringWrite(t *testing.T) {
 	})
 }
 
-// TestCommitAuthorizationAllowsSameInodePathBinding is the healthy control:
-// rebinding the configured path to the SAME inode (hard link or symlink) is
-// identity-preserving and must still commit. It proves the live check is
-// identity-based, not textual-path-based.
-func TestCommitAuthorizationAllowsSameInodePathBinding(t *testing.T) {
+// TestCommitAuthorizationAllowsStableAndSameInodeHardLinkBinding is the
+// healthy control: a stable configured path and a same-inode hard-link rebind
+// are identity-preserving regular directory entries and must still commit.
+// A symlink is never a healthy identity-preserving binding, even when it
+// resolves to the opened inode; that case is covered by
+// TestCommitAuthorizationRejectsSameInodeSymlinkRebind.
+func TestCommitAuthorizationAllowsStableAndSameInodeHardLinkBinding(t *testing.T) {
 	t.Run("stable", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "audit.jsonl")
 		l, err := NewLogger(path)
@@ -979,40 +981,116 @@ func TestCommitAuthorizationAllowsSameInodePathBinding(t *testing.T) {
 			t.Fatalf("commit after same-inode hard-link rebind: %v", err)
 		}
 	})
+}
 
-	t.Run("symlink_same_inode", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "audit.jsonl")
-		l, err := NewLogger(path)
-		if err != nil {
-			t.Fatalf("NewLogger: %v", err)
-		}
-		t.Cleanup(func() { _ = l.Close() })
-		if err := l.CommitAuthorization(Event{
-			EventType: EventToolAllowed,
-			SessionID: "sess-sym",
-			Tool:      "file_read",
-			Decision:  "allow",
-		}); err != nil {
-			t.Fatalf("warmup commit: %v", err)
-		}
+// TestCommitAuthorizationRejectsSameInodeSymlinkRebind proves commit-time
+// path validation is no-follow: moving the opened ledger into another
+// directory on the same filesystem and replacing the configured path with a
+// symlink to that same inode must fail closed with ErrAuditSinkChanged,
+// poison the logger, and leave target bytes and chain state unchanged.
+// Rejection must happen in pre-write validation so the allow is never
+// appended through the fd. On the vulnerable baseline, os.Stat follows the
+// symlink, os.SameFile passes, and the commit succeeds while only
+// configured/ is fsynced.
+func TestCommitAuthorizationRejectsSameInodeSymlinkRebind(t *testing.T) {
+	root := t.TempDir()
+	configuredDir := filepath.Join(root, "configured")
+	targetDir := filepath.Join(root, "target")
+	if err := os.Mkdir(configuredDir, 0o700); err != nil {
+		t.Fatalf("mkdir configured: %v", err)
+	}
+	if err := os.Mkdir(targetDir, 0o700); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	configuredPath := filepath.Join(configuredDir, "audit.jsonl")
+	targetPath := filepath.Join(targetDir, "audit.jsonl")
 
-		backup := path + ".backup"
-		if err := os.Rename(path, backup); err != nil {
-			t.Fatalf("rename away: %v", err)
-		}
-		if err := os.Symlink(backup, path); err != nil {
-			t.Fatalf("symlink to same inode: %v", err)
-		}
+	l, err := NewLogger(configuredPath)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
 
-		if err := l.CommitAuthorization(Event{
-			EventType: EventToolAllowed,
-			SessionID: "sess-sym-2",
-			Tool:      "http_post",
-			Decision:  "allow",
-		}); err != nil {
-			t.Fatalf("commit after same-inode symlink rebind: %v", err)
-		}
+	if err := l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-warm",
+		Tool:      "file_read",
+		Decision:  "allow",
+	}); err != nil {
+		t.Fatalf("warmup commit: %v", err)
+	}
+
+	if err := os.Rename(configuredPath, targetPath); err != nil {
+		t.Fatalf("rename ledger into target dir: %v", err)
+	}
+	if err := os.Symlink(targetPath, configuredPath); err != nil {
+		t.Fatalf("symlink configured path to moved inode: %v", err)
+	}
+
+	linkInfo, err := os.Lstat(configuredPath)
+	if err != nil {
+		t.Fatalf("lstat configured path: %v", err)
+	}
+	if linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("configured path is not a symlink")
+	}
+	fdInfo, err := l.file.Stat()
+	if err != nil {
+		t.Fatalf("stat logger fd: %v", err)
+	}
+	followed, err := os.Stat(configuredPath)
+	if err != nil {
+		t.Fatalf("stat through symlink: %v", err)
+	}
+	if !os.SameFile(fdInfo, followed) {
+		t.Fatal("symlink does not resolve to the logger fd inode (would be a different-inode swap)")
+	}
+
+	before, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("snapshot target bytes: %v", err)
+	}
+	prevHash := l.prevHash
+	chainIndex := l.chainIndex
+
+	err = l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-symlink-rebind",
+		Tool:      "http_post",
+		Decision:  "allow",
 	})
+	if err == nil {
+		t.Fatal("commit after same-inode symlink rebind: want ErrAuditSinkChanged, got nil")
+	}
+	if !errors.Is(err, ErrAuditSinkChanged) {
+		t.Fatalf("commit after same-inode symlink rebind: want ErrAuditSinkChanged, got %v", err)
+	}
+	if !l.poisoned {
+		t.Fatal("logger must be poisoned after same-inode symlink rebind")
+	}
+	after, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("read target bytes after commit: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("target bytes changed after rejected symlink rebind (write was not pre-validation)")
+	}
+	if l.prevHash != prevHash || l.chainIndex != chainIndex {
+		t.Fatalf("chain advanced after same-inode symlink rebind: prevHash=%q chainIndex=%d", l.prevHash, l.chainIndex)
+	}
+
+	l.write = func(*os.File, []byte) (int, error) {
+		t.Fatal("poisoned logger must not attempt another write")
+		return 0, nil
+	}
+	if err := l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-after-poison",
+		Tool:      "file_read",
+		Decision:  "allow",
+	}); !errors.Is(err, ErrAuditSinkUnhealthy) {
+		t.Fatalf("commit after poison: want ErrAuditSinkUnhealthy, got %v", err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,95 +1102,76 @@ func TestCommitAuthorizationAllowsSameInodePathBinding(t *testing.T) {
 // opens follow a pre-existing symlink.
 // ---------------------------------------------------------------------------
 
-// TestCommitAuthorizationSyncsParentDirForSameInodeRebind proves a same-inode
-// rebind (hard link or symlink to the same inode) is accepted only through the
-// parent-directory durability boundary: at least one fsync of the configured
-// parent must occur after the rebind and before a successful commit return.
-func TestCommitAuthorizationSyncsParentDirForSameInodeRebind(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		rebind func(t *testing.T, path string)
-	}{
-		{"hard_link_same_inode", func(t *testing.T, path string) {
-			link := path + ".hard"
-			if err := os.Link(path, link); err != nil {
-				t.Fatalf("hard link: %v", err)
-			}
-			if err := os.Remove(path); err != nil {
-				t.Fatalf("remove original binding: %v", err)
-			}
-			if err := os.Rename(link, path); err != nil {
-				t.Fatalf("rebind through hard link: %v", err)
-			}
-		}},
-		{"symlink_to_backup_same_inode", func(t *testing.T, path string) {
-			backup := path + ".backup"
-			if err := os.Rename(path, backup); err != nil {
-				t.Fatalf("rename away: %v", err)
-			}
-			if err := os.Symlink(backup, path); err != nil {
-				t.Fatalf("symlink to same inode: %v", err)
-			}
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "audit.jsonl")
-			l, err := NewLogger(path)
-			if err != nil {
-				t.Fatalf("NewLogger: %v", err)
-			}
-			t.Cleanup(func() { _ = l.Close() })
-			if err := l.CommitAuthorization(Event{
-				EventType: EventToolAllowed,
-				SessionID: "sess-warm",
-				Tool:      "file_read",
-				Decision:  "allow",
-			}); err != nil {
-				t.Fatalf("warmup commit: %v", err)
-			}
+// TestCommitAuthorizationSyncsParentDirForSameInodeHardLinkRebind proves a
+// same-inode hard-link rebind is accepted only through the parent-directory
+// durability boundary: at least one fsync of the configured parent must occur
+// after the rebind and before a successful commit return. A symlink rebind is
+// not a healthy identity-preserving binding.
+func TestCommitAuthorizationSyncsParentDirForSameInodeHardLinkRebind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	l, err := NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	if err := l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-warm",
+		Tool:      "file_read",
+		Decision:  "allow",
+	}); err != nil {
+		t.Fatalf("warmup commit: %v", err)
+	}
 
-			var (
-				mu         sync.Mutex
-				postRebind int
-			)
-			syncDir = func(f *os.File) error {
-				mu.Lock()
-				defer mu.Unlock()
-				postRebind++
-				return f.Sync()
-			}
-			t.Cleanup(func() { syncDir = (*os.File).Sync })
+	var (
+		mu         sync.Mutex
+		postRebind int
+	)
+	syncDir = func(f *os.File) error {
+		mu.Lock()
+		defer mu.Unlock()
+		postRebind++
+		return f.Sync()
+	}
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
 
-			tc.rebind(t, path)
+	link := path + ".hard"
+	if err := os.Link(path, link); err != nil {
+		t.Fatalf("hard link: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove original binding: %v", err)
+	}
+	if err := os.Rename(link, path); err != nil {
+		t.Fatalf("rebind through hard link: %v", err)
+	}
 
-			if err := l.CommitAuthorization(Event{
-				EventType: EventToolAllowed,
-				SessionID: "sess-rebound",
-				Tool:      "http_post",
-				Decision:  "allow",
-			}); err != nil {
-				t.Fatalf("commit after same-inode rebind: %v", err)
-			}
+	if err := l.CommitAuthorization(Event{
+		EventType: EventToolAllowed,
+		SessionID: "sess-rebound",
+		Tool:      "http_post",
+		Decision:  "allow",
+	}); err != nil {
+		t.Fatalf("commit after same-inode hard-link rebind: %v", err)
+	}
 
-			mu.Lock()
-			got := postRebind
-			mu.Unlock()
-			if got < 1 {
-				t.Fatalf("same-inode rebind authorized with zero parent-dir syncs (got %d)", got)
-			}
-			lines := readLedgerLines(t, path)
-			if len(lines) != 2 {
-				t.Fatalf("ledger after rebind: want 2 linked records, got %d", len(lines))
-			}
-		})
+	mu.Lock()
+	got := postRebind
+	mu.Unlock()
+	if got < 1 {
+		t.Fatalf("same-inode hard-link rebind authorized with zero parent-dir syncs (got %d)", got)
+	}
+	lines := readLedgerLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("ledger after hard-link rebind: want 2 linked records, got %d", len(lines))
 	}
 }
 
-// TestCommitAuthorizationSameInodeRebindSyncFailurePoisons proves a parent-dir
-// sync failure during the post-rebind binding validation poisons the logger,
-// leaves chain state unchanged, and makes every later commit return
-// ErrAuditSinkUnhealthy without another write.
-func TestCommitAuthorizationSameInodeRebindSyncFailurePoisons(t *testing.T) {
+// TestCommitAuthorizationSameInodeHardLinkRebindSyncFailurePoisons proves a
+// parent-dir sync failure during the post-rebind hard-link binding validation
+// poisons the logger, leaves chain state unchanged, and makes every later
+// commit return ErrAuditSinkUnhealthy without another write.
+func TestCommitAuthorizationSameInodeHardLinkRebindSyncFailurePoisons(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	l, err := NewLogger(path)
 	if err != nil {
