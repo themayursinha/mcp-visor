@@ -134,6 +134,13 @@
         "-timeout",
         "120s"
       ]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": [
+        "harness/check.sh"
+      ]
     }
   ]
 }
