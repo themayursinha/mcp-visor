@@ -464,6 +464,31 @@ func TestNewLoggerRejectsMalformedLastRecord(t *testing.T) {
 	}
 }
 
+func TestNewLoggerRejectsFinalSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.jsonl")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(dir, "audit.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	if _, err := audit.NewLogger(link); err == nil {
+		t.Fatal("expected NewLogger to reject final-component symlink")
+	}
+
+	// The symlink target must remain untouched.
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(data) != "{}" {
+		t.Fatalf("symlink target modified: %q", data)
+	}
+}
+
 func recomputeAuditHash(t *testing.T, e audit.Event) string {
 	t.Helper()
 	e.Hash = ""
