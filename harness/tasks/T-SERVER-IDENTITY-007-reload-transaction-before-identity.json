@@ -1,107 +1,123 @@
 {
- "task_id": "T-SERVER-IDENTITY-007-reload-transaction-before-identity",
- "invariant_ids": [
-  "H17",
-  "H20"
- ],
- "security_sensitive": true,
- "security_problem": "Round-9 Codex P2: wirePolicyReload() calls SetReloadCommitter, which installs the committer and returns the currently published generation B, then reconciles runtime surfaces AFTER that call returns. A subsequent reload C can therefore commit through the newly installed committer (policy+runtime become C) before the caller applies stale B via commitPolicyRuntime(B, no-op publish). Result: authorization policy = C while redactor, audit redaction patterns, and approval timeout = B. This violates the invariant that every policy generation visible to authorization must be accompanied by the policy-derived runtime surfaces for that same generation.",
- "required_behavior": "Registration and initial reconciliation are atomic with respect to subsequent reload commits: SetReloadCommitter installs the committer and reconciles the currently published generation inside the same serialization boundary that excludes later reload publication. After that boundary releases, every later reload goes through the installed committer. A deterministic test forces A current, B published before registration, C committed after committer install, and an attempted stale B reconciliation; final state is policy=C, redactor=C, audit patterns=C, approval timeout=C (never B). The previous pre-registration nil-committer race remains fixed. A reload during identity hashing still keeps policy/runtime surfaces coherent. Identity remains launch-bound: a changed attestation after startup fails closed/restart-required.",
- "failure_behavior": "Fail closed for tools/call when a watcher reload during identity hashing produces mixed-generation runtime surfaces; never report server_attested=true for a contract never measured; never leak call arguments on an identity-gate deny.",
- "allowed_paths": [
-  "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
-  "harness/tasks/T-SERVER-IDENTITY-002-registry-runners.json",
-  "harness/tasks/T-SERVER-IDENTITY-003-declared-entry-payloads.json",
-  "harness/tasks/T-SERVER-IDENTITY-004-process-bound-snapshot.json",
-  "harness/tasks/T-SERVER-IDENTITY-005-single-snapshot-launch.json",
-  "harness/tasks/T-SERVER-IDENTITY-006-framed-injective-hashing.json",
-  "harness/tasks/T-SERVER-IDENTITY-007-reload-transaction-before-identity.json",
-  "harness/invariants.md",
-  "internal/policy/types.go",
-  "internal/policy/loader.go",
-  "internal/policy/engine_test.go",
-  "internal/serveridentity",
-  "internal/audit/logger.go",
-  "internal/proxy/proxy.go",
-  "internal/proxy/tools_call.go",
-  "internal/proxy/client_envelope.go",
-  "internal/proxy/server_identity_test.go",
-  "internal/proxy/server_identity_p2_red_test.go",
-  "internal/proxy/server_identity_resolution_test.go",
-  "internal/proxy/server_identity_reload_order_test.go",
-  "internal/confuseddeputydemo",
-  "examples/confused-deputy-demo",
-  "tests/integration/confused_deputy_demo_test.go",
-  "docs/architecture.md",
-  "docs/threat-model.md",
-  "SECURITY.md",
-  "internal/proxy/server_identity_reload_reconcile_test.go",
-  "internal/policy/engine.go",
-  "internal/policy/watcher.go"
- ],
- "approval_gated_paths": [
-  "harness/invariants.md",
-  "internal/policy/engine_test.go",
-  "internal/proxy/server_identity_test.go",
-  "internal/proxy/server_identity_resolution_test.go",
-  "internal/proxy/server_identity_p2_red_test.go",
-  "internal/proxy/server_identity_reload_order_test.go",
-  "tests/integration/confused_deputy_demo_test.go",
-  "docs/architecture.md",
-  "docs/threat-model.md",
-  "SECURITY.md",
-  "internal/proxy/server_identity_reload_reconcile_test.go",
-  "internal/policy/engine.go",
-  "internal/policy/watcher.go"
- ],
- "max_attempts": 3,
- "required_commands": [
-  {
-   "name": "red_test",
-   "expect": "fail",
-   "argv": [
-    "go",
-    "test",
-    "./internal/proxy",
-    "-run",
-    "^TestStaleReconciliationDoesNotOverrideNewerCommit$",
-    "-count=1"
-   ]
-  },
-  {
-   "name": "target_test",
-   "expect": "pass",
-   "argv": [
-    "go",
-    "test",
-    "./internal/serveridentity",
-    "./internal/policy",
-    "./internal/proxy",
-    "-run",
-    "TestServerIdentity|TestReload|TestStaleReconciliationDoesNotOverrideNewerCommit|TestHotReload|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy",
-    "-count=1"
-   ]
-  },
-  {
-   "name": "demo_test",
-   "expect": "pass",
-   "argv": [
-    "go",
-    "test",
-    "./tests/integration",
-    "-run",
-    "TestConfusedDeputyDemo",
-    "-count=1",
-    "-timeout",
-    "120s"
-   ]
-  },
-  {
-   "name": "harness",
-   "expect": "pass",
-   "argv": [
-    "harness/check.sh"
-   ]
-  }
- ]
+  "task_id": "T-SERVER-IDENTITY-007-reload-transaction-before-identity",
+  "invariant_ids": [
+    "H17",
+    "H20"
+  ],
+  "security_sensitive": true,
+  "security_problem": "Round-9 Codex P2: wirePolicyReload() calls SetReloadCommitter, which installs the committer and returns the currently published generation B, then reconciles runtime surfaces AFTER that call returns. A subsequent reload C can therefore commit through the newly installed committer (policy+runtime become C) before the caller applies stale B via commitPolicyRuntime(B, no-op publish). Result: authorization policy = C while redactor, audit redaction patterns, and approval timeout = B. This violates the invariant that every policy generation visible to authorization must be accompanied by the policy-derived runtime surfaces for that same generation.",
+  "required_behavior": "Registration and initial reconciliation are atomic with respect to subsequent reload commits: SetReloadCommitter installs the committer and reconciles the currently published generation inside the same serialization boundary that excludes later reload publication. After that boundary releases, every later reload goes through the installed committer. A deterministic test forces A current, B published before registration, C committed after committer install, and an attempted stale B reconciliation; final state is policy=C, redactor=C, audit patterns=C, approval timeout=C (never B). The previous pre-registration nil-committer race remains fixed. A reload during identity hashing still keeps policy/runtime surfaces coherent. Identity remains launch-bound: a changed attestation after startup fails closed/restart-required.",
+  "failure_behavior": "Fail closed for tools/call when a watcher reload during identity hashing produces mixed-generation runtime surfaces; never report server_attested=true for a contract never measured; never leak call arguments on an identity-gate deny.",
+  "allowed_paths": [
+    "harness/tasks/T-SERVER-IDENTITY-001-confused-deputy.json",
+    "harness/tasks/T-SERVER-IDENTITY-002-registry-runners.json",
+    "harness/tasks/T-SERVER-IDENTITY-003-declared-entry-payloads.json",
+    "harness/tasks/T-SERVER-IDENTITY-004-process-bound-snapshot.json",
+    "harness/tasks/T-SERVER-IDENTITY-005-single-snapshot-launch.json",
+    "harness/tasks/T-SERVER-IDENTITY-006-framed-injective-hashing.json",
+    "harness/tasks/T-SERVER-IDENTITY-007-reload-transaction-before-identity.json",
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/policy/engine_test.go",
+    "internal/serveridentity",
+    "internal/audit/logger.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/client_envelope.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_reload_order_test.go",
+    "internal/confuseddeputydemo",
+    "examples/confused-deputy-demo",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md",
+    "internal/proxy/server_identity_reload_reconcile_test.go",
+    "internal/policy/engine.go",
+    "internal/policy/watcher.go"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/engine_test.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/server_identity_reload_order_test.go",
+    "tests/integration/confused_deputy_demo_test.go",
+    "docs/architecture.md",
+    "docs/threat-model.md",
+    "SECURITY.md",
+    "internal/proxy/server_identity_reload_reconcile_test.go",
+    "internal/policy/engine.go",
+    "internal/policy/watcher.go"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": [
+        "go",
+        "test",
+        "./internal/proxy",
+        "-run",
+        "^TestStaleReconciliationDoesNotOverrideNewerCommit$",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/policy",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentity|TestReload|TestStaleReconciliationDoesNotOverrideNewerCommit|TestHotReload|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "demo_test",
+      "expect": "pass",
+      "argv": [
+        "go",
+        "test",
+        "./tests/integration",
+        "-run",
+        "TestConfusedDeputyDemo",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ],
+  "spec_revision": 1,
+  "max_same_failure_class_strikes": 2,
+  "non_goals": [
+    "attesting a process whose executable or transitive dependencies changed after measurement",
+    "identity attestation without an explicit invocation snapshot",
+    "imprecise or non-injective artifact identity encoding",
+    "attesting a server name without binding to the measured process snapshot",
+    "trusting MCP-declared server metadata as identity proof"
+  ],
+  "attack_classes": [
+    {
+      "id": "server-identity-attestation",
+      "failure_class": "server-identity-attestation",
+      "expected": "missing, unsupported, mismatched, stale, or mixed-generation identity attestation denies tools/call with zero relay and never reports server_attested=true"
+    }
+  ]
 }

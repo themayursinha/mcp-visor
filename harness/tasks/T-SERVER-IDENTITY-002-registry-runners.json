@@ -1,6 +1,8 @@
 {
   "task_id": "T-SERVER-IDENTITY-002-registry-runners",
-  "invariant_ids": ["H20"],
+  "invariant_ids": [
+    "H20"
+  ],
   "security_sensitive": true,
   "security_problem": "Canonical registry runners (npx, uvx, bunx, pnpx, pnx, npm exec, npm x, yarn dlx, pnpm dlx, bun x, uv tool run) select executable package bytes from a registry or package cache at runtime; a local package-manager binary plus a literal package spec does not bind the artifact that will execute, so launcher+literal-argv hashing must not satisfy attestation.",
   "required_behavior": "A configured stdio invocation digest binds a locally resolved launcher executable and local payload file content selected by the args, and is checked before all argument-dependent authorization and relay; every recognized canonical registry-runner form (npx, uvx, bunx, pnpx, pnx, npm exec, npm x, yarn dlx, pnpm dlx, bun x, uv tool run) fails identity resolution and reaches the configured-attestation fail-closed gate before argument policy or relay; exact non-registry subcommands (npm run, npm run x, npm install, npm ci, yarn add, pnpm add, pnpm exec, bun run, bun add, uv run, uv tool install) remain resolvable; mismatch or unresolved identity denies with identity-bound audit evidence.",
@@ -37,22 +39,66 @@
     {
       "name": "red_test",
       "expect": "fail",
-      "argv": ["go", "test", "./internal/serveridentity", "./internal/proxy", "-run", "TestServerIdentityDocumentedRegistryRunners", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentityDocumentedRegistryRunners",
+        "-count=1"
+      ]
     },
     {
       "name": "target_test",
       "expect": "pass",
-      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/policy",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentity",
+        "-count=1"
+      ]
     },
     {
       "name": "demo_test",
       "expect": "pass",
-      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+      "argv": [
+        "go",
+        "test",
+        "./tests/integration",
+        "-run",
+        "TestConfusedDeputyDemo",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
     },
     {
       "name": "harness",
       "expect": "pass",
-      "argv": ["harness/check.sh"]
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ],
+  "spec_revision": 1,
+  "max_same_failure_class_strikes": 2,
+  "non_goals": [
+    "attesting a process whose executable or transitive dependencies changed after measurement",
+    "identity attestation without an explicit invocation snapshot",
+    "imprecise or non-injective artifact identity encoding",
+    "attesting a server name without binding to the measured process snapshot",
+    "trusting MCP-declared server metadata as identity proof"
+  ],
+  "attack_classes": [
+    {
+      "id": "server-identity-attestation",
+      "failure_class": "server-identity-attestation",
+      "expected": "missing, unsupported, mismatched, stale, or mixed-generation identity attestation denies tools/call with zero relay and never reports server_attested=true"
     }
   ]
 }

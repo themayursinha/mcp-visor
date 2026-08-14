@@ -15,7 +15,7 @@ import (
 
 func baseTask(mut func(*workflow.Task)) workflow.Task {
 	tk := workflow.Task{
-		TaskID: "T-TEST", InvariantIDs: []string{"H1"}, SecuritySensitive: true,
+		TaskID: "T-TEST", InvariantIDs: []string{"H1"}, SecuritySensitive: false,
 		SecurityProblem: "p", RequiredBehavior: "b", FailureBehavior: "f",
 		AllowedPaths: []string{"allowed/"}, ApprovalGatedPaths: workflow.DefaultApprovalGated(),
 		MaxAttempts: 2,
@@ -1023,6 +1023,7 @@ func TestMaxAttempts_ExceededOnSingleTarget(t *testing.T) {
 // declared with the frozen contract fields).
 func specTask(mut func(*workflow.Task)) workflow.Task {
 	tk := baseTask(mut)
+	tk.SecuritySensitive = true
 	tk.SpecRevision = 1
 	tk.MaxSameFailureClassStrikes = 2
 	tk.NonGoals = []string{"no online rotation", "no automatic reopen"}
@@ -1185,7 +1186,7 @@ func TestSpecGate_PassingSpecReviewRequiresCoverageAndCounterexamples(t *testing
 }
 
 func TestSpecGate_NonSecurityTaskNeedsNoSpecReview(t *testing.T) {
-	tk := specTask(func(tk *workflow.Task) { tk.SecuritySensitive = false })
+	tk := baseTask(nil) // non-security: no spec gate, no stop-loss
 	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, nil, specSnap())
 	if st != workflow.StatusHarnessVerified {
 		t.Fatalf("non-security task must not require a spec pass, got %s %v", st, reasons)
@@ -1452,6 +1453,22 @@ func TestValidate_NonSecurityTaskSpecRevisionWithoutSpecFields(t *testing.T) {
 	})
 	if err := workflow.ValidateTask(&tk); err != nil {
 		t.Fatalf("non-security task with spec_revision:1 and empty spec fields must validate: %v", err)
+	}
+}
+
+func TestValidate_SecurityTaskRequiresSpecRegime(t *testing.T) {
+	// A security-sensitive task that omits spec_revision must be REJECTED:
+	// the spec-adversarial gate and two-strike stop-loss are mandatory for
+	// security tasks, not opt-in (Codex P1 3787245168).
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.SecuritySensitive = true
+		tk.SpecRevision = 0
+		tk.MaxSameFailureClassStrikes = 0
+		tk.AttackClasses = nil
+		tk.NonGoals = nil
+	})
+	if err := workflow.ValidateTask(&tk); err == nil {
+		t.Fatal("security-sensitive task without spec_revision must be rejected")
 	}
 }
 

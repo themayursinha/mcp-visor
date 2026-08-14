@@ -229,6 +229,13 @@ func ValidateTask(t *Task) error {
 	if t.SecuritySensitive && !hasRedFail {
 		e = append(e, "security_sensitive tasks require at least one expect=fail command")
 	}
+	// The spec-adversarial gate and two-strike stop-loss are MANDATORY for
+	// every security-sensitive task: a task that omits spec_revision must not
+	// silently bypass the spec gate. Validate the full taxonomy when the task
+	// declares the regime; reject security tasks that do not declare it.
+	if t.SecuritySensitive && t.SpecRevision < 1 {
+		e = append(e, "security_sensitive tasks require spec_revision >= 1 (spec gate + stop-loss are mandatory)")
+	}
 	if specRegime(t) {
 		if t.MaxSameFailureClassStrikes != 2 {
 			e = append(e, "max_same_failure_class_strikes must be 2 when spec_revision >= 1")

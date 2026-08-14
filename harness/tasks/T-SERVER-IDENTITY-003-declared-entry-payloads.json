@@ -1,6 +1,8 @@
 {
   "task_id": "T-SERVER-IDENTITY-003-declared-entry-payloads",
-  "invariant_ids": ["H20"],
+  "invariant_ids": [
+    "H20"
+  ],
   "security_sensitive": true,
   "security_problem": "Round-4 P1/P2: the stdio identity resolver hashes every regular-file argument, so mutable runtime data arguments (logs, databases, datasets, output paths) change the digest and cause false-deny on legitimate undeclared file args; and the proxy resolves invocation identity even for a logical server with no attestation, doing wasted startup work that can read a large sparse data file.",
   "required_behavior": "A configured stdio invocation digest always binds the locally resolved launcher executable and every literal argv value in order; only policy-declared entry argument positions (attestation.entry_arg_positions, zero-based indexes into ServerArgs excluding the executable) bind the resolved local regular-file content. Omitted/empty positions mean launcher + literal argv only. Loader rejects negative and duplicate positions; resolver rejects out-of-range, missing, symlink-failure, non-regular, and read-failure declared entries; declared positions are normalized by sorting a copy so YAML list order is not part of identity; no inference or fallback scanning of undeclared file args. A logical server with no attestation performs zero identity-resolution work in both New and NewWithTracing. Stdio server identity is captured exactly once at proxy construction for the launched server session; hot reload never re-resolves launcher or payload paths. Introducing or materially changing an attestation pin after start is restart-bound: the new pin publishes but has no compatible startup resolution contract, so tools/call fails closed as unresolved/restart-required until a server restart; same-shape digest replacement compares against the cached startup digest and denies on mismatch until restart; removal may restore the explicitly requested unattested legacy path; an originally unattested process remains unresolved on later reintroduction; a startup resolution failure stays unresolved and is not retried on reload. All 11 canonical registry-runner rejects, negative controls, approval/taint snapshots, and entry-artifact-not-transitive boundary are preserved.",
@@ -40,22 +42,66 @@
     {
       "name": "red_test",
       "expect": "fail",
-      "argv": ["go", "test", "./internal/serveridentity", "./internal/proxy", "-run", "TestServerIdentityUndeclaredRuntimeFile|TestServerIdentityNoAttestationPerformsZeroResolverWork|TestServerIdentityReload", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentityUndeclaredRuntimeFile|TestServerIdentityNoAttestationPerformsZeroResolverWork|TestServerIdentityReload",
+        "-count=1"
+      ]
     },
     {
       "name": "target_test",
       "expect": "pass",
-      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/policy",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentity",
+        "-count=1"
+      ]
     },
     {
       "name": "demo_test",
       "expect": "pass",
-      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+      "argv": [
+        "go",
+        "test",
+        "./tests/integration",
+        "-run",
+        "TestConfusedDeputyDemo",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
     },
     {
       "name": "harness",
       "expect": "pass",
-      "argv": ["harness/check.sh"]
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ],
+  "spec_revision": 1,
+  "max_same_failure_class_strikes": 2,
+  "non_goals": [
+    "attesting a process whose executable or transitive dependencies changed after measurement",
+    "identity attestation without an explicit invocation snapshot",
+    "imprecise or non-injective artifact identity encoding",
+    "attesting a server name without binding to the measured process snapshot",
+    "trusting MCP-declared server metadata as identity proof"
+  ],
+  "attack_classes": [
+    {
+      "id": "server-identity-attestation",
+      "failure_class": "server-identity-attestation",
+      "expected": "missing, unsupported, mismatched, stale, or mixed-generation identity attestation denies tools/call with zero relay and never reports server_attested=true"
     }
   ]
 }

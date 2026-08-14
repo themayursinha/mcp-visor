@@ -1,6 +1,8 @@
 {
   "task_id": "T-SERVER-IDENTITY-006-framed-injective-hashing",
-  "invariant_ids": ["H20"],
+  "invariant_ids": [
+    "H20"
+  ],
   "security_sensitive": true,
   "security_problem": "Round-7 Codex P1: the stdio invocation digest is built by concatenating executable bytes and each literal argv value with NUL separator bytes. The serialization is not injective: executable X with args [\"--safe\"] hashes identically to a different executable whose content is X + NUL + \"--safe\" with no args; args [\"a\",\"b\"] hash identically to a single arg \"a\\x00b\"; and identical bytes can be interpreted interchangeably as executable content or argument content. An attacker who controls the on-disk artifact (or a confusing policy author) can therefore construct a different invocation that satisfies a pin on the intended one.",
   "required_behavior": "The stdio invocation digest is computed over a versioned, injectively framed serialization (kind stdio_invocation_sha256_v1): each component carries a domain tag, a fixed-width big-endian index (ordinal position for argv, declared arg position for entry payloads), an explicit byte length, and the exact bytes; the serialization is prefixed by a format-marker field. Different component structures never serialize to the same hash input: executable+argv differs from an executable embedding the same bytes; [a b] differs from [a\\x00b]; reordered args differ; identical bytes in the executable-content domain vs the argument domain differ; identical payload files at different declared entry positions differ; payload mutation changes the digest; and resolution is deterministic across repeats. The policy loader accepts exactly one attestation kind (stdio_invocation_sha256_v1) and rejects unknown and legacy scheme names. The executable field streams bytes under the length declared by the same Stat that validated the artifact, and a size change between Stat and read fails closed. All prior round-1 through round-6 behavior is preserved: immutable launch identity, restart-bound replacement/introduction, changed-shape fail closed, normalized-order compatibility, single-snapshot launch shape, no-attestation zero resolver work, approval allow/signing-failure snapshots, all 11 canonical registry-runner rejects, undeclared runtime files never hashed, entry-artifact-not-transitive boundary, no argument leak on identity denial, and confused-deputy demo behavior.",
@@ -47,22 +49,65 @@
     {
       "name": "red_test",
       "expect": "fail",
-      "argv": ["go", "test", "./internal/serveridentity", "-run", "TestFramingCodexExecutableArgCollision|TestFramingArgumentNULNotBoundary", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "-run",
+        "TestFramingCodexExecutableArgCollision|TestFramingArgumentNULNotBoundary",
+        "-count=1"
+      ]
     },
     {
       "name": "target_test",
       "expect": "pass",
-      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestFraming|TestServerIdentity|TestResolveStdioInvocation", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/policy",
+        "./internal/proxy",
+        "-run",
+        "TestFraming|TestServerIdentity|TestResolveStdioInvocation",
+        "-count=1"
+      ]
     },
     {
       "name": "demo_test",
       "expect": "pass",
-      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+      "argv": [
+        "go",
+        "test",
+        "./tests/integration",
+        "-run",
+        "TestConfusedDeputyDemo",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
     },
     {
       "name": "harness",
       "expect": "pass",
-      "argv": ["harness/check.sh"]
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ],
+  "spec_revision": 1,
+  "max_same_failure_class_strikes": 2,
+  "non_goals": [
+    "attesting a process whose executable or transitive dependencies changed after measurement",
+    "identity attestation without an explicit invocation snapshot",
+    "imprecise or non-injective artifact identity encoding",
+    "attesting a server name without binding to the measured process snapshot",
+    "trusting MCP-declared server metadata as identity proof"
+  ],
+  "attack_classes": [
+    {
+      "id": "server-identity-attestation",
+      "failure_class": "server-identity-attestation",
+      "expected": "missing, unsupported, mismatched, stale, or mixed-generation identity attestation denies tools/call with zero relay and never reports server_attested=true"
     }
   ]
 }
