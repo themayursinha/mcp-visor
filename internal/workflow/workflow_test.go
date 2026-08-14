@@ -1455,6 +1455,69 @@ func TestValidate_NonSecurityTaskSpecRevisionWithoutSpecFields(t *testing.T) {
 	}
 }
 
+func TestValidateReviewArtifact_RejectsFindingsWithoutClasses(t *testing.T) {
+	tk := specTask(nil)
+	r := workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		Findings: []string{"something is wrong"},
+		// FailureClasses intentionally omitted.
+	}
+	if err := workflow.ValidateReviewArtifact(&r, &tk); err == nil {
+		t.Fatal("findings without failure_class must be rejected")
+	}
+}
+
+func TestValidateReviewArtifact_FailedReviewRequiresSnapshotBinding(t *testing.T) {
+	tk := specTask(nil)
+	r := workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		FailureClasses: []string{"X"},
+		// HeadSHA/WorkspaceDigest/BaseSHA intentionally empty.
+	}
+	if err := workflow.ValidateReviewArtifact(&r, &tk); err == nil {
+		t.Fatal("failed implementation review with findings must require snapshot binding")
+	}
+}
+
+func TestBuildReport_ExplicitReviewParticipatesInStopLoss(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Journal has ONE X review. The explicit -review artifact carries a
+	// SECOND X. Together they must reach 2/2 -> stop-loss, proving the
+	// explicit artifact participates in the ordered sequence.
+	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	j1, _ := json.Marshal(workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		FailureClasses: []string{"X"},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), j1, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	explicit := workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		FailureClasses: []string{"X"},
+	}
+	rep, err := workflow.BuildReport(root, &tk, "HEAD", &explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasReason(rep.Reasons, "same_failure_class_stop_loss:X:2/2") {
+		t.Fatalf("explicit -review artifact must accumulate strikes with journal, got %v", rep.Reasons)
+	}
+	_ = digest
+}
+
 func TestBuildReport_MalformedReviewEvidenceBlocked(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)

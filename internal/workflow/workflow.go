@@ -1073,6 +1073,24 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 				break
 			}
 		}
+	} else {
+		// An explicit -review artifact must participate in the ordered
+		// sequence exactly like a journal entry: validate it, append it as
+		// the latest review so stopLossClass accumulates its failure classes
+		// and a later failed journal review cannot be overridden by a stale
+		// explicit passing artifact.
+		if err := ValidateReviewArtifact(review, t); err != nil {
+			return &Report{
+				TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
+				BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
+				WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: StatusBlocked,
+				Reasons: []string{"invalid_review_evidence: " + err.Error()},
+				Scope:   scope, Commands: cmds, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
+				Notes: []string{"explicit -review artifact failed validation; status blocked"},
+			}, nil
+		}
+		reviews = append(reviews, *review)
+		review = &reviews[len(reviews)-1]
 	}
 	st, reasons := DeriveStatus(t, cmds, scope, review, reviews, snap)
 	digest, digestErr := ContractDigest(t)
@@ -1244,6 +1262,20 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		if r.HeadSHA == "" || r.WorkspaceDigest == "" || r.BaseSHA == "" {
 			return errors.New("passing implementation review requires head_sha, workspace_digest, base_sha")
 		}
+	} else if len(r.FailureClasses) > 0 {
+		// Failed implementation reviews are precisely the ones whose
+		// findings count toward the stop-loss. A stale, copied, or
+		// otherwise unbound review must not be able to increment or
+		// interrupt a failure-class streak for an unrelated snapshot.
+		if r.HeadSHA == "" || r.WorkspaceDigest == "" || r.BaseSHA == "" {
+			return errors.New("failed implementation review with findings requires head_sha, workspace_digest, base_sha")
+		}
+	}
+	// Findings without failure-class mappings would be silently treated as
+	// "no classes" by stopLossClass, resetting every non-latched streak and
+	// letting the same issue recur forever without reaching the threshold.
+	if len(r.Findings) > 0 && len(r.FailureClasses) == 0 {
+		return errors.New("implementation review findings require at least one canonical failure_class")
 	}
 	return nil
 }
