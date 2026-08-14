@@ -228,7 +228,7 @@ func ValidateTask(t *Task) error {
 	if t.SecuritySensitive && !hasRedFail {
 		e = append(e, "security_sensitive tasks require at least one expect=fail command")
 	}
-	if t.SpecRevision >= 1 {
+	if specRegime(t) {
 		if t.MaxSameFailureClassStrikes != 2 {
 			e = append(e, "max_same_failure_class_strikes must be 2 when spec_revision >= 1")
 		}
@@ -545,12 +545,12 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 		if err != nil {
 			return CommandRecord{}, fmt.Errorf("review evidence: %w", err)
 		}
-		if cls, n, ok := stopLossClass(t, reviews); ok {
-			return CommandRecord{}, fmt.Errorf("task commands rejected: same_failure_class_stop_loss:%s:%d/%d", cls, n, t.MaxSameFailureClassStrikes)
-		}
 		digest, err := ContractDigest(t)
 		if err != nil {
 			return CommandRecord{}, err
+		}
+		if cls, n, ok := stopLossClass(t, reviews, digest, t.SpecRevision); ok {
+			return CommandRecord{}, fmt.Errorf("task commands rejected: same_failure_class_stop_loss:%s:%d/%d", cls, n, t.MaxSameFailureClassStrikes)
 		}
 		if currentSpecPass(reviews, digest, t.SpecRevision) == nil {
 			return CommandRecord{}, errors.New("spec_review_required: current passing spec review for contract digest + spec_revision required before task commands")
@@ -886,8 +886,12 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	}
 
 	// Two-strike stop-loss: evaluated before, but independently of, max_attempts.
+	digest, err := ContractDigest(t)
+	if err != nil {
+		return StatusBlocked, []string{"contract_digest_error: " + err.Error()}
+	}
 	if specRegime(t) {
-		if cls, n, ok := stopLossClass(t, reviews); ok {
+		if cls, n, ok := stopLossClass(t, reviews, digest, t.SpecRevision); ok {
 			return StatusSpecified, []string{
 				"valid_task_contract",
 				fmt.Sprintf("same_failure_class_stop_loss:%s:%d/%d", cls, n, t.MaxSameFailureClassStrikes),
@@ -899,11 +903,6 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	attempts := countTargetAttempts(t, cmds)
 	if attempts > t.MaxAttempts {
 		return StatusBlocked, []string{fmt.Sprintf("max_attempts_exceeded:%d>%d", attempts, t.MaxAttempts)}
-	}
-
-	digest, err := ContractDigest(t)
-	if err != nil {
-		return StatusBlocked, []string{"contract_digest_error: " + err.Error()}
 	}
 
 	st := StatusSpecified
@@ -1283,10 +1282,12 @@ func currentSpecPass(reviews []ReviewArtifact, digest string, revision int) *Rev
 // stopLossClass derives the contiguous per-class strike run from the ordered
 // review journal. Implementation reviews advance classes they contain and end
 // classes they do not (multiple findings of one class in a review count once);
-// a passing spec review resets only the classes it lists in
-// closed_failure_classes. At maxSameFailureClassStrikes the class and run
-// length are returned. No strike counters are stored.
-func stopLossClass(t *Task, reviews []ReviewArtifact) (string, int, bool) {
+// a current passing spec review — bound to the live contract digest +
+// spec_revision (aligned with currentSpecPass) — resets only the classes it
+// lists in closed_failure_classes. At maxSameFailureClassStrikes the class and
+// run length are returned; the class is the deterministic (sorted canonical
+// order) first at/above threshold. No strike counters are stored.
+func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision int) (string, int, bool) {
 	threshold := t.MaxSameFailureClassStrikes
 	if threshold < 1 {
 		return "", 0, false
@@ -1296,7 +1297,7 @@ func stopLossClass(t *Task, reviews []ReviewArtifact) (string, int, bool) {
 	for i := range reviews {
 		r := &reviews[i]
 		if r.Phase == "spec" {
-			if r.Passed {
+			if r.Passed && r.ContractDigest == digest && r.SpecRevision == revision {
 				closed := map[string]struct{}{}
 				for _, c := range r.ClosedFailureClasses {
 					closed[c] = struct{}{}
@@ -1321,12 +1322,18 @@ func stopLossClass(t *Task, reviews []ReviewArtifact) (string, int, bool) {
 			}
 		}
 	}
+	var candidates []string
 	for c, n := range streaks {
 		if n >= threshold {
-			return c, n, true
+			candidates = append(candidates, c)
 		}
 	}
-	return "", 0, false
+	if len(candidates) == 0 {
+		return "", 0, false
+	}
+	sort.Strings(candidates)
+	first := candidates[0]
+	return first, streaks[first], true
 }
 
 // ValidateArtifactPath ensures generated or consumed evidence cannot silently

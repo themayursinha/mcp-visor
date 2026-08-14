@@ -1348,6 +1348,81 @@ func TestStopLoss_ReviewedClosureDerivesSpecReviewedAndInvalidatesOldRed(t *test
 	}
 }
 
+func TestStopLoss_StaleSpecReviewDoesNotReset(t *testing.T) {
+	oldTK := specTask(nil)
+	oldDigest, err := workflow.ContractDigest(&oldTK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two X strikes, then a passing spec review bound to a stale digest / wrong
+	// revision that lists X in closed_failure_classes must NOT clear the streak.
+	base := []workflow.ReviewArtifact{
+		specReview(true, 1, oldDigest, nil),
+		implReview(false, []string{"X"}, nil),
+		implReview(false, []string{"X"}, nil),
+	}
+	for name, stale := range map[string]workflow.ReviewArtifact{
+		"wrong_digest": specReview(true, 1, "STALE-DIGEST-0000", func(r *workflow.ReviewArtifact) {
+			r.ClosedFailureClasses = []string{"X"}
+		}),
+		"wrong_revision": specReview(true, 2, oldDigest, func(r *workflow.ReviewArtifact) {
+			r.ClosedFailureClasses = []string{"X"}
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			reviews := append(append([]workflow.ReviewArtifact{}, base...), stale)
+			st, reasons := workflow.DeriveStatus(&oldTK, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+			if st != workflow.StatusSpecified {
+				t.Fatalf("stale spec review must not clear stop-loss, got %s %v", st, reasons)
+			}
+			if !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
+				t.Fatalf("expected same_failure_class_stop_loss:X:2/2, got %v", reasons)
+			}
+		})
+	}
+}
+
+func TestStopLoss_MultiClassReasonDeterministic(t *testing.T) {
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// X and Y both reach 2/2 (each review contains both classes, so neither
+	// streak is ended); the selected stop-loss class must be deterministic
+	// (sorted canonical order -> X) across repeated derivations.
+	reviews := []workflow.ReviewArtifact{
+		specReview(true, 1, digest, nil),
+		implReview(false, []string{"X", "Y"}, nil),
+		implReview(false, []string{"X", "Y"}, nil),
+	}
+	for i := 0; i < 200; i++ {
+		st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+		if st != workflow.StatusSpecified {
+			t.Fatalf("iteration %d: expected SPECIFIED, got %s %v", i, st, reasons)
+		}
+		if !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
+			t.Fatalf("iteration %d: expected deterministic same_failure_class_stop_loss:X:2/2, got %v", i, reasons)
+		}
+	}
+}
+
+func TestValidate_NonSecurityTaskSpecRevisionWithoutSpecFields(t *testing.T) {
+	// A non-security task authored from template.json keeps spec_revision:1 but
+	// empties attack_classes/non_goals; spec-field validation must not apply
+	// unless the task is security-sensitive (specRegime).
+	tk := baseTask(func(tk *workflow.Task) {
+		tk.SecuritySensitive = false
+		tk.SpecRevision = 1
+		tk.MaxSameFailureClassStrikes = 2
+		tk.AttackClasses = nil
+		tk.NonGoals = nil
+	})
+	if err := workflow.ValidateTask(&tk); err != nil {
+		t.Fatalf("non-security task with spec_revision:1 and empty spec fields must validate: %v", err)
+	}
+}
+
 func TestBuildReport_MalformedReviewEvidenceBlocked(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)

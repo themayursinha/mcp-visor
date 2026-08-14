@@ -9,7 +9,7 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 ## Cycle
 
 1. Read `harness/project-contract.md`, `harness/invariants.md`.
-2. Write a task JSON from `harness/tasks/template.json` and `validate` it. Security tasks declare `spec_revision`, `attack_classes[]`, `non_goals[]`, and `max_same_failure_class_strikes` (must equal 2).
+2. Write a task JSON from `harness/tasks/template.json` and `validate` it. Security tasks declare `spec_revision`, `attack_classes[]`, `non_goals[]`, and `max_same_failure_class_strikes` (must equal 2). Non-security tasks should drop `spec_revision` to 0; spec-field validation applies only to `security_sensitive:true` tasks.
 3. Work in an isolated git worktree when practical.
 4. **Reviewer:** for a security task, produce the first spec review under `evidence/workflow/<task>/reviews/` (contiguous `<n>.json`, `phase:"spec"`, `passed:true`, `contract_digest` + `spec_revision` matching the task, `covered_attack_classes[]` covering every class, `counterexamples[]`). No task command runs and no status above `SPECIFIED` derives without a current passing spec review.
 5. **Worker:** `run -name red_test` (contract argv), implement inside `allowed_paths`, `run -name target_test`.
