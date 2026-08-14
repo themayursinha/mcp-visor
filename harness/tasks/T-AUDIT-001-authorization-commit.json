@@ -1,6 +1,11 @@
 {
   "task_id": "T-AUDIT-001-authorization-commit",
-  "invariant_ids": ["H11", "H14", "H15", "H19"],
+  "invariant_ids": [
+    "H11",
+    "H14",
+    "H15",
+    "H19"
+  ],
   "security_sensitive": true,
   "security_problem": "A terminal allow for tools/call must not be relayed unless its final allow record has been durably committed to the trusted audit sink opened by Visor. Trusted set: the Visor binary and policy, the configured audit directory and its filesystem namespace for the process lifetime, and audit file ownership/host administration. Untrusted: the MCP client, agent, MCP server, tool names, arguments, and results. Pathname namespace mutation (hostile host users, root, operator deletion, concurrent rename/unlink/rebind of the audit path or an audit-directory ancestor, pathname reachability after startup, rotation, reopen, or following a moved inode) is outside the model: the deployment violates the H19-v2 trust boundary if the audit directory is mutable by an attacker, and this boundary is declared rather than compensated with more filesystem code. Ancestor walks, SameFile, link-count checks, runtime path revalidation, O_EXCL state machines, and namespace-race defense are explicitly rejected.",
   "required_behavior": "The logger opens the audit file once with os.O_RDWR|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW and mode 0600, rejects anything not a regular file via f.Stat(), and recovers prevHash/chainIndex from that same opened *os.File using ReadAt (no pathname reopen recovery). NewLogger performs an unconditional one-time parent-directory fsync whether the ledger is new or existing, and never unlinks or cleans up the pathname on failure. Every terminal allow (approved allow, explicit allow, and default/fallback allow) builds the final audit.Event with all existing redaction, identity, receipt, and policy evidence, calls CommitAuthorization which appends the complete newline-terminated hash-linked record, requires a full write (io.ErrShortWrite on short write), explicitly calls file Sync, and only then advances prevHash/chainIndex; any marshal/write/short-write/sync/closed/poison/non-durable failure poisons the logger and converts the call to deny before either transport can relay it. The proxy increments denied and returns execution denied without mutating taints, allowed/approved metrics, or chain state on failure. Log(Event) returns error and advances chain state only after a full append. MustLogger keeps stderr/fallback behavior but marks those sinks non-durable so authorization commit always fails closed.",
@@ -18,7 +23,9 @@
     "internal/proxy/session_taint_test.go",
     "tests/integration/chain_detection_test.go",
     "tests/integration/extended_test.go",
-    "tests/integration/proxy_integration_test.go"
+    "tests/integration/proxy_integration_test.go",
+    "internal/audit/logger_bench_test.go",
+    "internal/proxy/proxy.go"
   ],
   "approval_gated_paths": [],
   "max_attempts": 3,
@@ -26,27 +33,61 @@
     {
       "name": "red_test",
       "expect": "fail",
-      "argv": ["go", "test", "./internal/audit", "./internal/proxy", "-run", "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/audit",
+        "./internal/proxy",
+        "-run",
+        "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)",
+        "-count=1"
+      ]
     },
     {
       "name": "target_test",
       "expect": "pass",
-      "argv": ["go", "test", "./internal/audit", "./internal/proxy", "-run", "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/audit",
+        "./internal/proxy",
+        "-run",
+        "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)",
+        "-count=1"
+      ]
     },
     {
       "name": "race",
       "expect": "pass",
-      "argv": ["go", "test", "-race", "./internal/audit", "./internal/proxy", "-run", "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "-race",
+        "./internal/audit",
+        "./internal/proxy",
+        "-run",
+        "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)",
+        "-count=1"
+      ]
     },
     {
       "name": "full_test",
       "expect": "pass",
-      "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]
+      "argv": [
+        "go",
+        "test",
+        "./...",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
     },
     {
       "name": "harness",
       "expect": "pass",
-      "argv": ["harness/check.sh"]
+      "argv": [
+        "harness/check.sh"
+      ]
     }
   ]
 }

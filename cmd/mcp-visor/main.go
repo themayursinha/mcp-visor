@@ -94,6 +94,20 @@ func main() {
 			*serverCmd, *policyPath = setupDemo()
 			defer os.Remove(*serverCmd)
 			defer os.Remove(*policyPath)
+			// Demo mode must have a durable audit sink for the H19
+			// authorization-commit gate: without an explicit --audit-log,
+			// provision a temporary regular file so the demo actually relays
+			// allowed calls instead of denying everything as non-durable.
+			if *auditPath == "" {
+				auditFile, err := os.CreateTemp("", "mcp-visor-demo-audit-*.jsonl")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "mcp-visor: failed to create demo audit file: %v\n", err)
+					os.Exit(1)
+				}
+				*auditPath = auditFile.Name()
+				_ = auditFile.Close()
+				defer os.Remove(*auditPath)
+			}
 		}
 
 		if *serverCmd == "" && *serverURL == "" {
