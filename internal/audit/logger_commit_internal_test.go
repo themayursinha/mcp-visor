@@ -172,6 +172,19 @@ func TestCommitAuthorizationRejectsNonAllowAndNonDurableSink(t *testing.T) {
 	if fallback.chainIndex != 0 {
 		t.Fatalf("non-durable sink must not advance chain, got %d", fallback.chainIndex)
 	}
+	// Codex P2 (3786256917): the non-durable branch must latch the sink.
+	// After the failed commit, a later Log must NOT write or advance chain.
+	if !fallback.poisoned {
+		t.Fatal("non-durable sink must be poisoned after failed commit")
+	}
+	beforeIndex := fallback.chainIndex
+	beforePrev := fallback.prevHash
+	if err := fallback.Log(Event{EventType: EventToolDenied, SessionID: "s", Server: "v", Tool: "t", Decision: "deny"}); !errors.Is(err, ErrAuditSinkUnhealthy) {
+		t.Fatalf("Log after poison must return ErrAuditSinkUnhealthy, got %v", err)
+	}
+	if fallback.chainIndex != beforeIndex || fallback.prevHash != beforePrev {
+		t.Fatal("Log after poison must not advance chain state")
+	}
 }
 
 func TestLogShortWriteReturnsErrorAndPoisons(t *testing.T) {

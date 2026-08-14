@@ -316,6 +316,10 @@ func (l *Logger) CommitAuthorization(event Event) error {
 		return ErrAuditSinkUnhealthy
 	}
 	if !l.durable {
+		// A non-durable sink (stderr fallback or empty AuditLogPath) cannot
+		// satisfy the durable-commit precondition. Latch the sink so the
+		// failure is sticky: no later Log write and no chain advance.
+		l.poisoned = true
 		return fmt.Errorf("%w: audit sink is not durable (stderr fallback)", ErrAuditSinkUnhealthy)
 	}
 	if event.EventType != EventToolAllowed || event.Decision != string(policy.ActionAllow) {
