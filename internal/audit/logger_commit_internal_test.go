@@ -234,6 +234,70 @@ func TestNewLoggerDoesNotUnlinkForeignFileOnSyncFailure(t *testing.T) {
 	t.Cleanup(func() { _ = l.Close() })
 }
 
+// TestNewLoggerFallbackNeverCreatesUnsyncedFile proves the Codex P1 EEXIST
+// fallback cannot silently create an unsynced directory entry: if the ledger
+// is rotated away after exclusive-create returns EEXIST and before the
+// existing-file fallback open, that fallback must not use O_CREATE (which
+// would make a new inode while created stays false and skip syncParentDir).
+// The exclusive-create path must be retried so the parent dir is synced.
+func TestNewLoggerFallbackNeverCreatesUnsyncedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	seed := []byte(`{"event_type":"session_started","session_id":"seed","policy_decision":"n/a"}` + "\n")
+	if err := os.WriteFile(path, seed, 0o600); err != nil {
+		t.Fatalf("seed audit file: %v", err)
+	}
+
+	var (
+		mu         sync.Mutex
+		syncedDirs []string
+	)
+	syncDir = func(f *os.File) error {
+		mu.Lock()
+		defer mu.Unlock()
+		syncedDirs = append(syncedDirs, f.Name())
+		return f.Sync()
+	}
+	t.Cleanup(func() { syncDir = (*os.File).Sync })
+
+	origOpen := openFile
+	t.Cleanup(func() { openFile = origOpen })
+	var (
+		openCalls     int
+		fallbackFlags int
+	)
+	openFile = func(p string, flags int, perm os.FileMode) (*os.File, error) {
+		openCalls++
+		if openCalls == 2 {
+			fallbackFlags = flags
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+		}
+		return origOpen(p, flags, perm)
+	}
+
+	l, err := NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger after rotation-between-EEXIST-and-fallback: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	if fallbackFlags&os.O_CREATE != 0 {
+		t.Fatalf("EEXIST fallback open flags must not contain O_CREATE (got %d)", fallbackFlags)
+	}
+
+	mu.Lock()
+	gotSyncs := append([]string(nil), syncedDirs...)
+	mu.Unlock()
+	if len(gotSyncs) != 1 {
+		t.Fatalf("parent dir sync after exclusive-create retry: want 1, got %d (%v)", len(gotSyncs), gotSyncs)
+	}
+	if gotSyncs[0] != dir {
+		t.Fatalf("parent dir sync: want %q, got %q", dir, gotSyncs[0])
+	}
+}
+
 func TestCommitAuthorizationWriteFailurePoisonsLoggerInternal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	l, err := NewLogger(path)

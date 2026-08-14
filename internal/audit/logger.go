@@ -119,8 +119,18 @@ func NewLogger(path string) (*Logger, error) {
 	created := false
 	f, err := openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
 	if errors.Is(err, os.ErrExist) {
-		f, err = openFile(path, os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_APPEND, 0o600)
-		if err != nil {
+		// Existing file: open append-only without O_CREATE. If the ledger
+		// was rotated away between EEXIST and this open (ENOENT), retry the
+		// exclusive-create path so created=true and the parent dir is synced.
+		// Any other error, including a second EEXIST on retry, fails closed.
+		f, err = openFile(path, os.O_WRONLY|os.O_SYNC|os.O_APPEND, 0o600)
+		if errors.Is(err, os.ErrNotExist) {
+			f, err = openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_SYNC|os.O_APPEND, 0o600)
+			if err != nil {
+				return nil, fmt.Errorf("open audit log: %w", err)
+			}
+			created = true
+		} else if err != nil {
 			return nil, fmt.Errorf("open audit log: %w", err)
 		}
 	} else if err != nil {
