@@ -576,7 +576,7 @@ func TestSnapshot_InvalidateAfterChange(t *testing.T) {
 	if _, err := workflow.RunNamedCommand(root, tk, "harness", "HEAD"); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := workflow.BuildReport(root, tk, "HEAD", nil)
+	rep, err := workflow.BuildReport(root, tk, "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +590,7 @@ func TestSnapshot_InvalidateAfterChange(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "allowed", "a.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rep2, err := workflow.BuildReport(root, tk, "HEAD", nil)
+	rep2, err := workflow.BuildReport(root, tk, "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,49 +663,6 @@ func TestDeriveStatus_LatestHarnessExecutionWins(t *testing.T) {
 	}
 }
 
-func TestLoadReview_RequiresExcludedOrExternalPath(t *testing.T) {
-	root := t.TempDir()
-	gitInit(t, root)
-	evPath := filepath.Join(root, "evidence", "custom.json")
-	b, err := json.Marshal(workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(evPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(evPath, b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := workflow.ValidateArtifactPath(root, evPath, "report"); err == nil {
-		t.Fatal("evidence/custom.json outside workflow/harness must be rejected after exclusion model change")
-	}
-	if _, err := workflow.LoadReview(root, evPath); err == nil {
-		t.Fatal("review artifact at evidence/custom.json must be rejected")
-	}
-	wfPath := filepath.Join(root, "evidence", "workflow", "review.json")
-	if err := os.MkdirAll(filepath.Dir(wfPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(wfPath, b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	rev, err := workflow.LoadReview(root, wfPath)
-	if err != nil {
-		t.Fatalf("review under excluded evidence/workflow must load: err=%v", err)
-	}
-	if !rev.Passed {
-		t.Fatal("review not loaded")
-	}
-	linkPath := filepath.Join(root, "evidence", "workflow", "report-link.json")
-	if err := os.Symlink(filepath.Join(root, "README.md"), linkPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := workflow.ValidateArtifactPath(root, linkPath, "report"); err == nil {
-		t.Fatal("artifact path symlinked to bound repository content must be rejected")
-	}
-}
-
 func TestParseStatus_Unknown(t *testing.T) {
 	if _, err := workflow.ParseStatus("NONSENSE"); err == nil {
 		t.Fatal("expected error")
@@ -762,7 +719,18 @@ func TestReviewSnapshotMismatch(t *testing.T) {
 		Passed: true, HeadSHA: snapA.HeadSHA, WorkspaceDigest: snapA.WorkspaceDigest,
 		BaseSHA: snapA.BaseSHA, Reviewer: "r",
 	}
-	repA, err := workflow.BuildReport(root, tk, "HEAD", revA)
+	revDir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(revDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	revBytes, err := json.Marshal(revA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(revDir, "1.json"), revBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repA, err := workflow.BuildReport(root, tk, "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -780,7 +748,7 @@ func TestReviewSnapshotMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	// stale review for A must not review B (digest mismatch)
-	repB, err := workflow.BuildReport(root, tk, "HEAD", revA)
+	repB, err := workflow.BuildReport(root, tk, "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1509,85 +1477,6 @@ func TestValidateReviewArtifact_UnboundReviewRejected(t *testing.T) {
 	}
 }
 
-func TestBuildReport_ExplicitReviewParticipatesInStopLoss(t *testing.T) {
-	root := t.TempDir()
-	gitInit(t, root)
-	tk := specTask(nil)
-	// Journal has ONE X review. The explicit -review artifact carries a
-	// SECOND X (external, not in the journal). Together they must reach
-	// 2/2 -> stop-loss, and the explicit artifact must be persisted so a
-	// reload sees exactly one new entry.
-	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	j1, _ := json.Marshal(workflow.ReviewArtifact{
-		Phase: "implementation", Passed: false,
-		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
-		FailureClasses: []string{"X"},
-		Reviewer:       "r1",
-	})
-	if err := os.WriteFile(filepath.Join(dir, "1.json"), j1, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	explicit := workflow.ReviewArtifact{
-		Phase: "implementation", Passed: false,
-		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
-		FailureClasses: []string{"X"},
-		Reviewer:       "r2", // distinct from the journal's r1 -> genuinely external
-	}
-	rep, err := workflow.BuildReport(root, &tk, "HEAD", &explicit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasReason(rep.Reasons, "same_failure_class_stop_loss:X:2/2") {
-		t.Fatalf("external explicit -review must accumulate strikes with journal, got %v", rep.Reasons)
-	}
-	// The explicit review must be persisted as 2.json so later commands see it.
-	if _, err := os.Stat(filepath.Join(dir, "2.json")); err != nil {
-		t.Fatalf("external explicit review must be persisted to the journal: %v", err)
-	}
-}
-
-func TestBuildReport_ExplicitReviewMatchingJournalEntryNotDoubleCounted(t *testing.T) {
-	root := t.TempDir()
-	gitInit(t, root)
-	tk := specTask(nil)
-	// Journal has ONE X review. The explicit -review names that same journal
-	// entry (1.json). It must NOT be double-counted: one X stays at streak 1,
-	// no stop-loss.
-	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	j1, _ := json.Marshal(workflow.ReviewArtifact{
-		Phase: "implementation", Passed: false,
-		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
-		FailureClasses: []string{"X"},
-		Reviewer:       "r1",
-	})
-	if err := os.WriteFile(filepath.Join(dir, "1.json"), j1, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	explicit := workflow.ReviewArtifact{
-		Phase: "implementation", Passed: false,
-		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
-		FailureClasses: []string{"X"},
-		Reviewer:       "r1",
-	}
-	rep, err := workflow.BuildReport(root, &tk, "HEAD", &explicit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hasReason(rep.Reasons, "same_failure_class_stop_loss") {
-		t.Fatalf("explicit -review naming an existing journal entry must not double-count, got %v", rep.Reasons)
-	}
-	// No 2.json should be created.
-	if _, err := os.Stat(filepath.Join(dir, "2.json")); err == nil {
-		t.Fatal("matching explicit review must not create a duplicate journal entry")
-	}
-}
-
 func TestBuildReport_MalformedReviewEvidenceBlocked(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
@@ -1603,7 +1492,7 @@ func TestBuildReport_MalformedReviewEvidenceBlocked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "3.json"), []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := workflow.BuildReport(root, &tk, "HEAD", nil)
+	rep, err := workflow.BuildReport(root, &tk, "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}

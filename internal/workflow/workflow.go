@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1047,7 +1046,7 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 
 func boolPtr(v bool) *bool { return &v }
 
-func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Report, error) {
+func BuildReport(root string, t *Task, base string) (*Report, error) {
 	snap, err := CurrentSnapshot(root, base, t)
 	if err != nil {
 		return nil, err
@@ -1072,63 +1071,7 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 			Notes: []string{"review journal is malformed/duplicated/gapped; status blocked"},
 		}, nil
 	}
-	// When no explicit review was supplied, use the latest implementation
-	// review from the ordered journal for the SECURITY_REVIEWED promotion.
-	if review == nil {
-		for i := len(reviews) - 1; i >= 0; i-- {
-			if reviews[i].Phase != "spec" {
-				review = &reviews[i]
-				break
-			}
-		}
-	} else {
-		// An explicit -review artifact must participate in the ordered
-		// sequence exactly like a journal entry — exactly once, durably.
-		// If it is already the last contiguous journal entry (a reviewer
-		// naming evidence/workflow/<task>/reviews/<n>.json), use that copy
-		// and do NOT append a duplicate. If it is external (not yet in the
-		// journal), persist it as the next contiguous entry so later
-		// RunNamedCommand reloads enforce its failure classes; the
-		// in-memory append alone would vanish on reload and never count.
-		if err := ValidateReviewArtifact(review, t); err != nil {
-			return &Report{
-				TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
-				BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
-				WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: StatusBlocked,
-				Reasons: []string{"invalid_review_evidence: " + err.Error()},
-				Scope:   scope, Commands: cmds, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
-				Notes: []string{"explicit -review artifact failed validation; status blocked"},
-			}, nil
-		}
-		if latest := latestJournalReview(reviews); latest != nil && sameReview(latest, review) {
-			review = latest
-		} else {
-			if err := appendJournalReview(root, t, review); err != nil {
-				return &Report{
-					TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
-					BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
-					WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: StatusBlocked,
-					Reasons: []string{"invalid_review_evidence: " + err.Error()},
-					Scope:   scope, Commands: cmds, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
-					Notes: []string{"could not persist explicit -review artifact into the review journal"},
-				}, nil
-			}
-			// Reload the journal so the persisted entry is part of the
-			// ordered sequence and promotion uses the journal copy.
-			reviews, revErr = LoadReviewSequence(root, t)
-			if revErr != nil {
-				return &Report{
-					TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
-					BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
-					WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: StatusBlocked,
-					Reasons: []string{"invalid_review_evidence: " + revErr.Error()},
-					Scope:   scope, Commands: cmds, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
-					Notes: []string{"review journal is malformed/duplicated/gapped; status blocked"},
-				}, nil
-			}
-			review = latestJournalReview(reviews)
-		}
-	}
+	review := latestJournalReview(reviews)
 	st, reasons := DeriveStatus(t, cmds, scope, review, reviews, snap)
 	digest, digestErr := ContractDigest(t)
 	specPass := false
@@ -1161,24 +1104,6 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 			"review journal lives under evidence/workflow/<task>/reviews/ with contiguous <n>.json files",
 		},
 	}, nil
-}
-
-func LoadReview(root, path string) (*ReviewArtifact, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil
-	}
-	if err := ValidateArtifactPath(root, path, "review"); err != nil {
-		return nil, err
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var r ReviewArtifact
-	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, err
-	}
-	return &r, nil
 }
 
 // LoadReviewSequence reads the ordered review journal under
@@ -1254,65 +1179,6 @@ func latestJournalReview(reviews []ReviewArtifact) *ReviewArtifact {
 		if reviews[i].Phase != "spec" {
 			return &reviews[i]
 		}
-	}
-	return nil
-}
-
-// sameReview reports whether two implementation reviews are the same logical
-// artifact: same verdict, same failure classes, same snapshot binding, same
-// reviewer. Used to avoid double-counting an explicit -review that names an
-// entry already loaded from the journal.
-func sameReview(a, b *ReviewArtifact) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	return a.Passed == b.Passed &&
-		a.HeadSHA == b.HeadSHA &&
-		a.WorkspaceDigest == b.WorkspaceDigest &&
-		a.BaseSHA == b.BaseSHA &&
-		slices.Equal(a.FailureClasses, b.FailureClasses) &&
-		a.Reviewer == b.Reviewer
-}
-
-// appendJournalReview persists an explicit review as the next contiguous
-// journal entry so later reloads see it exactly once. The entry is written
-// with the next sequence number and its RecordedUTC stamped now.
-func appendJournalReview(root string, t *Task, r *ReviewArtifact) error {
-	dir := filepath.Join(EvidenceDir(root, t.TaskID), "reviews")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	next := 1
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			stem, ok := strings.CutSuffix(e.Name(), ".json")
-			if !ok || stem == "" {
-				continue
-			}
-			if n, err := strconv.Atoi(stem); err == nil && n >= next {
-				next = n + 1
-			}
-		}
-	}
-	r.Sequence = next
-	if r.RecordedUTC.IsZero() {
-		r.RecordedUTC = time.Now().UTC()
-	}
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(dir, fmt.Sprintf("%d.json", next))
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
 	}
 	return nil
 }
