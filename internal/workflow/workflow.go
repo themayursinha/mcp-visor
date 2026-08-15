@@ -1402,7 +1402,7 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 	// already-triggered stop-loss are distinct); only a current passing
 	// spec review listing the class in closed_failure_classes unlatches it.
 	latched := map[string]bool{}
-	latchRev := map[string]int{}
+	lastImplRev := map[string]int{}
 	liveStarted := false
 	for i := range reviews {
 		r := &reviews[i]
@@ -1417,9 +1417,9 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 					if _, ok := closed[c]; !ok {
 						continue
 					}
-					// A latched class may only be closed by a spec review
-					// whose revision differs from the reviews that latched it.
-					if latched[c] && r.SpecRevision == latchRev[c] {
+					// Same-revision spec closure must not reset a streak
+					// earned by implementation reviews at that revision.
+					if last := lastImplRev[c]; last != 0 && r.SpecRevision == last {
 						continue
 					}
 					streaks[c] = 0
@@ -1453,9 +1453,9 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 			}
 			if _, ok := has[c]; ok {
 				streaks[c]++
+				lastImplRev[c] = r.SpecRevision
 				if streaks[c] >= threshold {
 					latched[c] = true
-					latchRev[c] = r.SpecRevision
 				}
 			} else {
 				streaks[c] = 0

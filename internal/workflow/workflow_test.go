@@ -1371,6 +1371,26 @@ func TestStopLoss_LiveUnknownClassInvalid(t *testing.T) {
 	}
 }
 
+func TestStopLoss_SameRevisionCloseDoesNotResetUnlatchedStreak(t *testing.T) {
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := []workflow.ReviewArtifact{
+		specReview(true, 1, digest, nil),
+		implReview(false, []string{"X"}, digest, nil),
+		specReview(true, 1, digest, func(r *workflow.ReviewArtifact) {
+			r.ClosedFailureClasses = []string{"X"}
+		}),
+		implReview(false, []string{"X"}, digest, nil),
+	}
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	if st != workflow.StatusSpecified || !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
+		t.Fatalf("same-revision spec close must not reset a 1-strike streak, got %s %v", st, reasons)
+	}
+}
+
 func TestStopLoss_HistoricalAfterLiveDoesNotResetStreak(t *testing.T) {
 	tk := specTask(nil)
 	digest, err := workflow.ContractDigest(&tk)
