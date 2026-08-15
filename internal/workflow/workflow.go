@@ -1022,6 +1022,10 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 		} else if review.HeadSHA != snap.HeadSHA || review.WorkspaceDigest != snap.WorkspaceDigest || review.BaseSHA != snap.BaseSHA {
 			// Stay at HARNESS_VERIFIED; do not promote a stale review.
 			reasons = append(reasons, "review_snapshot_mismatch")
+		} else if specRegime(t) && specPass != nil && review.Sequence <= specPass.Sequence {
+			// Same spec-cycle freshness as RED: an impl review from a prior
+			// spec pass cannot promote the current cycle.
+			reasons = append(reasons, "review_before_current_spec")
 		} else {
 			st = StatusSecurityReviewed
 			reasons = append(reasons, "review_pass")
@@ -1082,6 +1086,7 @@ func BuildReport(root string, t *Task, base string) (*Report, error) {
 			"security tasks require a current passing spec review (contract digest + spec_revision) before RED/commands",
 			"review journal lives under evidence/workflow/<task>/reviews/ with contiguous <n>.json files",
 			"RED freshness binds to the current spec review journal sequence, not clocks or file mtime",
+			"SECURITY_REVIEWED requires an implementation review journaled after the current spec pass",
 		},
 	}, nil
 }
@@ -1161,16 +1166,25 @@ func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
 	return out, nil
 }
 
-// latestJournalReview returns the most recent implementation review in the
-// ordered journal. For spec-regime tasks only a review bound to the live
-// contract is eligible for SECURITY_REVIEWED promotion.
+// latestJournalReview returns the most recent implementation review eligible
+// for SECURITY_REVIEWED promotion. For spec-regime tasks that is a review
+// bound to the live contract and journaled after the current spec pass.
 func latestJournalReview(reviews []ReviewArtifact, t *Task, digest string) *ReviewArtifact {
+	var specSeq int
+	if specRegime(t) {
+		if pass := currentSpecPass(reviews, digest, t.SpecRevision); pass != nil {
+			specSeq = pass.Sequence
+		}
+	}
 	for i := len(reviews) - 1; i >= 0; i-- {
 		r := &reviews[i]
 		if r.Phase == "spec" {
 			continue
 		}
 		if specRegime(t) && (r.ContractDigest != digest || r.SpecRevision != t.SpecRevision) {
+			continue
+		}
+		if specSeq > 0 && r.Sequence <= specSeq {
 			continue
 		}
 		return r

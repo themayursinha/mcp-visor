@@ -1518,6 +1518,122 @@ func TestSpecGate_UnstampedRedIsStaleAgainstJournaledSpec(t *testing.T) {
 	}
 }
 
+func TestSpecGate_ImplReviewMustFollowCurrentSpecPass(t *testing.T) {
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec1 := specReview(true, 1, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 1 })
+	impl2 := implReview(true, nil, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 2 })
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, &impl2, []workflow.ReviewArtifact{spec1, impl2}, specSnap())
+	if st != workflow.StatusSecurityReviewed {
+		t.Fatalf("impl review after spec sequence 1 must promote, got %s %v", st, reasons)
+	}
+
+	spec3 := specReview(true, 1, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 3 })
+	cmds := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b", SpecSequence: 3},
+		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, &impl2, []workflow.ReviewArtifact{spec1, impl2, spec3}, specSnap())
+	if st != workflow.StatusHarnessVerified {
+		t.Fatalf("impl review before the current spec pass must stay HARNESS_VERIFIED, got %s %v", st, reasons)
+	}
+	if !hasReason(reasons, "review_before_current_spec") {
+		t.Fatalf("expected review_before_current_spec, got %v", reasons)
+	}
+
+	impl4 := implReview(true, nil, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 4 })
+	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, &impl4, []workflow.ReviewArtifact{spec1, impl2, spec3, impl4}, specSnap())
+	if st != workflow.StatusSecurityReviewed {
+		t.Fatalf("impl review after spec sequence 3 must promote, got %s %v", st, reasons)
+	}
+}
+
+func TestSpecGate_BuildReportSkipsImplReviewBeforeCurrentSpec(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(n int, r workflow.ReviewArtifact) {
+		t.Helper()
+		r.Sequence = 0
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", n)), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap, err := workflow.CurrentSnapshot(root, "HEAD", &tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(1, specReview(true, 1, digest, nil))
+	if _, err := workflow.RunNamedCommand(root, &tk, "red_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, &tk, "target_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, &tk, "harness", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	write(2, implReview(true, nil, digest, func(r *workflow.ReviewArtifact) {
+		r.HeadSHA = snap.HeadSHA
+		r.WorkspaceDigest = snap.WorkspaceDigest
+		r.BaseSHA = snap.BaseSHA
+	}))
+	rep, err := workflow.BuildReport(root, &tk, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.DerivedStatus != workflow.StatusSecurityReviewed {
+		t.Fatalf("impl review after spec 1 must promote, got %s %v", rep.DerivedStatus, rep.Reasons)
+	}
+
+	write(3, specReview(true, 1, digest, nil))
+	if _, err := workflow.RunNamedCommand(root, &tk, "red_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, &tk, "target_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.RunNamedCommand(root, &tk, "harness", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = workflow.BuildReport(root, &tk, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.DerivedStatus != workflow.StatusHarnessVerified {
+		t.Fatalf("later spec pass must not reuse the prior impl review, got %s %v", rep.DerivedStatus, rep.Reasons)
+	}
+
+	write(4, implReview(true, nil, digest, func(r *workflow.ReviewArtifact) {
+		r.HeadSHA = snap.HeadSHA
+		r.WorkspaceDigest = snap.WorkspaceDigest
+		r.BaseSHA = snap.BaseSHA
+	}))
+	rep, err = workflow.BuildReport(root, &tk, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.DerivedStatus != workflow.StatusSecurityReviewed {
+		t.Fatalf("impl review after the new spec pass must promote, got %s %v", rep.DerivedStatus, rep.Reasons)
+	}
+}
+
 func TestBuildReport_NonSecurityFindingsWithoutClassesNotBlocked(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)

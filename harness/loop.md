@@ -25,8 +25,9 @@ Target and harness records must match the selected base SHA and current snapshot
 
 - Spec reviews bind to the **contract digest + `spec_revision` only** (never head/base/workspace). The latest current review wins; a later failed review invalidates an earlier pass.
 - For `security_sensitive:true`, a passing spec review must cover **every** `attack_classes[].failure_class` and include a non-empty counterexample. Malformed, duplicate JSON keys, gapped, or live-spec-taxonomy-invalid review evidence fails closed as `BLOCKED`.
-- `SPEC_REVIEWED` is derived from a current spec pass and starts a fresh RED cycle: only `red_test` whose `spec_sequence` matches the current spec review's journal sequence (`reviews/<n>.json`) counts; older RED is invalidated. Freshness is that sequence, not wall-clock or filesystem mtime.
-- Implementation reviews bind to head/base/workspace **and** `contract_digest` + `spec_revision`. Unknown `failure_classes` on a live-contract implementation review fail closed; names from a prior digest/revision are ignored so a class rename cannot BLOCK the journal.
+- A current spec pass starts a **fresh evidence cycle**. Freshness is the spec review's journal sequence (`reviews/<n>.json`), not wall-clock or filesystem mtime.
+- RED: only `red_test` whose `spec_sequence` matches that journal sequence counts; older RED is invalidated. GREEN/harness then follow that fresh RED by command-log order.
+- Implementation reviews bind to head/base/workspace **and** `contract_digest` + `spec_revision`. For `SECURITY_REVIEWED` they must also be journaled **after** the current spec pass (`sequence` > spec pass sequence). An older snapshot-matching review cannot promote a later spec cycle. Unknown `failure_classes` on a live-contract implementation review fail closed; names from a prior digest/revision are ignored so a class rename cannot BLOCK the journal.
 - Reviewer findings are evidence for humans and independent review. They do **not** latch, count strikes, or reject task commands. After two findings from the same conceptual failure class, stop implementation and return to Architect (`AGENTS.md`); the workflow tool does not encode that stop as a state machine.
 
 ## Derived status (from artifacts only)
@@ -38,7 +39,7 @@ Target and harness records must match the selected base SHA and current snapshot
 | FAILURE_REPRODUCED | security-sensitive + executed RED fail after the current spec pass |
 | TARGET_VERIFIED | scope pass + required pass commands + RED fail if security-sensitive |
 | HARNESS_VERIFIED | TARGET_VERIFIED + executed harness pass |
-| SECURITY_REVIEWED | HARNESS_VERIFIED + passed implementation review bound to the current `head_sha`, `workspace_digest`, and live contract |
+| SECURITY_REVIEWED | HARNESS_VERIFIED + passed implementation review bound to the current `head_sha`, `workspace_digest`, live contract, and journaled after the current spec pass |
 | BLOCKED | invalid/non-executed command records, argv mismatch, target attempts above `max_attempts`, or invalid review evidence |
 
 No script sets these by assignment. No `.task/state.env`.
