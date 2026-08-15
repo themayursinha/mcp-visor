@@ -1077,9 +1077,9 @@ func BuildReport(root string, t *Task, base string) (*Report, error) {
 			Notes: []string{"review journal is malformed/duplicated/gapped; status blocked"},
 		}, nil
 	}
-	review := latestJournalReview(reviews)
-	st, reasons := DeriveStatus(t, cmds, scope, review, reviews, snap)
 	digest, digestErr := ContractDigest(t)
+	review := latestJournalReview(reviews, t, digest)
+	st, reasons := DeriveStatus(t, cmds, scope, review, reviews, snap)
 	specPass := false
 	if specRegime(t) && digestErr == nil {
 		specPass = currentSpecPass(reviews, digest, t.SpecRevision) != nil
@@ -1189,12 +1189,18 @@ func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
 }
 
 // latestJournalReview returns the most recent implementation review in the
-// ordered journal, or nil when there is none.
-func latestJournalReview(reviews []ReviewArtifact) *ReviewArtifact {
+// ordered journal. For spec-regime tasks only a review bound to the live
+// contract is eligible for SECURITY_REVIEWED promotion.
+func latestJournalReview(reviews []ReviewArtifact, t *Task, digest string) *ReviewArtifact {
 	for i := len(reviews) - 1; i >= 0; i-- {
-		if reviews[i].Phase != "spec" {
-			return &reviews[i]
+		r := &reviews[i]
+		if r.Phase == "spec" {
+			continue
 		}
+		if specRegime(t) && (r.ContractDigest != digest || r.SpecRevision != t.SpecRevision) {
+			continue
+		}
+		return r
 	}
 	return nil
 }
@@ -1396,6 +1402,7 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 	// already-triggered stop-loss are distinct); only a current passing
 	// spec review listing the class in closed_failure_classes unlatches it.
 	latched := map[string]bool{}
+	latchRev := map[string]int{}
 	liveStarted := false
 	for i := range reviews {
 		r := &reviews[i]
@@ -1407,10 +1414,16 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 					closed[c] = struct{}{}
 				}
 				for c := range streaks {
-					if _, ok := closed[c]; ok {
-						streaks[c] = 0
-						latched[c] = false
+					if _, ok := closed[c]; !ok {
+						continue
 					}
+					// A latched class may only be closed by a spec review
+					// whose revision differs from the reviews that latched it.
+					if latched[c] && r.SpecRevision == latchRev[c] {
+						continue
+					}
+					streaks[c] = 0
+					latched[c] = false
 				}
 			}
 			if live {
@@ -1442,6 +1455,7 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 				streaks[c]++
 				if streaks[c] >= threshold {
 					latched[c] = true
+					latchRev[c] = r.SpecRevision
 				}
 			} else {
 				streaks[c] = 0

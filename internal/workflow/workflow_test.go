@@ -1276,13 +1276,28 @@ func TestStopLoss_LatchedUntilSpecClosure(t *testing.T) {
 	if !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
 		t.Fatalf("expected latched same_failure_class_stop_loss:X:2/2, got %v", reasons)
 	}
-	// A current passing spec review closing X unlatches and restarts the cycle.
+	// Same digest+revision spec closure must NOT unlatch.
 	reviews = append(reviews, specReview(true, 1, digest, func(r *workflow.ReviewArtifact) {
 		r.ClosedFailureClasses = []string{"X"}
 	}))
 	st, reasons = workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	if st != workflow.StatusSpecified || !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
+		t.Fatalf("same-revision spec closure must not unlatch, got %s %v", st, reasons)
+	}
+	// A passing spec review on a new revision that closes X unlatches.
+	newTK := specTask(nil)
+	newTK.SpecRevision = 2
+	newDigest, err := workflow.ContractDigest(&newTK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews = append(reviews, specReview(true, 2, newDigest, func(r *workflow.ReviewArtifact) {
+		r.ClosedFailureClasses = []string{"X"}
+		r.Sequence = 5
+	}))
+	st, reasons = workflow.DeriveStatus(&newTK, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if st == workflow.StatusSpecified || hasReason(reasons, "same_failure_class_stop_loss") {
-		t.Fatalf("spec closure must clear the stop-loss and advance, got %s %v", st, reasons)
+		t.Fatalf("spec closure on a new revision must clear the stop-loss and advance, got %s %v", st, reasons)
 	}
 }
 
