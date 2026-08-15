@@ -10,6 +10,44 @@
   "security_problem": "A terminal allow for tools/call must not be relayed unless its final allow record has been durably committed to the trusted audit sink opened by Visor. Trusted set: the Visor binary and policy, the configured audit directory and its filesystem namespace for the process lifetime, and audit file ownership/host administration. Untrusted: the MCP client, agent, MCP server, tool names, arguments, and results. Pathname namespace mutation (hostile host users, root, operator deletion, concurrent rename/unlink/rebind of the audit path or an audit-directory ancestor, pathname reachability after startup, rotation, reopen, or following a moved inode) is outside the model: the deployment violates the H19-v2 trust boundary if the audit directory is mutable by an attacker, and this boundary is declared rather than compensated with more filesystem code. Ancestor walks, SameFile, link-count checks, runtime path revalidation, O_EXCL state machines, and namespace-race defense are explicitly rejected.",
   "required_behavior": "The logger opens the audit file once with os.O_RDWR|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW and mode 0600, rejects anything not a regular file via f.Stat(), and recovers prevHash/chainIndex from that same opened *os.File using ReadAt (no pathname reopen recovery). NewLogger performs an unconditional one-time parent-directory fsync whether the ledger is new or existing, and never unlinks or cleans up the pathname on failure. Every terminal allow (approved allow, explicit allow, and default/fallback allow) builds the final audit.Event with all existing redaction, identity, receipt, and policy evidence, calls CommitAuthorization which appends the complete newline-terminated hash-linked record, requires a full write (io.ErrShortWrite on short write), explicitly calls file Sync, and only then advances prevHash/chainIndex; any marshal/write/short-write/sync/closed/poison/non-durable failure poisons the logger and converts the call to deny before either transport can relay it. The proxy increments denied and returns execution denied without mutating taints, allowed/approved metrics, or chain state on failure. Log(Event) returns error and advances chain state only after a full append. MustLogger keeps stderr/fallback behavior but marks those sinks non-durable so authorization commit always fails closed.",
   "failure_behavior": "Marshal failure, write error, short write, file sync failure, closed sink, poisoned sink, stderr/fallback sink, non-regular sink, and incomplete/corrupt restart tip all deny the tools/call with zero relay and no allowed-state mutation (no taint marking, no allowed/approved metric increment, no in-memory hash-chain advancement). Failed commits poison the logger so later Log and CommitAuthorization calls return ErrAuditSinkUnhealthy without another write.",
+  "spec_revision": 2,
+  "non_goals": [
+    "continued service during online rotation/rebinding",
+    "automatic reopen",
+    "symlink ledger",
+    "symlinked ancestors",
+    "multi-writer ledger",
+    "distributed audit",
+    "hostile host user / root / operator namespace mutation",
+    "defending against an attacker who can mutate the trusted audit directory"
+  ],
+  "attack_classes": [
+    {
+      "id": "authorization-record-commit",
+      "failure_class": "authorization-record-commit",
+      "expected": "write failure, short write, closed sink, or crash before record durability denies with zero relay and poisons the logger"
+    },
+    {
+      "id": "audit-sink-validity",
+      "failure_class": "audit-sink-validity",
+      "expected": "closed or non-regular sink denies with zero relay and poisons the logger"
+    },
+    {
+      "id": "audit-path-binding-durability",
+      "failure_class": "audit-path-binding-durability",
+      "expected": "in-model: crash before the one-time parent-directory durability denies with zero relay and poisons the logger. Pathname reachability, deletion, rename, or rebind after startup is OUT of model (declared non-goal): the implementation deliberately uses the already-open descriptor without runtime path revalidation."
+    },
+    {
+      "id": "logger-poison-state",
+      "failure_class": "logger-poison-state",
+      "expected": "no later write after any poison source; non-durable sink commit failure latches the logger"
+    },
+    {
+      "id": "chain-recovery",
+      "failure_class": "chain-recovery",
+      "expected": "valid restart recovers from the exact append descriptor; corrupt or incomplete restart denies with zero relay"
+    }
+  ],
   "allowed_paths": [
     "harness/tasks/T-AUDIT-001-authorization-commit.json",
     "harness/invariants.md",
@@ -17,17 +55,31 @@
     "internal/audit/logger.go",
     "internal/audit/logger_test.go",
     "internal/audit/logger_commit_internal_test.go",
-    "internal/proxy/tools_call.go",
-    "internal/proxy/tools_call_authorization_commit_test.go",
-    "internal/proxy/runtime_hardening_test.go",
-    "internal/proxy/session_taint_test.go",
-    "tests/integration/chain_detection_test.go",
-    "tests/integration/extended_test.go",
-    "tests/integration/proxy_integration_test.go",
     "internal/audit/logger_bench_test.go",
-    "internal/proxy/proxy.go"
+    "internal/proxy/tools_call.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call_authorization_commit_test.go",
+    "internal/proxy/session_taint_test.go",
+    "internal/proxy/tools_call_audit_test.go",
+    "internal/proxy/tools_call_audit_terminal_test.go",
+    "internal/proxy/tools_call_envelope_test.go",
+    "internal/proxy/hot_reload_test.go",
+    "internal/proxy/runtime_hardening_test.go",
+    "internal/proxy/server_identity_test.go",
+    "internal/proxy/server_identity_resolution_test.go",
+    "internal/proxy/server_identity_reload_order_test.go",
+    "internal/proxy/server_identity_reload_reconcile_test.go",
+    "internal/proxy/server_identity_p2_red_test.go",
+    "internal/proxy/tracing_test.go",
+    "tests/integration"
   ],
-  "approval_gated_paths": [],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/audit/logger_test.go",
+    "internal/proxy/tools_call_authorization_commit_test.go",
+    "internal/proxy/session_taint_test.go",
+    "tests/integration"
+  ],
   "max_attempts": 3,
   "required_commands": [
     {
@@ -39,7 +91,7 @@
         "./internal/audit",
         "./internal/proxy",
         "-run",
-        "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)",
+        "TestNewLogger|TestCommitAuthorization|TestLogShortWrite|TestLogEvent|TestAuthorizationCommit|TestMustLoggerWith",
         "-count=1"
       ]
     },
@@ -52,7 +104,7 @@
         "./internal/audit",
         "./internal/proxy",
         "-run",
-        "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)",
+        "TestNewLogger|TestCommitAuthorization|TestLogShortWrite|TestLogEvent|TestAuthorizationCommit|TestMustLoggerWith",
         "-count=1"
       ]
     },
@@ -66,7 +118,7 @@
         "./internal/audit",
         "./internal/proxy",
         "-run",
-        "Test(NewLoggerRejectsFinalSymlink|NewLoggerSyncsParentUnconditionally|CommitAuthorization|LogShortWrite|AuthorizationCommit)",
+        "TestNewLogger|TestCommitAuthorization|TestLogShortWrite|TestLogEvent|TestAuthorizationCommit|TestMustLoggerWith",
         "-count=1"
       ]
     },
