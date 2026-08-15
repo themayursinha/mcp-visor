@@ -25,7 +25,7 @@ Target and harness records must match the selected base SHA and current snapshot
 
 - Spec reviews bind to the **contract digest + `spec_revision` only** (never head/base/workspace). The latest current review wins; a later failed review invalidates an earlier pass.
 - For `security_sensitive:true`, a passing spec review must cover **every** `attack_classes[].failure_class` and include counterexamples. Malformed, duplicate, gapped, or taxonomy-invalid review evidence fails closed as `BLOCKED`.
-- `SPEC_REVIEWED` is derived from a current spec pass and starts a fresh RED cycle: only `red_test` recorded at/after the current spec review counts; older RED is invalidated.
+- `SPEC_REVIEWED` is derived from a current spec pass and starts a fresh RED cycle: only `red_test` whose `spec_sequence` matches the current spec review's journal sequence (`reviews/<n>.json`) counts; older RED is invalidated. Freshness is that sequence, not wall-clock or filesystem mtime.
 - Implementation reviews keep head/base/workspace binding and add canonical `failure_classes[]`. Findings count **regardless of review verdict** (a passing review with a finding still advances the strike).
 - Per class X: a review containing X increments once; a review without X ends the streak; multiple X findings in one review count once. At `max_same_failure_class_strikes` (2) the task returns to `SPECIFIED` with `same_failure_class_stop_loss:X:2/2` and task commands are rejected. Only a current passing spec review for the new digest/revision with X in `closed_failure_classes` derives `SPEC_REVIEWED` and resets the class. A revision bump alone cannot reset; strike counters are never stored.
 

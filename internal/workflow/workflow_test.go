@@ -1007,6 +1007,7 @@ func specReview(passed bool, revision int, digest string, mut func(*workflow.Rev
 		Phase: "spec", Passed: passed, SpecRevision: revision, ContractDigest: digest,
 		CoveredAttackClasses: []string{"X", "Y"},
 		Counterexamples:      []string{"symlink substitution in any component"},
+		Sequence:             1,
 	}
 	if mut != nil {
 		mut(&r)
@@ -1027,7 +1028,7 @@ func implReview(passed bool, classes []string, mut func(*workflow.ReviewArtifact
 
 func specCmds() []workflow.CommandRecord {
 	return []workflow.CommandRecord{
-		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b", SpecSequence: 1},
 		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
@@ -1071,9 +1072,9 @@ func TestSpecGate_CurrentSpecPassDerivesSpecReviewed(t *testing.T) {
 	if st != workflow.StatusSpecReviewed {
 		t.Fatalf("current spec pass without RED must derive SPEC_REVIEWED, got %s %v", st, reasons)
 	}
-	// A RED recorded after the spec review promotes to FAILURE_REPRODUCED.
+	// A RED recorded against the current spec journal sequence promotes to FAILURE_REPRODUCED.
 	red := []workflow.CommandRecord{
-		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b", SpecSequence: 1},
 	}
 	st, reasons = workflow.DeriveStatus(&tk, red, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if st != workflow.StatusFailureReproduced {
@@ -1322,11 +1323,9 @@ func TestStopLoss_ReviewedClosureDerivesSpecReviewedAndInvalidatesOldRed(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldRedAt := time.Now().Add(-time.Hour)
-	closureAt := time.Now()
 	closing := specReview(true, 2, newDigest, func(r *workflow.ReviewArtifact) {
 		r.ClosedFailureClasses = []string{"X"}
-		r.RecordedUTC = closureAt
+		r.Sequence = 4
 	})
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, oldDigest, nil),
@@ -1335,7 +1334,7 @@ func TestStopLoss_ReviewedClosureDerivesSpecReviewedAndInvalidatesOldRed(t *test
 		closing,
 	}
 	oldRed := []workflow.CommandRecord{
-		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b", RecordedUTC: oldRedAt},
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b", SpecSequence: 1},
 	}
 	st, reasons := workflow.DeriveStatus(&newTK, oldRed, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if st != workflow.StatusSpecReviewed {
@@ -1453,6 +1452,18 @@ func TestValidateReviewArtifact_RejectsFindingsWithoutClasses(t *testing.T) {
 	}
 }
 
+func TestValidateReviewArtifact_NonSecurityFindingsNeedNoClasses(t *testing.T) {
+	tk := baseTask(nil) // non-security: no taxonomy, no stop-loss
+	r := workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		Findings: []string{"please rename this helper"},
+	}
+	if err := workflow.ValidateReviewArtifact(&r, &tk); err != nil {
+		t.Fatalf("non-security implementation review with findings and no failure_classes must be accepted: %v", err)
+	}
+}
+
 func TestValidateReviewArtifact_UnboundReviewRejected(t *testing.T) {
 	tk := specTask(nil)
 	// Any implementation review (classed or classless, passed or failed)
@@ -1560,5 +1571,116 @@ func TestParseStatus_SpecReviewed(t *testing.T) {
 	}
 	if s, err := workflow.ParseMinStatus("SPEC_REVIEWED"); err != nil || s != workflow.StatusSpecReviewed {
 		t.Fatalf("ParseMinStatus(SPEC_REVIEWED) = %v, %v", s, err)
+	}
+}
+
+func TestSpecGate_RedFreshnessUsesJournalSequenceNotMtime(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(n int, r workflow.ReviewArtifact) {
+		t.Helper()
+		r.Sequence = 0 // journal identity is the filename; loader assigns Sequence
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", n)), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(1, specReview(true, 1, digest, nil))
+	if _, err := workflow.RunNamedCommand(root, &tk, "red_test", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("same_spec_future_mtime_still_fresh", func(t *testing.T) {
+		future := time.Now().Add(time.Hour)
+		if err := os.Chtimes(filepath.Join(dir, "1.json"), future, future); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := workflow.BuildReport(root, &tk, "HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.DerivedStatus != workflow.StatusFailureReproduced {
+			t.Fatalf("RED stamped for spec sequence 1 must stay fresh when only mtime changes, got %s %v", rep.DerivedStatus, rep.Reasons)
+		}
+	})
+
+	t.Run("later_spec_backdated_mtime_still_stale", func(t *testing.T) {
+		write(2, specReview(true, 1, digest, nil))
+		past := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(filepath.Join(dir, "2.json"), past, past); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := workflow.BuildReport(root, &tk, "HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.DerivedStatus != workflow.StatusSpecReviewed {
+			t.Fatalf("new spec journal entry must invalidate prior RED even when mtime is backdated, got %s %v", rep.DerivedStatus, rep.Reasons)
+		}
+		if !hasReason(rep.Reasons, "red_failure_stale_or_missing") {
+			t.Fatalf("expected red_failure_stale_or_missing, got %v", rep.Reasons)
+		}
+	})
+}
+
+func TestSpecGate_UnstampedRedIsStaleAgainstJournaledSpec(t *testing.T) {
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := []workflow.ReviewArtifact{specReview(true, 1, digest, func(r *workflow.ReviewArtifact) {
+		r.Sequence = 1
+	})}
+	red := []workflow.CommandRecord{
+		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
+	}
+	st, reasons := workflow.DeriveStatus(&tk, red, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	if st != workflow.StatusSpecReviewed {
+		t.Fatalf("unstamped RED against journaled spec sequence 1 must be stale, got %s %v", st, reasons)
+	}
+	if !hasReason(reasons, "red_failure_stale_or_missing") {
+		t.Fatalf("expected red_failure_stale_or_missing, got %v", reasons)
+	}
+}
+
+func TestBuildReport_NonSecurityFindingsWithoutClassesNotBlocked(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := baseTask(nil)
+	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := workflow.ReviewArtifact{
+		Phase: "implementation", Passed: false,
+		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		Findings: []string{"please rename this helper"},
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := workflow.BuildReport(root, &tk, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.DerivedStatus == workflow.StatusBlocked {
+		t.Fatalf("non-security findings without failure_classes must not block, got %s %v", rep.DerivedStatus, rep.Reasons)
 	}
 }

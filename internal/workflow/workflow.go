@@ -62,6 +62,11 @@ type CommandRecord struct {
 	WorkspaceDigest string    `json:"workspace_digest"`
 	LogPath         string    `json:"log_path,omitempty"`
 	RecordedUTC     time.Time `json:"recorded_utc"`
+	// SpecSequence is the journal sequence of the current spec pass at
+	// execution (ReviewArtifact.Sequence from evidence/workflow/<task>/reviews/<n>.json).
+	// RED is fresh iff this equals the current spec pass's sequence. It is a
+	// derived binding written by RunNamedCommand, not a wall-clock or mtime.
+	SpecSequence int `json:"spec_sequence,omitempty"`
 }
 
 type ReviewArtifact struct {
@@ -80,7 +85,7 @@ type ReviewArtifact struct {
 	WorkspaceDigest      string    `json:"workspace_digest,omitempty"`
 	BaseSHA              string    `json:"base_sha,omitempty"`
 	Sequence             int       `json:"sequence,omitempty"`
-	RecordedUTC          time.Time `json:"recorded_utc,omitempty"`
+	RecordedUTC          time.Time `json:"recorded_utc,omitempty"` // informational; not used for RED freshness
 }
 
 type ScopeResult struct {
@@ -547,6 +552,7 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 	if err != nil {
 		return CommandRecord{}, err
 	}
+	specSeq := 0
 	if specRegime(t) {
 		reviews, err := LoadReviewSequence(root, t)
 		if err != nil {
@@ -559,9 +565,11 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 		if cls, n, ok := stopLossClass(t, reviews, digest, t.SpecRevision); ok {
 			return CommandRecord{}, fmt.Errorf("task commands rejected: same_failure_class_stop_loss:%s:%d/%d", cls, n, t.MaxSameFailureClassStrikes)
 		}
-		if currentSpecPass(reviews, digest, t.SpecRevision) == nil {
+		pass := currentSpecPass(reviews, digest, t.SpecRevision)
+		if pass == nil {
 			return CommandRecord{}, errors.New("spec_review_required: current passing spec review for contract digest + spec_revision required before task commands")
 		}
+		specSeq = pass.Sequence
 	}
 	dir := EvidenceDir(root, t.TaskID)
 	logDir := filepath.Join(dir, "logs")
@@ -593,7 +601,7 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 	rec := CommandRecord{
 		Name: name, Args: args, Exit: exit, Source: "executed",
 		BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
-		LogPath: logPath, RecordedUTC: time.Now().UTC(),
+		LogPath: logPath, RecordedUTC: time.Now().UTC(), SpecSequence: specSeq,
 	}
 	line, _ := json.Marshal(rec)
 	out, err := os.OpenFile(commandsPath(root, t.TaskID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -931,14 +939,12 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	}
 
 	// RED must use contract argv and precede GREEN. Under the spec regime a
-	// reviewed closure starts a fresh RED cycle: only RED recorded at/after the
-	// current spec review counts (old RED is invalidated).
+	// reviewed closure starts a fresh RED cycle: only RED whose spec_sequence
+	// matches the current spec pass's journal sequence counts (old RED is
+	// invalidated). Sequence is the journal filename order, not wall-clock or
+	// filesystem mtime — those are caller-controlled.
 	redIdx := -1
 	if t.SecuritySensitive {
-		specTime := time.Time{}
-		if specPass != nil {
-			specTime = specPass.RecordedUTC
-		}
 		for i, c := range cmds {
 			if c.Source != "executed" || !isRedFailCmd(t, c.Name) || c.Exit == 0 {
 				continue
@@ -946,7 +952,7 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 			if req, err := LookupCommand(t, c.Name); err != nil || !argvEqual(c.Args, req.Argv) {
 				continue
 			}
-			if specPass != nil && c.RecordedUTC.Before(specTime) {
+			if specPass != nil && c.SpecSequence != specPass.Sequence {
 				continue
 			}
 			redIdx = i
@@ -1102,6 +1108,7 @@ func BuildReport(root string, t *Task, base string) (*Report, error) {
 			"max_attempts is counted per pass-target name",
 			"security tasks require a current passing spec review (contract digest + spec_revision) before RED/commands",
 			"review journal lives under evidence/workflow/<task>/reviews/ with contiguous <n>.json files",
+			"RED freshness binds to the current spec review journal sequence, not clocks or file mtime",
 		},
 	}, nil
 }
@@ -1159,18 +1166,9 @@ func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
 			return nil, fmt.Errorf("invalid review evidence %s: sequence field %d does not match filename %d", filepath.Base(f.path), r.Sequence, f.n)
 		}
 		r.Sequence = f.n
-		// Journal insertion time is the authoritative chronology for the
-		// fresh-post-spec RED/TARGET/HARNESS cycle. A caller-supplied
-		// recorded_utc (e.g. an externally authored or copied review that
-		// retains an old creation time) must NOT be trusted: a backdated
-		// spec review would let DeriveStatus accept RED/target/harness
-		// records produced before the review was added. Always derive from
-		// the journal file's modification time.
-		if fi, err := os.Stat(f.path); err == nil {
-			r.RecordedUTC = fi.ModTime()
-		} else {
-			r.RecordedUTC = time.Now().UTC()
-		}
+		// Do not derive chronology from recorded_utc or file mtime: both are
+		// caller-controlled (copied JSON, cp -p, Chtimes). RED freshness uses
+		// this filename sequence against CommandRecord.SpecSequence.
 		if err := ValidateReviewArtifact(&r, t); err != nil {
 			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
 		}
@@ -1258,7 +1256,9 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 	// Findings without failure-class mappings would be silently treated as
 	// "no classes" by stopLossClass, resetting every non-latched streak and
 	// letting the same issue recur forever without reaching the threshold.
-	if len(r.Findings) > 0 && len(r.FailureClasses) == 0 {
+	// Non-security tasks have no taxonomy; ordinary review notes must not
+	// be forced to invent failure classes.
+	if specRegime(t) && len(r.Findings) > 0 && len(r.FailureClasses) == 0 {
 		return errors.New("implementation review findings require at least one canonical failure_class")
 	}
 	return nil
