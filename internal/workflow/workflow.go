@@ -1159,10 +1159,17 @@ func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
 			return nil, fmt.Errorf("invalid review evidence %s: sequence field %d does not match filename %d", filepath.Base(f.path), r.Sequence, f.n)
 		}
 		r.Sequence = f.n
-		if r.RecordedUTC.IsZero() {
-			if fi, err := os.Stat(f.path); err == nil {
-				r.RecordedUTC = fi.ModTime()
-			}
+		// Journal insertion time is the authoritative chronology for the
+		// fresh-post-spec RED/TARGET/HARNESS cycle. A caller-supplied
+		// recorded_utc (e.g. an externally authored or copied review that
+		// retains an old creation time) must NOT be trusted: a backdated
+		// spec review would let DeriveStatus accept RED/target/harness
+		// records produced before the review was added. Always derive from
+		// the journal file's modification time.
+		if fi, err := os.Stat(f.path); err == nil {
+			r.RecordedUTC = fi.ModTime()
+		} else {
+			r.RecordedUTC = time.Now().UTC()
 		}
 		if err := ValidateReviewArtifact(&r, t); err != nil {
 			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
@@ -1197,9 +1204,15 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		return fmt.Errorf("invalid review phase %q", r.Phase)
 	}
 	canon := canonicalClasses(t)
-	for _, fc := range r.FailureClasses {
-		if _, ok := canon[fc]; !ok {
-			return fmt.Errorf("unknown failure class %q", fc)
+	// Failure-class mappings only exist in the spec regime: for a normal
+	// non-security task canonicalClasses is empty and no stop-loss runs,
+	// so an implementation review that names failure classes (or a spec
+	// review that covers them) must not be rejected as "unknown".
+	if specRegime(t) {
+		for _, fc := range r.FailureClasses {
+			if _, ok := canon[fc]; !ok {
+				return fmt.Errorf("unknown failure class %q", fc)
+			}
 		}
 	}
 	if phase == "spec" {
@@ -1210,13 +1223,17 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 			return errors.New("spec review requires contract_digest")
 		}
 		for _, c := range r.CoveredAttackClasses {
-			if _, ok := canon[c]; !ok {
-				return fmt.Errorf("spec review covers unknown attack class %q", c)
+			if specRegime(t) {
+				if _, ok := canon[c]; !ok {
+					return fmt.Errorf("spec review covers unknown attack class %q", c)
+				}
 			}
 		}
 		for _, c := range r.ClosedFailureClasses {
-			if _, ok := canon[c]; !ok {
-				return fmt.Errorf("spec review closes unknown failure class %q", c)
+			if specRegime(t) {
+				if _, ok := canon[c]; !ok {
+					return fmt.Errorf("spec review closes unknown failure class %q", c)
+				}
 			}
 		}
 		if r.Passed && t.SecuritySensitive {
