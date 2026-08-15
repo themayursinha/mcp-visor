@@ -1159,7 +1159,15 @@ func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
 			return nil, err
 		}
 		var r ReviewArtifact
-		if err := json.Unmarshal(b, &r); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&r); err != nil {
+			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
+		}
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			if err == nil {
+				return nil, fmt.Errorf("invalid review evidence %s: trailing JSON value", filepath.Base(f.path))
+			}
 			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
 		}
 		if r.Sequence != 0 && r.Sequence != f.n {
@@ -1189,10 +1197,12 @@ func latestJournalReview(reviews []ReviewArtifact) *ReviewArtifact {
 }
 
 // ValidateReviewArtifact checks structural validity against the task taxonomy.
-// Phase "spec" requires a revision, contract digest, and (when passing on a
-// security task) full attack-class coverage plus counterexamples. Implementation
-// reviews must reference canonical failure classes; a passing implementation
-// review must carry the head/base/workspace snapshot binding.
+// Phase "spec" requires a revision, contract digest, and (when passing and bound
+// to the live contract) full attack-class coverage plus a non-empty
+// counterexample. Historical spec entries keep their original digest/revision
+// and are not revalidated against a later taxonomy. Implementation reviews must
+// reference canonical failure classes; a passing implementation review must
+// carry the head/base/workspace snapshot binding.
 func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 	phase := r.Phase
 	if phase == "" {
@@ -1202,17 +1212,15 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		return fmt.Errorf("invalid review phase %q", r.Phase)
 	}
 	canon := canonicalClasses(t)
-	// Failure-class mappings only exist in the spec regime: for a normal
-	// non-security task canonicalClasses is empty and no stop-loss runs,
-	// so an implementation review that names failure classes (or a spec
-	// review that covers them) must not be rejected as "unknown".
+	liveDigest := ""
 	if specRegime(t) {
-		for _, fc := range r.FailureClasses {
-			if _, ok := canon[fc]; !ok {
-				return fmt.Errorf("unknown failure class %q", fc)
-			}
+		d, err := ContractDigest(t)
+		if err != nil {
+			return fmt.Errorf("contract digest: %w", err)
 		}
+		liveDigest = d
 	}
+	currentContract := specRegime(t) && r.ContractDigest == liveDigest && r.SpecRevision == t.SpecRevision
 	if phase == "spec" {
 		if r.SpecRevision < 1 {
 			return errors.New("spec review requires spec_revision >= 1")
@@ -1220,31 +1228,44 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		if strings.TrimSpace(r.ContractDigest) == "" {
 			return errors.New("spec review requires contract_digest")
 		}
-		for _, c := range r.CoveredAttackClasses {
-			if specRegime(t) {
+		// Full current-taxonomy checks apply only to the live contract.
+		// Revalidating historical passing specs against a later attack class
+		// would BLOCK the append-only journal and prevent a valid new spec
+		// review from ever being consulted.
+		if currentContract {
+			for _, c := range r.CoveredAttackClasses {
 				if _, ok := canon[c]; !ok {
 					return fmt.Errorf("spec review covers unknown attack class %q", c)
 				}
 			}
-		}
-		for _, c := range r.ClosedFailureClasses {
-			if specRegime(t) {
+			for _, c := range r.ClosedFailureClasses {
 				if _, ok := canon[c]; !ok {
 					return fmt.Errorf("spec review closes unknown failure class %q", c)
 				}
 			}
-		}
-		if r.Passed && t.SecuritySensitive {
-			for c := range canon {
-				if !containsStr(r.CoveredAttackClasses, c) {
-					return fmt.Errorf("passing spec review does not cover attack class %q", c)
+			if r.Passed {
+				for c := range canon {
+					if !containsStr(r.CoveredAttackClasses, c) {
+						return fmt.Errorf("passing spec review does not cover attack class %q", c)
+					}
 				}
-			}
-			if len(r.Counterexamples) == 0 {
-				return errors.New("passing spec review requires counterexamples")
+				if len(clean(r.Counterexamples)) == 0 {
+					return errors.New("passing spec review requires counterexamples")
+				}
 			}
 		}
 		return nil
+	}
+	// Failure-class mappings only exist in the spec regime: for a normal
+	// non-security task canonicalClasses is empty and no stop-loss runs,
+	// so an implementation review that names failure classes must not be
+	// rejected as "unknown".
+	if specRegime(t) {
+		for _, fc := range r.FailureClasses {
+			if _, ok := canon[fc]; !ok {
+				return fmt.Errorf("unknown failure class %q", fc)
+			}
+		}
 	}
 	// Every implementation review that can advance OR interrupt the
 	// stop-loss streak (classed or classless, passed or failed) must be

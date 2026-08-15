@@ -1127,6 +1127,36 @@ func TestSpecGate_LatestSpecReviewWins(t *testing.T) {
 	}
 }
 
+func TestSpecGate_HistoricalSpecSurvivesTaxonomyExpansion(t *testing.T) {
+	oldTK := specTask(nil)
+	oldDigest, err := workflow.ContractDigest(&oldTK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTK := specTask(nil)
+	newTK.AttackClasses = append(newTK.AttackClasses, workflow.AttackClass{ID: "Z", FailureClass: "Z", Expected: "deny"})
+	newDigest, err := workflow.ContractDigest(&newTK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSpec := specReview(true, 1, oldDigest, nil) // covers X,Y only — valid for the old contract
+	st, reasons := workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, []workflow.ReviewArtifact{oldSpec}, specSnap())
+	if st == workflow.StatusBlocked {
+		t.Fatalf("historical spec must not block the journal after a class is added, got %s %v", st, reasons)
+	}
+	if st != workflow.StatusSpecified || !hasReason(reasons, "spec_review_required") {
+		t.Fatalf("expanded taxonomy without a current spec must stay SPECIFIED, got %s %v", st, reasons)
+	}
+	newSpec := specReview(true, 1, newDigest, func(r *workflow.ReviewArtifact) {
+		r.CoveredAttackClasses = []string{"X", "Y", "Z"}
+		r.Sequence = 2
+	})
+	st, reasons = workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, []workflow.ReviewArtifact{oldSpec, newSpec}, specSnap())
+	if st != workflow.StatusSpecReviewed {
+		t.Fatalf("current spec covering the new taxonomy must derive SPEC_REVIEWED, got %s %v", st, reasons)
+	}
+}
+
 func TestSpecGate_PassingSpecReviewRequiresCoverageAndCounterexamples(t *testing.T) {
 	tk := specTask(nil)
 	digest, err := workflow.ContractDigest(&tk)
@@ -1139,6 +1169,12 @@ func TestSpecGate_PassingSpecReviewRequiresCoverageAndCounterexamples(t *testing
 		},
 		"missing_counterexamples": func(r *workflow.ReviewArtifact) {
 			r.Counterexamples = nil
+		},
+		"empty_counterexample": func(r *workflow.ReviewArtifact) {
+			r.Counterexamples = []string{""}
+		},
+		"whitespace_counterexample": func(r *workflow.ReviewArtifact) {
+			r.Counterexamples = []string{"  "}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1509,6 +1545,43 @@ func TestBuildReport_MalformedReviewEvidenceBlocked(t *testing.T) {
 	}
 	if rep.DerivedStatus != workflow.StatusBlocked {
 		t.Fatalf("gapped review evidence must block, got %s %v", rep.DerivedStatus, rep.Reasons)
+	}
+	if !hasReason(rep.Reasons, "invalid_review_evidence") {
+		t.Fatalf("expected invalid_review_evidence, got %v", rep.Reasons)
+	}
+}
+
+func TestLoadReviewSequence_RejectsUnknownJSONFields(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := json.Marshal(specReview(true, 1, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 0 }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), spec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Singular failure_class is a schema mistake: it must not decode as a
+	// classless review that resets an unlatched streak.
+	bad := []byte(`{"passed":false,"head_sha":"h","workspace_digest":"d","base_sha":"b","failure_class":"X","notes":"typo"}`)
+	if err := os.WriteFile(filepath.Join(dir, "2.json"), bad, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := workflow.BuildReport(root, &tk, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.DerivedStatus != workflow.StatusBlocked {
+		t.Fatalf("unknown journal fields must block, got %s %v", rep.DerivedStatus, rep.Reasons)
 	}
 	if !hasReason(rep.Reasons, "invalid_review_evidence") {
 		t.Fatalf("expected invalid_review_evidence, got %v", rep.Reasons)
