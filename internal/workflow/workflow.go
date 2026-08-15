@@ -1203,9 +1203,9 @@ func latestJournalReview(reviews []ReviewArtifact) *ReviewArtifact {
 // Phase "spec" requires a revision, contract digest, and (when passing and bound
 // to the live contract) full attack-class coverage plus a non-empty
 // counterexample. Historical spec entries keep their original digest/revision
-// and are not revalidated against a later taxonomy. Implementation reviews must
-// reference canonical failure classes; a passing implementation review must
-// carry the head/base/workspace snapshot binding.
+// and are not revalidated against a later taxonomy. Implementation reviews bind
+// to the contract digest + spec_revision as well as the snapshot; unknown
+// failure classes fail closed only on the live contract.
 func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 	phase := r.Phase
 	if phase == "" {
@@ -1259,9 +1259,22 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		}
 		return nil
 	}
-	// Unknown implementation failure_class names are ignored rather than
-	// fatal: stopLossClass only increments live canonical classes, and a
-	// later rename/removal must not BLOCK the append-only journal.
+	// Unknown names on a live-contract implementation review fail closed so a
+	// mistyped mapping cannot reset an unlatched streak. Historical reviews
+	// (different digest/revision) keep old class names so a rename cannot
+	// BLOCK the journal.
+	if specRegime(t) {
+		if strings.TrimSpace(r.ContractDigest) == "" || r.SpecRevision < 1 {
+			return errors.New("implementation review requires contract_digest and spec_revision")
+		}
+		if currentContract {
+			for _, fc := range r.FailureClasses {
+				if _, ok := canon[fc]; !ok {
+					return fmt.Errorf("unknown failure class %q", fc)
+				}
+			}
+		}
+	}
 	// Every implementation review that can advance OR interrupt the
 	// stop-loss streak (classed or classless, passed or failed) must be
 	// bound to a snapshot; otherwise a stale, copied, or unrelated artifact

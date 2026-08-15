@@ -1015,10 +1015,10 @@ func specReview(passed bool, revision int, digest string, mut func(*workflow.Rev
 	return r
 }
 
-func implReview(passed bool, classes []string, mut func(*workflow.ReviewArtifact)) workflow.ReviewArtifact {
+func implReview(passed bool, classes []string, digest string, mut func(*workflow.ReviewArtifact)) workflow.ReviewArtifact {
 	r := workflow.ReviewArtifact{
 		Passed: passed, HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
-		FailureClasses: classes,
+		FailureClasses: classes, ContractDigest: digest, SpecRevision: 1,
 	}
 	if mut != nil {
 		mut(&r)
@@ -1174,8 +1174,8 @@ func TestSpecGate_HistoricalImplSurvivesClassRename(t *testing.T) {
 	}
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, oldDigest, nil),
-		implReview(false, []string{"X"}, nil),
-		implReview(false, []string{"X"}, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
 	}
 	st, reasons := workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if st == workflow.StatusBlocked {
@@ -1242,8 +1242,8 @@ func TestStopLoss_XXEvenIfSecondReviewPassed(t *testing.T) {
 	// review passed; findings still count regardless of verdict.
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, digest, nil),
-		implReview(true, []string{"X"}, nil),
-		implReview(true, []string{"X"}, nil),
+		implReview(true, []string{"X"}, digest, nil),
+		implReview(true, []string{"X"}, digest, nil),
 	}
 	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if st != workflow.StatusSpecified {
@@ -1265,9 +1265,9 @@ func TestStopLoss_LatchedUntilSpecClosure(t *testing.T) {
 	// spec review lists X in closed_failure_classes.
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, digest, nil),
-		implReview(false, []string{"X"}, nil),
-		implReview(false, []string{"X"}, nil),
-		implReview(false, nil, nil), // third review without X: must NOT unlatch
+		implReview(false, []string{"X"}, digest, nil),
+		implReview(false, []string{"X"}, digest, nil),
+		implReview(false, nil, digest, nil), // third review without X: must NOT unlatch
 	}
 	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if st != workflow.StatusSpecified {
@@ -1295,7 +1295,7 @@ func TestStopLoss_DuplicateFindingCountsOnce(t *testing.T) {
 	// One review with two X findings counts once -> streak 1, no stop-loss.
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, digest, nil),
-		implReview(false, []string{"X", "X"}, nil),
+		implReview(false, []string{"X", "X"}, digest, nil),
 	}
 	st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if st != workflow.StatusSpecReviewed {
@@ -1315,14 +1315,14 @@ func TestStopLoss_InterruptedAndDifferentClassesDoNotTrigger(t *testing.T) {
 	for name, reviews := range map[string][]workflow.ReviewArtifact{
 		"x_no_x_x": {
 			specReview(true, 1, digest, nil),
-			implReview(false, []string{"X"}, nil),
-			implReview(false, nil, nil),
-			implReview(false, []string{"X"}, nil),
+			implReview(false, []string{"X"}, digest, nil),
+			implReview(false, nil, digest, nil),
+			implReview(false, []string{"X"}, digest, nil),
 		},
 		"x_y": {
 			specReview(true, 1, digest, nil),
-			implReview(false, []string{"X"}, nil),
-			implReview(false, []string{"Y"}, nil),
+			implReview(false, []string{"X"}, digest, nil),
+			implReview(false, []string{"Y"}, digest, nil),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1337,7 +1337,7 @@ func TestStopLoss_InterruptedAndDifferentClassesDoNotTrigger(t *testing.T) {
 	}
 }
 
-func TestStopLoss_UnknownClassDoesNotBlockJournal(t *testing.T) {
+func TestStopLoss_LiveUnknownClassInvalid(t *testing.T) {
 	tk := specTask(nil)
 	digest, err := workflow.ContractDigest(&tk)
 	if err != nil {
@@ -1345,17 +1345,14 @@ func TestStopLoss_UnknownClassDoesNotBlockJournal(t *testing.T) {
 	}
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, digest, nil),
-		implReview(false, []string{"bogus"}, nil),
+		implReview(false, []string{"bogus"}, digest, nil),
 	}
 	st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
-	if st == workflow.StatusBlocked {
-		t.Fatalf("unknown implementation failure_class must not block the journal, got %s %v", st, reasons)
+	if st != workflow.StatusBlocked {
+		t.Fatalf("unknown live-contract failure class must block, got %s %v", st, reasons)
 	}
-	if st != workflow.StatusSpecReviewed {
-		t.Fatalf("unknown class is ignored and does not prevent SPEC_REVIEWED, got %s %v", st, reasons)
-	}
-	if hasReason(reasons, "same_failure_class_stop_loss") {
-		t.Fatalf("unknown class must not trigger stop-loss: %v", reasons)
+	if !hasReason(reasons, "invalid_review_evidence") {
+		t.Fatalf("expected invalid_review_evidence, got %v", reasons)
 	}
 }
 
@@ -1367,8 +1364,8 @@ func TestStopLoss_RevisionBumpAloneDoesNotReset(t *testing.T) {
 	}
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, oldDigest, nil),
-		implReview(false, []string{"X"}, nil),
-		implReview(false, []string{"X"}, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
 	}
 	st, reasons := workflow.DeriveStatus(&oldTK, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
 	if !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
@@ -1402,8 +1399,8 @@ func TestStopLoss_ReviewedClosureDerivesSpecReviewedAndInvalidatesOldRed(t *test
 	})
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, oldDigest, nil),
-		implReview(false, []string{"X"}, nil),
-		implReview(false, []string{"X"}, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
 		closing,
 	}
 	oldRed := []workflow.CommandRecord{
@@ -1431,8 +1428,8 @@ func TestStopLoss_StaleSpecReviewDoesNotReset(t *testing.T) {
 	// revision that lists X in closed_failure_classes must NOT clear the streak.
 	base := []workflow.ReviewArtifact{
 		specReview(true, 1, oldDigest, nil),
-		implReview(false, []string{"X"}, nil),
-		implReview(false, []string{"X"}, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
+		implReview(false, []string{"X"}, oldDigest, nil),
 	}
 	for name, stale := range map[string]workflow.ReviewArtifact{
 		"wrong_digest": specReview(true, 1, "STALE-DIGEST-0000", func(r *workflow.ReviewArtifact) {
@@ -1466,8 +1463,8 @@ func TestStopLoss_MultiClassReasonDeterministic(t *testing.T) {
 	// (sorted canonical order -> X) across repeated derivations.
 	reviews := []workflow.ReviewArtifact{
 		specReview(true, 1, digest, nil),
-		implReview(false, []string{"X", "Y"}, nil),
-		implReview(false, []string{"X", "Y"}, nil),
+		implReview(false, []string{"X", "Y"}, digest, nil),
+		implReview(false, []string{"X", "Y"}, digest, nil),
 	}
 	for i := 0; i < 200; i++ {
 		st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
@@ -1514,9 +1511,14 @@ func TestValidate_SecurityTaskRequiresSpecRegime(t *testing.T) {
 
 func TestValidateReviewArtifact_RejectsFindingsWithoutClasses(t *testing.T) {
 	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := workflow.ReviewArtifact{
 		Phase: "implementation", Passed: false,
 		HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
+		ContractDigest: digest, SpecRevision: 1,
 		Findings: []string{"something is wrong"},
 		// FailureClasses intentionally omitted.
 	}
@@ -1539,6 +1541,10 @@ func TestValidateReviewArtifact_NonSecurityFindingsNeedNoClasses(t *testing.T) {
 
 func TestValidateReviewArtifact_UnboundReviewRejected(t *testing.T) {
 	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Any implementation review (classed or classless, passed or failed)
 	// without snapshot binding must be rejected — it could advance OR
 	// interrupt a failure-class streak for an unrelated tip.
@@ -1546,12 +1552,20 @@ func TestValidateReviewArtifact_UnboundReviewRejected(t *testing.T) {
 		"failed_classed": {
 			Phase: "implementation", Passed: false,
 			FailureClasses: []string{"X"},
+			ContractDigest: digest, SpecRevision: 1,
 		},
 		"failed_classless": {
 			Phase: "implementation", Passed: false,
+			ContractDigest: digest, SpecRevision: 1,
 		},
 		"passed_classed": {
 			Phase: "implementation", Passed: true,
+			FailureClasses: []string{"X"},
+			ContractDigest: digest, SpecRevision: 1,
+		},
+		"missing_contract": {
+			Phase: "implementation", Passed: false,
+			HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b",
 			FailureClasses: []string{"X"},
 		},
 	} {
@@ -1699,8 +1713,8 @@ func TestRunNamedCommand_StopLossRejectsCommands(t *testing.T) {
 		}
 	}
 	write(1, specReview(true, 1, digest, nil))
-	write(2, implReview(false, []string{"X"}, nil))
-	write(3, implReview(false, []string{"X"}, nil))
+	write(2, implReview(false, []string{"X"}, digest, nil))
+	write(3, implReview(false, []string{"X"}, digest, nil))
 	_, err = workflow.RunNamedCommand(root, &tk, "red_test", "HEAD")
 	if err == nil {
 		t.Fatal("task command must be rejected during same-failure-class stop-loss")

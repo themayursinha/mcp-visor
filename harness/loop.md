@@ -14,7 +14,7 @@ Enforcement, policy, audit, approval, telemetry, CLI behavior, security-claim do
 4. **Reviewer:** for a security task, produce the first spec review under `evidence/workflow/<task>/reviews/` (contiguous `<n>.json`, `phase:"spec"`, `passed:true`, `contract_digest` + `spec_revision` matching the task, `covered_attack_classes[]` covering every class, `counterexamples[]`). No task command runs and no status above `SPECIFIED` derives without a current passing spec review.
 5. **Worker:** `run -name red_test` (contract argv), implement inside `allowed_paths`, `run -name target_test`.
 6. **Planner:** `scope`, `run -name harness`, `verify -min HARNESS_VERIFIED`.
-7. **Reviewer:** append implementation reviews to the same journal (`phase:"implementation"` or omitted, `failure_classes[]` listing canonical classes). Review cannot override failed deterministic gates.
+7. **Reviewer:** append implementation reviews to the same journal (`phase:"implementation"` or omitted, `contract_digest` + `spec_revision`, `failure_classes[]` listing canonical classes). Review cannot override failed deterministic gates.
 8. `report` writes local evidence under `evidence/` by default; custom outputs must remain under `evidence/` or outside the repository. Stop for maintainer merge/tag/release approval.
 
 `run` never accepts a replacement command; argv comes only from the task JSON.
@@ -24,9 +24,9 @@ Target and harness records must match the selected base SHA and current snapshot
 ## Spec-adversarial gate and two-strike stop-loss
 
 - Spec reviews bind to the **contract digest + `spec_revision` only** (never head/base/workspace). The latest current review wins; a later failed review invalidates an earlier pass.
-- For `security_sensitive:true`, a passing spec review must cover **every** `attack_classes[].failure_class` and include a non-empty counterexample. Malformed, duplicate JSON keys, gapped, or live-spec-taxonomy-invalid review evidence fails closed as `BLOCKED`. Implementation `failure_classes` names unknown to the live taxonomy are ignored so a class rename cannot BLOCK the journal.
+- For `security_sensitive:true`, a passing spec review must cover **every** `attack_classes[].failure_class` and include a non-empty counterexample. Malformed, duplicate JSON keys, gapped, or live-spec-taxonomy-invalid review evidence fails closed as `BLOCKED`.
 - `SPEC_REVIEWED` is derived from a current spec pass and starts a fresh RED cycle: only `red_test` whose `spec_sequence` matches the current spec review's journal sequence (`reviews/<n>.json`) counts; older RED is invalidated. Freshness is that sequence, not wall-clock or filesystem mtime.
-- Implementation reviews keep head/base/workspace binding and add canonical `failure_classes[]`. Findings count **regardless of review verdict** (a passing review with a finding still advances the strike).
+- Implementation reviews bind to head/base/workspace **and** `contract_digest` + `spec_revision`. Findings count **regardless of review verdict** (a passing review with a finding still advances the strike). Unknown `failure_classes` on a live-contract implementation review fail closed; names from a prior digest/revision are ignored so a class rename cannot BLOCK the journal.
 - Per class X: a review containing X increments once; a review without X ends the streak; multiple X findings in one review count once. At `max_same_failure_class_strikes` (2) the task returns to `SPECIFIED` with `same_failure_class_stop_loss:X:2/2` and task commands are rejected. Only a current passing spec review for the new digest/revision with X in `closed_failure_classes` derives `SPEC_REVIEWED` and resets the class. A revision bump alone cannot reset; strike counters are never stored.
 
 ## Derived status (from artifacts only)
