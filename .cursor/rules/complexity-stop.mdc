@@ -1,0 +1,28 @@
+---
+description: State-machine and PR-complexity stop; harness is not a second product
+alwaysApply: true
+---
+
+# Complexity and state stop
+
+State is expensive. Before adding statuses, counters, journals, latches, resets, generations, revision semantics, historical replay, or reconciliation, prove the feature needs them.
+
+If reviewers keep discovering new state transitions: **STOP**. Do not keep fixing transitions. Simplify the state model.
+
+Every required state machine needs a small table: states, transitions, impossible transitions, terminal states, restart, stale-state, concurrency. If it will not fit, the design is too big.
+
+## PR complexity stop
+
+Unexpected PR growth is an architectural signal. If a narrow change accumulates many commits answering adjacent reviewer findings, thousands of unexpected LOC, new state-machine semantics, or historical migration logic:
+
+> Complexity budget exceeded. The abstraction should be reconsidered before another patch.
+
+Reviewability is a security property. See `docs/complexity-budget.md`.
+
+## Scope
+
+Protect deterministic, session-aware authorization for agent `tools/call`. The harness is support infrastructure, not a second product. Do not add dashboards, control planes, SDKs, or generalized workflow platforms unless the task directly strengthens enforcement, bypass resistance, evidence, or deployment correctness.
+
+## Challenge the requester
+
+Do not implement a suggestion merely because it was requested. If it expands scope, weakens the trust model, adds unnecessary complexity, or contradicts invariants, say so and recommend the smaller defensible alternative.
