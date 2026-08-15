@@ -14,21 +14,35 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Task struct {
-	TaskID             string   `json:"task_id"`
-	InvariantIDs       []string `json:"invariant_ids"`
-	SecuritySensitive  bool     `json:"security_sensitive"`
-	SecurityProblem    string   `json:"security_problem"`
-	RequiredBehavior   string   `json:"required_behavior"`
-	FailureBehavior    string   `json:"failure_behavior"`
-	AllowedPaths       []string `json:"allowed_paths"`
-	ApprovalGatedPaths []string `json:"approval_gated_paths"`
-	MaxAttempts        int      `json:"max_attempts"`
-	RequiredCommands   []ReqCmd `json:"required_commands"`
+	TaskID             string        `json:"task_id"`
+	InvariantIDs       []string      `json:"invariant_ids"`
+	SecuritySensitive  bool          `json:"security_sensitive"`
+	SecurityProblem    string        `json:"security_problem"`
+	RequiredBehavior   string        `json:"required_behavior"`
+	FailureBehavior    string        `json:"failure_behavior"`
+	AllowedPaths       []string      `json:"allowed_paths"`
+	ApprovalGatedPaths []string      `json:"approval_gated_paths"`
+	MaxAttempts        int           `json:"max_attempts"`
+	RequiredCommands   []ReqCmd      `json:"required_commands"`
+	SpecRevision       int           `json:"spec_revision"`
+	NonGoals           []string      `json:"non_goals"`
+	AttackClasses      []AttackClass `json:"attack_classes"`
+}
+
+// AttackClass is one machine-readable row of the frozen threat taxonomy. The
+// failure_class value is the canonical class name that spec reviews cover in
+// covered_attack_classes[] and that implementation reviews may list in
+// failure_classes[].
+type AttackClass struct {
+	ID           string `json:"id"`
+	FailureClass string `json:"failure_class"`
+	Expected     string `json:"expected"`
 }
 
 // ReqCmd is a named command with fixed argv from the task contract.
@@ -48,16 +62,29 @@ type CommandRecord struct {
 	WorkspaceDigest string    `json:"workspace_digest"`
 	LogPath         string    `json:"log_path,omitempty"`
 	RecordedUTC     time.Time `json:"recorded_utc"`
+	// SpecSequence is the journal sequence of the current spec pass at
+	// execution (ReviewArtifact.Sequence from evidence/workflow/<task>/reviews/<n>.json).
+	// RED is fresh iff this equals the current spec pass's sequence. It is a
+	// derived binding written by RunNamedCommand, not a wall-clock or mtime.
+	SpecSequence int `json:"spec_sequence,omitempty"`
 }
 
 type ReviewArtifact struct {
-	Passed          bool     `json:"passed"`
-	Findings        []string `json:"findings"`
-	Reviewer        string   `json:"reviewer,omitempty"`
-	Notes           string   `json:"notes,omitempty"`
-	HeadSHA         string   `json:"head_sha"`
-	WorkspaceDigest string   `json:"workspace_digest"`
-	BaseSHA         string   `json:"base_sha"`
+	Passed               bool      `json:"passed"`
+	Phase                string    `json:"phase,omitempty"` // "spec" | "implementation" (empty == implementation)
+	Findings             []string  `json:"findings,omitempty"`
+	FailureClasses       []string  `json:"failure_classes,omitempty"` // canonical failure classes (implementation reviews)
+	SpecRevision         int       `json:"spec_revision,omitempty"`
+	ContractDigest       string    `json:"contract_digest,omitempty"`
+	CoveredAttackClasses []string  `json:"covered_attack_classes,omitempty"`
+	Counterexamples      []string  `json:"counterexamples,omitempty"`
+	Reviewer             string    `json:"reviewer,omitempty"`
+	Notes                string    `json:"notes,omitempty"`
+	HeadSHA              string    `json:"head_sha,omitempty"`
+	WorkspaceDigest      string    `json:"workspace_digest,omitempty"`
+	BaseSHA              string    `json:"base_sha,omitempty"`
+	Sequence             int       `json:"sequence,omitempty"`
+	RecordedUTC          time.Time `json:"recorded_utc,omitempty"` // informational; not used for RED freshness
 }
 
 type ScopeResult struct {
@@ -74,6 +101,7 @@ type Status string
 const (
 	StatusUnspecified       Status = "UNSPECIFIED"
 	StatusSpecified         Status = "SPECIFIED"
+	StatusSpecReviewed      Status = "SPEC_REVIEWED"
 	StatusFailureReproduced Status = "FAILURE_REPRODUCED"
 	StatusTargetVerified    Status = "TARGET_VERIFIED"
 	StatusHarnessVerified   Status = "HARNESS_VERIFIED"
@@ -93,6 +121,8 @@ type Report struct {
 	Scope            ScopeResult     `json:"scope"`
 	Commands         []CommandRecord `json:"commands"`
 	Review           *ReviewArtifact `json:"review,omitempty"`
+	SpecPass         bool            `json:"spec_pass"`
+	ContractDigest   string          `json:"contract_digest"`
 	EvidenceEditable bool            `json:"evidence_editable"`
 	Notes            []string        `json:"notes"`
 	GeneratedUTC     time.Time       `json:"generated_utc"`
@@ -100,6 +130,17 @@ type Report struct {
 
 func DefaultApprovalGated() []string {
 	return []string{"*_test.go", "harness/invariants.md", "go.mod", "go.sum", "README.md", "SECURITY.md", ".github/workflows/*", ".goreleaser.yaml", ".goreleaser.yml"}
+}
+
+// ContractDigest is the canonical digest of the normalized task contract. Spec
+// reviews bind to this digest plus spec_revision only (not head/base/workspace).
+func ContractDigest(t *Task) (string, error) {
+	contract, err := json.Marshal(t)
+	if err != nil {
+		return "", fmt.Errorf("marshal task contract: %w", err)
+	}
+	sum := sha256.Sum256(contract)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func LoadTask(path string) (*Task, error) {
@@ -190,6 +231,35 @@ func ValidateTask(t *Task) error {
 	if t.SecuritySensitive && !hasRedFail {
 		e = append(e, "security_sensitive tasks require at least one expect=fail command")
 	}
+	// The spec-adversarial gate is mandatory for every security-sensitive
+	// task: omitting spec_revision must not silently bypass it.
+	if t.SecuritySensitive && t.SpecRevision < 1 {
+		e = append(e, "security_sensitive tasks require spec_revision >= 1 (spec gate is mandatory)")
+	}
+	if specRegime(t) {
+		if len(t.AttackClasses) == 0 {
+			e = append(e, "attack_classes must be non-empty when spec_revision >= 1")
+		}
+		if len(clean(t.NonGoals)) == 0 {
+			e = append(e, "non_goals must be non-empty when spec_revision >= 1")
+		}
+		seenClass := map[string]struct{}{}
+		for i, ac := range t.AttackClasses {
+			if strings.TrimSpace(ac.ID) == "" {
+				e = append(e, fmt.Sprintf("attack_classes[%d].id required", i))
+			}
+			fc := strings.TrimSpace(ac.FailureClass)
+			if fc == "" {
+				e = append(e, fmt.Sprintf("attack_classes[%d].failure_class required", i))
+			} else if _, dup := seenClass[fc]; dup {
+				e = append(e, fmt.Sprintf("attack_classes[%d].failure_class duplicate: %s", i, fc))
+			}
+			seenClass[fc] = struct{}{}
+			if strings.TrimSpace(ac.Expected) == "" {
+				e = append(e, fmt.Sprintf("attack_classes[%d].expected required", i))
+			}
+		}
+	}
 	for _, f := range []struct{ v, n string }{
 		{t.SecurityProblem, "security_problem"},
 		{t.RequiredBehavior, "required_behavior"},
@@ -240,6 +310,25 @@ func validTaskID(s string) bool {
 		return false
 	}
 	return true
+}
+
+// specRegime reports whether the task opts into the spec-adversarial gate:
+// a security-sensitive contract that declares a spec_revision and a
+// machine-readable threat taxonomy.
+func specRegime(t *Task) bool {
+	return t.SecuritySensitive && t.SpecRevision >= 1
+}
+
+// canonicalClasses returns the canonical failure-class names declared by the
+// task's attack_classes[].failure_class entries. Reviews reference these names.
+func canonicalClasses(t *Task) map[string]struct{} {
+	m := map[string]struct{}{}
+	for _, ac := range t.AttackClasses {
+		if fc := strings.TrimSpace(ac.FailureClass); fc != "" {
+			m[fc] = struct{}{}
+		}
+	}
+	return m
 }
 
 func clean(ss []string) []string {
@@ -318,13 +407,13 @@ func CurrentSnapshot(root, base string, t *Task) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	contract, err := json.Marshal(t)
+	contractDigest, err := ContractDigest(t)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("marshal task contract: %w", err)
+		return Snapshot{}, err
 	}
 	h := sha256.New()
 	fmt.Fprintf(h, "workspace:%s\n", workspace)
-	fmt.Fprintf(h, "task:%x\n", sha256.Sum256(contract))
+	fmt.Fprintf(h, "task:%s\n", contractDigest)
 	return Snapshot{BaseSHA: baseSHA, HeadSHA: head, WorkspaceDigest: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
@@ -456,6 +545,22 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 	if err != nil {
 		return CommandRecord{}, err
 	}
+	specSeq := 0
+	if specRegime(t) {
+		reviews, err := LoadReviewSequence(root, t)
+		if err != nil {
+			return CommandRecord{}, fmt.Errorf("review evidence: %w", err)
+		}
+		digest, err := ContractDigest(t)
+		if err != nil {
+			return CommandRecord{}, err
+		}
+		pass := currentSpecPass(reviews, digest, t.SpecRevision)
+		if pass == nil {
+			return CommandRecord{}, errors.New("spec_review_required: current passing spec review for contract digest + spec_revision required before task commands")
+		}
+		specSeq = pass.Sequence
+	}
 	dir := EvidenceDir(root, t.TaskID)
 	logDir := filepath.Join(dir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
@@ -486,7 +591,7 @@ func RunNamedCommand(root string, t *Task, name, base string) (CommandRecord, er
 	rec := CommandRecord{
 		Name: name, Args: args, Exit: exit, Source: "executed",
 		BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
-		LogPath: logPath, RecordedUTC: time.Now().UTC(),
+		LogPath: logPath, RecordedUTC: time.Now().UTC(), SpecSequence: specSeq,
 	}
 	line, _ := json.Marshal(rec)
 	out, err := os.OpenFile(commandsPath(root, t.TaskID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -759,7 +864,9 @@ func lastMatching(t *Task, cmds []CommandRecord, name string, requirePass *bool)
 }
 
 // DeriveStatus computes status from artifacts + current snapshot binding.
-func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *ReviewArtifact, snap Snapshot) (Status, []string) {
+// reviews is the ordered review sequence (spec + implementation); legacy callers
+// may pass nil when no review evidence exists.
+func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *ReviewArtifact, reviews []ReviewArtifact, snap Snapshot) (Status, []string) {
 	if err := ValidateTask(t); err != nil {
 		return StatusUnspecified, []string{"invalid_task: " + err.Error()}
 	}
@@ -776,6 +883,18 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 		}
 	}
 
+	// Review evidence must be structurally valid against the task taxonomy.
+	for i := range reviews {
+		if err := ValidateReviewArtifact(&reviews[i], t); err != nil {
+			return StatusBlocked, []string{"invalid_review_evidence: " + err.Error()}
+		}
+	}
+
+	digest, err := ContractDigest(t)
+	if err != nil {
+		return StatusBlocked, []string{"contract_digest_error: " + err.Error()}
+	}
+
 	attempts := countTargetAttempts(t, cmds)
 	if attempts > t.MaxAttempts {
 		return StatusBlocked, []string{fmt.Sprintf("max_attempts_exceeded:%d>%d", attempts, t.MaxAttempts)}
@@ -784,7 +903,26 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 	st := StatusSpecified
 	reasons = append(reasons, "valid_task_contract")
 
-	// RED may use an earlier snapshot; must use contract argv and precede GREEN.
+	// Spec gate: no status above SPECIFIED before a current spec pass.
+	var specPass *ReviewArtifact
+	if specRegime(t) {
+		specPass = currentSpecPass(reviews, digest, t.SpecRevision)
+		if specPass == nil {
+			reasons = append(reasons, "spec_review_required")
+			if latest := LatestSpecReview(reviews, digest, t.SpecRevision); latest != nil && !latest.Passed {
+				reasons = append(reasons, "spec_review_latest_failed")
+			}
+			return st, reasons
+		}
+		st = StatusSpecReviewed
+		reasons = append(reasons, "spec_review_pass")
+	}
+
+	// RED must use contract argv and precede GREEN. Under the spec regime a
+	// reviewed closure starts a fresh RED cycle: only RED whose spec_sequence
+	// matches the current spec pass's journal sequence counts (old RED is
+	// invalidated). Sequence is the journal filename order, not wall-clock or
+	// filesystem mtime — those are caller-controlled.
 	redIdx := -1
 	if t.SecuritySensitive {
 		for i, c := range cmds {
@@ -794,12 +932,17 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 			if req, err := LookupCommand(t, c.Name); err != nil || !argvEqual(c.Args, req.Argv) {
 				continue
 			}
+			if specPass != nil && c.SpecSequence != specPass.Sequence {
+				continue
+			}
 			redIdx = i
 			break
 		}
 		if redIdx >= 0 {
 			st = StatusFailureReproduced
 			reasons = append(reasons, "red_failure_recorded")
+		} else if specPass != nil {
+			reasons = append(reasons, "red_failure_stale_or_missing")
 		} else {
 			reasons = append(reasons, "red_failure_missing")
 		}
@@ -889,7 +1032,7 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 
 func boolPtr(v bool) *bool { return &v }
 
-func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Report, error) {
+func BuildReport(root string, t *Task, base string) (*Report, error) {
 	snap, err := CurrentSnapshot(root, base, t)
 	if err != nil {
 		return nil, err
@@ -902,12 +1045,31 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 	if err != nil {
 		return nil, err
 	}
-	st, reasons := DeriveStatus(t, cmds, scope, review, snap)
+	reviews, revErr := LoadReviewSequence(root, t)
+	if revErr != nil {
+		// Malformed/duplicate/gapped review evidence fails closed as BLOCKED.
+		return &Report{
+			TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
+			BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
+			WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: StatusBlocked,
+			Reasons: []string{"invalid_review_evidence: " + revErr.Error()},
+			Scope:   scope, Commands: cmds, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
+			Notes: []string{"review journal is malformed/duplicated/gapped; status blocked"},
+		}, nil
+	}
+	digest, digestErr := ContractDigest(t)
+	review := latestJournalReview(reviews, t, digest)
+	st, reasons := DeriveStatus(t, cmds, scope, review, reviews, snap)
+	specPass := false
+	if specRegime(t) && digestErr == nil {
+		specPass = currentSpecPass(reviews, digest, t.SpecRevision) != nil
+	}
 	return &Report{
 		TaskID: t.TaskID, InvariantIDs: t.InvariantIDs,
 		BaseSHA: snap.BaseSHA, HeadSHA: snap.HeadSHA, WorkspaceDigest: snap.WorkspaceDigest,
 		WorktreeDirty: len(scope.Dirty) > 0, DerivedStatus: st, Reasons: reasons, Scope: scope,
-		Commands: cmds, Review: review, EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
+		Commands: cmds, Review: review, SpecPass: specPass, ContractDigest: digest,
+		EvidenceEditable: true, GeneratedUTC: time.Now().UTC(),
 		Notes: []string{
 			"local evidence/workflow is editable and not tamper-proof",
 			"CI-generated evidence is the planned stronger merge gate",
@@ -917,26 +1079,260 @@ func BuildReport(root string, t *Task, base string, review *ReviewArtifact) (*Re
 			"GREEN/harness/review evidence is bound to base SHA and workspace digest",
 			"Repository artifacts must be under evidence/workflow/ or evidence/harness/",
 			"max_attempts is counted per pass-target name",
+			"security tasks require a current passing spec review (contract digest + spec_revision) before RED/commands",
+			"review journal lives under evidence/workflow/<task>/reviews/ with contiguous <n>.json files",
+			"RED freshness binds to the current spec review journal sequence, not clocks or file mtime",
 		},
 	}, nil
 }
 
-func LoadReview(root, path string) (*ReviewArtifact, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil
-	}
-	if err := ValidateArtifactPath(root, path, "review"); err != nil {
-		return nil, err
-	}
-	b, err := os.ReadFile(path)
+// LoadReviewSequence reads the ordered review journal under
+// evidence/workflow/<task>/reviews/. Files must be named <positive-int>.json
+// with a contiguous sequence 1..N; malformed JSON, duplicate numbers, or gaps
+// fail closed (the caller maps the error to BLOCKED).
+func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
+	dir := filepath.Join(EvidenceDir(root, t.TaskID), "reviews")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	var r ReviewArtifact
-	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, err
+	type numbered struct {
+		n    int
+		path string
 	}
-	return &r, nil
+	var files []numbered
+	for _, e := range entries {
+		if e.IsDir() {
+			return nil, fmt.Errorf("invalid review evidence: unexpected directory %q", e.Name())
+		}
+		name := e.Name()
+		stem, ok := strings.CutSuffix(name, ".json")
+		if !ok || stem == "" {
+			return nil, fmt.Errorf("invalid review evidence: file %q must be named <positive-int>.json", name)
+		}
+		n, err := strconv.Atoi(stem)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("invalid review evidence: file %q must be named <positive-int>.json", name)
+		}
+		files = append(files, numbered{n: n, path: filepath.Join(dir, name)})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].n < files[j].n })
+	for i, f := range files {
+		if f.n != i+1 {
+			return nil, fmt.Errorf("invalid review evidence: expected sequence %d but found %d (gap or duplicate)", i+1, f.n)
+		}
+	}
+	var out []ReviewArtifact
+	for _, f := range files {
+		b, err := os.ReadFile(f.path)
+		if err != nil {
+			return nil, err
+		}
+		if err := rejectDuplicateJSONKeys(b); err != nil {
+			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
+		}
+		var r ReviewArtifact
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&r); err != nil {
+			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
+		}
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			if err == nil {
+				return nil, fmt.Errorf("invalid review evidence %s: trailing JSON value", filepath.Base(f.path))
+			}
+			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
+		}
+		if r.Sequence != 0 && r.Sequence != f.n {
+			return nil, fmt.Errorf("invalid review evidence %s: sequence field %d does not match filename %d", filepath.Base(f.path), r.Sequence, f.n)
+		}
+		r.Sequence = f.n
+		// Do not derive chronology from recorded_utc or file mtime: both are
+		// caller-controlled (copied JSON, cp -p, Chtimes). RED freshness uses
+		// this filename sequence against CommandRecord.SpecSequence.
+		if err := ValidateReviewArtifact(&r, t); err != nil {
+			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// latestJournalReview returns the most recent implementation review in the
+// ordered journal. For spec-regime tasks only a review bound to the live
+// contract is eligible for SECURITY_REVIEWED promotion.
+func latestJournalReview(reviews []ReviewArtifact, t *Task, digest string) *ReviewArtifact {
+	for i := len(reviews) - 1; i >= 0; i-- {
+		r := &reviews[i]
+		if r.Phase == "spec" {
+			continue
+		}
+		if specRegime(t) && (r.ContractDigest != digest || r.SpecRevision != t.SpecRevision) {
+			continue
+		}
+		return r
+	}
+	return nil
+}
+
+// ValidateReviewArtifact checks structural validity against the task taxonomy.
+// Phase "spec" requires a revision, contract digest, and (when passing and bound
+// to the live contract) full attack-class coverage plus a non-empty
+// counterexample. Historical spec entries keep their original digest/revision
+// and are not revalidated against a later taxonomy. Implementation reviews bind
+// to the contract digest + spec_revision as well as the snapshot; unknown
+// failure classes fail closed only on the live contract.
+func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
+	phase := r.Phase
+	if phase == "" {
+		phase = "implementation"
+	}
+	if phase != "spec" && phase != "implementation" {
+		return fmt.Errorf("invalid review phase %q", r.Phase)
+	}
+	canon := canonicalClasses(t)
+	liveDigest := ""
+	if specRegime(t) {
+		d, err := ContractDigest(t)
+		if err != nil {
+			return fmt.Errorf("contract digest: %w", err)
+		}
+		liveDigest = d
+	}
+	currentContract := specRegime(t) && r.ContractDigest == liveDigest && r.SpecRevision == t.SpecRevision
+	if phase == "spec" {
+		if r.SpecRevision < 1 {
+			return errors.New("spec review requires spec_revision >= 1")
+		}
+		if strings.TrimSpace(r.ContractDigest) == "" {
+			return errors.New("spec review requires contract_digest")
+		}
+		// Full current-taxonomy checks apply only to the live contract.
+		// Revalidating historical passing specs against a later attack class
+		// would BLOCK the append-only journal and prevent a valid new spec
+		// review from ever being consulted.
+		if currentContract {
+			for _, c := range r.CoveredAttackClasses {
+				if _, ok := canon[c]; !ok {
+					return fmt.Errorf("spec review covers unknown attack class %q", c)
+				}
+			}
+			if r.Passed {
+				for c := range canon {
+					if !containsStr(r.CoveredAttackClasses, c) {
+						return fmt.Errorf("passing spec review does not cover attack class %q", c)
+					}
+				}
+				if len(clean(r.Counterexamples)) == 0 {
+					return errors.New("passing spec review requires counterexamples")
+				}
+			}
+		}
+		return nil
+	}
+	// Unknown names on a live-contract implementation review fail closed.
+	// Historical reviews (different digest/revision) keep old class names so
+	// a rename cannot BLOCK the journal.
+	if specRegime(t) {
+		if strings.TrimSpace(r.ContractDigest) == "" || r.SpecRevision < 1 {
+			return errors.New("implementation review requires contract_digest and spec_revision")
+		}
+		if currentContract {
+			for _, fc := range r.FailureClasses {
+				if _, ok := canon[fc]; !ok {
+					return fmt.Errorf("unknown failure class %q", fc)
+				}
+			}
+		}
+	}
+	if r.HeadSHA == "" || r.WorkspaceDigest == "" || r.BaseSHA == "" {
+		return errors.New("implementation review requires head_sha, workspace_digest, base_sha")
+	}
+	return nil
+}
+
+// rejectDuplicateJSONKeys fails closed when an object repeats a member name.
+// encoding/json otherwise keeps the last value even with DisallowUnknownFields.
+func rejectDuplicateJSONKeys(data []byte) error {
+	return rejectDuplicateJSONKeysDec(json.NewDecoder(bytes.NewReader(data)))
+}
+
+func rejectDuplicateJSONKeysDec(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]struct{}{}
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyTok.(string)
+			if !ok {
+				return fmt.Errorf("expected JSON object key, got %v", keyTok)
+			}
+			if _, dup := seen[key]; dup {
+				return fmt.Errorf("duplicate JSON key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := rejectDuplicateJSONKeysDec(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+		return err
+	case '[':
+		for dec.More() {
+			if err := rejectDuplicateJSONKeysDec(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+		return err
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %s", delim)
+	}
+}
+
+func containsStr(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// LatestSpecReview returns the most recent spec review bound to the contract
+// digest + spec_revision, regardless of verdict (latest current review wins).
+func LatestSpecReview(reviews []ReviewArtifact, digest string, revision int) *ReviewArtifact {
+	var latest *ReviewArtifact
+	for i := range reviews {
+		r := &reviews[i]
+		if r.Phase == "spec" && r.ContractDigest == digest && r.SpecRevision == revision {
+			latest = r
+		}
+	}
+	return latest
+}
+
+// currentSpecPass returns the latest current spec review when it passed.
+func currentSpecPass(reviews []ReviewArtifact, digest string, revision int) *ReviewArtifact {
+	latest := LatestSpecReview(reviews, digest, revision)
+	if latest == nil || !latest.Passed {
+		return nil
+	}
+	return latest
 }
 
 // ValidateArtifactPath ensures generated or consumed evidence cannot silently
@@ -1004,7 +1400,7 @@ func resolveWithMissingLeaf(path string) (string, error) {
 // ParseMinStatus accepts only progression statuses usable with verify -min.
 func ParseMinStatus(s string) (Status, error) {
 	switch Status(strings.TrimSpace(s)) {
-	case StatusSpecified, StatusFailureReproduced, StatusTargetVerified, StatusHarnessVerified, StatusSecurityReviewed:
+	case StatusSpecified, StatusSpecReviewed, StatusFailureReproduced, StatusTargetVerified, StatusHarnessVerified, StatusSecurityReviewed:
 		return Status(strings.TrimSpace(s)), nil
 	case StatusBlocked, StatusUnspecified:
 		return "", fmt.Errorf("status %q is not a valid verify -min progression status", s)
@@ -1016,7 +1412,7 @@ func ParseMinStatus(s string) (Status, error) {
 // ParseStatus accepts any known workflow status label.
 func ParseStatus(s string) (Status, error) {
 	switch Status(strings.TrimSpace(s)) {
-	case StatusUnspecified, StatusSpecified, StatusFailureReproduced, StatusTargetVerified,
+	case StatusUnspecified, StatusSpecified, StatusSpecReviewed, StatusFailureReproduced, StatusTargetVerified,
 		StatusHarnessVerified, StatusSecurityReviewed, StatusBlocked:
 		return Status(strings.TrimSpace(s)), nil
 	default:
@@ -1028,14 +1424,16 @@ func StatusRank(s Status) int {
 	switch s {
 	case StatusSpecified:
 		return 1
-	case StatusFailureReproduced:
+	case StatusSpecReviewed:
 		return 2
-	case StatusTargetVerified:
+	case StatusFailureReproduced:
 		return 3
-	case StatusHarnessVerified:
+	case StatusTargetVerified:
 		return 4
-	case StatusSecurityReviewed:
+	case StatusHarnessVerified:
 		return 5
+	case StatusSecurityReviewed:
+		return 6
 	default:
 		return 0
 	}

@@ -1,6 +1,8 @@
 {
   "task_id": "T-SERVER-IDENTITY-005-single-snapshot-launch",
-  "invariant_ids": ["H20"],
+  "invariant_ids": [
+    "H20"
+  ],
   "security_sensitive": true,
   "security_problem": "Round-6 P1: resolveLaunchedIdentity reads p.engine.Policy() twice during construction. A watched policy reload that publishes policy B while the invocation resolver is hashing can measure the launch digest under policy A but label it with policy B's attestation kind and normalized entry_arg_positions. If B retains the same expected digest string, the identity gate can report server_attested=true for a measurement contract that was never applied.",
   "required_behavior": "The resolved launch digest and its launch shape (attestation kind plus normalized entry_arg_positions, sorted copy) derive from ONE policy snapshot captured at the top of resolveLaunchedIdentity and passed to both prepareIdentity and findServerByName for shape construction. A reload that publishes during a slow resolver call never relabels a digest measured under generation N with generation N+1's shape: the in-progress launch measurement remains wholly generation N. The already-shipped restart-bound gate compares future policy generations against that coherent cached launch record; a materially different entry position shape or kind cannot reuse the cached digest even when the expected digest string is equal, and fails closed until restart. Equivalent normalized position order remains equivalent. All prior round-1 through round-5 behavior is preserved: immutable launch identity, restart-bound replacement/introduction, changed-shape fail closed, normalized-order compatibility, no-attestation zero resolver work, approval allow/signing-failure snapshots, approval barrier/taint snapshot regressions, all 11 canonical registry-runner rejects, entry-artifact-not-transitive boundary, no argument leak on identity denial, and confused-deputy demo behavior.",
@@ -46,22 +48,64 @@
     {
       "name": "red_test",
       "expect": "fail",
-      "argv": ["go", "test", "./internal/proxy", "-run", "^TestServerIdentityLaunchDigestAndShapeUseSinglePolicySnapshot$", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/proxy",
+        "-run",
+        "^TestServerIdentityLaunchDigestAndShapeUseSinglePolicySnapshot$",
+        "-count=1"
+      ]
     },
     {
       "name": "target_test",
       "expect": "pass",
-      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/policy",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentity|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy",
+        "-count=1"
+      ]
     },
     {
       "name": "demo_test",
       "expect": "pass",
-      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+      "argv": [
+        "go",
+        "test",
+        "./tests/integration",
+        "-run",
+        "TestConfusedDeputyDemo",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
     },
     {
       "name": "harness",
       "expect": "pass",
-      "argv": ["harness/check.sh"]
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "attesting a process whose executable or transitive dependencies changed after measurement",
+    "identity attestation without an explicit invocation snapshot",
+    "imprecise or non-injective artifact identity encoding",
+    "attesting a server name without binding to the measured process snapshot",
+    "trusting MCP-declared server metadata as identity proof"
+  ],
+  "attack_classes": [
+    {
+      "id": "server-identity-attestation",
+      "failure_class": "server-identity-attestation",
+      "expected": "missing, unsupported, mismatched, stale, or mixed-generation identity attestation denies tools/call with zero relay and never reports server_attested=true"
     }
   ]
 }

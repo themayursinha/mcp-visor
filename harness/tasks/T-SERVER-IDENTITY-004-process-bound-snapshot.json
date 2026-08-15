@@ -1,6 +1,8 @@
 {
   "task_id": "T-SERVER-IDENTITY-004-process-bound-snapshot",
-  "invariant_ids": ["H20"],
+  "invariant_ids": [
+    "H20"
+  ],
   "security_sensitive": true,
   "security_problem": "Round-5 P1/P2: a hot reload that introduces or updates a stdio attestation pin re-resolves mutable launcher/payload paths and can attest an on-disk replacement as the identity of the already-running child (server_attested=true for an unrelated running server); and a call that releases runtimeMu before blocking for approval combines the captured policy snapshot with live mutable resolved-identity state after release, so a reload can make an allowed or denied terminal event report the wrong resolved digest or attested=false even though the call passed the old pin.",
   "required_behavior": "A configured stdio invocation identity is resolved exactly once at proxy construction from the logical server policy current at startup: the resolved launcher, literal argv, and only the policy-declared entry payload positions are bound exactly as in round 4, and the resolution contract (attestation kind plus normalized entry_arg_positions, sorted copy) is cached immutable for the proxy/stdio-child lifecycle. Hot reload never re-hashes launcher or payload paths and never re-resolves identity: unrelated policy/redactor/audit/approval reloads remain atomic, and same-shape digest comparisons use the cached startup digest. A pin introduced after an unattested start publishes but has no startup contract, so tools/call denies as unresolved/restart-required and never invokes the resolver. A same-shape digest replacement compares against the cached startup digest and denies on mismatch until restart. A changed kind or entry-position resolution shape cannot reuse the cached digest even when the expected digest string is equal, and denies until restart. Removing attestation may restore explicit unattested behavior; an originally unattested process remains unresolved on later reintroduction. A resolution failure at startup stays unresolved for the lifecycle and is not retried on reload. Every approval terminal allow/deny, receipt evidence, and taint mutation uses one complete runtime snapshot containing policy, redactor, approval backend/timeout, resolved identity state, resolution contract, and claimed server metadata; no post-release terminal path reads live mutable identity fields. All 11 canonical registry-runner rejects, negative controls, entry-artifact-not-transitive boundary, no-attestation zero-work, no argument leak on identity denial, approval policy/timeout/receipt/taint snapshots, and confused-deputy demo behavior are preserved.",
@@ -45,22 +47,64 @@
     {
       "name": "red_test",
       "expect": "fail",
-      "argv": ["go", "test", "./internal/proxy", "-run", "TestServerIdentityReloadDoesNotReResolveRunningProcess|TestServerIdentityPinIntroAfterLaunchFailsClosedRequiresRestart|TestServerIdentityChangedShapeCannotReuseOldDigest|TestServerIdentityApprovalAllowUsesIdentitySnapshot|TestServerIdentityApprovalSigningFailureUsesPolicySnapshot", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentityReloadDoesNotReResolveRunningProcess|TestServerIdentityPinIntroAfterLaunchFailsClosedRequiresRestart|TestServerIdentityChangedShapeCannotReuseOldDigest|TestServerIdentityApprovalAllowUsesIdentitySnapshot|TestServerIdentityApprovalSigningFailureUsesPolicySnapshot",
+        "-count=1"
+      ]
     },
     {
       "name": "target_test",
       "expect": "pass",
-      "argv": ["go", "test", "./internal/serveridentity", "./internal/policy", "./internal/proxy", "-run", "TestServerIdentity|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy", "-count=1"]
+      "argv": [
+        "go",
+        "test",
+        "./internal/serveridentity",
+        "./internal/policy",
+        "./internal/proxy",
+        "-run",
+        "TestServerIdentity|TestApprovalRequiredReleasesRuntimeBarrierBeforeWait|TestApprovedCallTaintsUseSnapshotPolicy",
+        "-count=1"
+      ]
     },
     {
       "name": "demo_test",
       "expect": "pass",
-      "argv": ["go", "test", "./tests/integration", "-run", "TestConfusedDeputyDemo", "-count=1", "-timeout", "120s"]
+      "argv": [
+        "go",
+        "test",
+        "./tests/integration",
+        "-run",
+        "TestConfusedDeputyDemo",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
     },
     {
       "name": "harness",
       "expect": "pass",
-      "argv": ["harness/check.sh"]
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "attesting a process whose executable or transitive dependencies changed after measurement",
+    "identity attestation without an explicit invocation snapshot",
+    "imprecise or non-injective artifact identity encoding",
+    "attesting a server name without binding to the measured process snapshot",
+    "trusting MCP-declared server metadata as identity proof"
+  ],
+  "attack_classes": [
+    {
+      "id": "server-identity-attestation",
+      "failure_class": "server-identity-attestation",
+      "expected": "missing, unsupported, mismatched, stale, or mixed-generation identity attestation denies tools/call with zero relay and never reports server_attested=true"
     }
   ]
 }

@@ -46,8 +46,8 @@ func usage() {
   validate -task f.json
   scope    -task f.json [-base ref]
   run      -task f.json -name N
-  verify   -task f.json [-base ref] [-review r.json] [-min STATUS]
-  report   -task f.json [-base ref] [-review r.json] [-out out.json]
+  verify   -task f.json [-base ref] [-min STATUS]
+  report   -task f.json [-base ref] [-out out.json]
 run executes task-defined argv only (no -- override). Status is derived.`)
 }
 
@@ -124,7 +124,6 @@ func cmdVerify(root string, args []string) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	taskPath := fs.String("task", "", "")
 	base := fs.String("base", "", "")
-	reviewPath := fs.String("review", "", "")
 	minStatus := fs.String("min", "TARGET_VERIFIED", "")
 	if fs.Parse(args) != nil || *taskPath == "" {
 		return 2
@@ -139,12 +138,7 @@ func cmdVerify(root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "INVALID: %v\n", err)
 		return 1
 	}
-	rev, err := workflow.LoadReview(root, *reviewPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "review: %v\n", err)
-		return 2
-	}
-	rep, err := workflow.BuildReport(root, t, *base, rev)
+	rep, err := workflow.BuildReport(root, t, *base)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
@@ -161,6 +155,8 @@ func cmdVerify(root string, args []string) int {
 		"head_sha":          rep.HeadSHA,
 		"workspace_digest":  rep.WorkspaceDigest,
 		"evidence_editable": rep.EvidenceEditable,
+		"spec_pass":         rep.SpecPass,
+		"contract_digest":   rep.ContractDigest,
 	})
 	if workflow.StatusRank(rep.DerivedStatus) >= workflow.StatusRank(need) {
 		return 0
@@ -172,7 +168,6 @@ func cmdReport(root string, args []string) int {
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	taskPath := fs.String("task", "", "")
 	base := fs.String("base", "", "")
-	reviewPath := fs.String("review", "", "")
 	out := fs.String("out", "", "")
 	if fs.Parse(args) != nil || *taskPath == "" {
 		return 2
@@ -182,11 +177,6 @@ func cmdReport(root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "INVALID: %v\n", err)
 		return 1
 	}
-	rev, err := workflow.LoadReview(root, *reviewPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "review: %v\n", err)
-		return 2
-	}
 	outPath := *out
 	if outPath == "" {
 		outPath = filepath.Join(workflow.EvidenceDir(root, t.TaskID), "report.json")
@@ -195,7 +185,7 @@ func cmdReport(root string, args []string) int {
 		fmt.Fprintf(os.Stderr, "output: %v\n", err)
 		return 2
 	}
-	rep, err := workflow.BuildReport(root, t, *base, rev)
+	rep, err := workflow.BuildReport(root, t, *base)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2

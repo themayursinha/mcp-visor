@@ -2,9 +2,21 @@
   "task_id": "T-XXXX-short-name",
   "invariant_ids": ["H1"],
   "security_sensitive": true,
-  "security_problem": "What security failure exists or must be prevented.",
+  "security_problem": "SECURITY INVARIANT: <property>. SUPPORTED MODEL: <scope where the property holds>. ATTACK CLASSES: <threat enumeration>. FAILURE SEMANTICS: <deny/zero-relay rule>. NON-GOALS: <explicitly out of scope>.",
   "required_behavior": "What must hold after the change.",
   "failure_behavior": "Fail-closed / deny behavior on error.",
+  "spec_revision": 1,
+  "non_goals": [
+    "out-of-scope behavior 1",
+    "out-of-scope behavior 2"
+  ],
+  "attack_classes": [
+    {
+      "id": "canonical-class-id",
+      "failure_class": "canonical-class-id",
+      "expected": "expected fail-closed behavior for this attack class"
+    }
+  ],
   "allowed_paths": ["path/to/file.go", "path/to/file_test.go"],
   "approval_gated_paths": [],
   "max_attempts": 3,
