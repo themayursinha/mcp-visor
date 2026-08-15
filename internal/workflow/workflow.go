@@ -1396,10 +1396,12 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 	// already-triggered stop-loss are distinct); only a current passing
 	// spec review listing the class in closed_failure_classes unlatches it.
 	latched := map[string]bool{}
+	liveStarted := false
 	for i := range reviews {
 		r := &reviews[i]
+		live := r.ContractDigest == digest && r.SpecRevision == revision
 		if r.Phase == "spec" {
-			if r.Passed && r.ContractDigest == digest && r.SpecRevision == revision {
+			if r.Passed && live {
 				closed := map[string]struct{}{}
 				for _, c := range r.ClosedFailureClasses {
 					closed[c] = struct{}{}
@@ -1411,7 +1413,20 @@ func stopLossClass(t *Task, reviews []ReviewArtifact, digest string, revision in
 					}
 				}
 			}
+			if live {
+				liveStarted = true
+			}
 			continue
+		}
+		// Historical impls after the live contract's review sequence has
+		// begun must not increment or reset live streaks (a stale digest
+		// must not interrupt X, X). Prefix historical entries still count
+		// so a revision bump alone cannot clear an already-earned stop-loss.
+		if !live && liveStarted {
+			continue
+		}
+		if live {
+			liveStarted = true
 		}
 		has := map[string]struct{}{}
 		for _, c := range r.FailureClasses {

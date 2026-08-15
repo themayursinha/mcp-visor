@@ -1356,6 +1356,27 @@ func TestStopLoss_LiveUnknownClassInvalid(t *testing.T) {
 	}
 }
 
+func TestStopLoss_HistoricalAfterLiveDoesNotResetStreak(t *testing.T) {
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := []workflow.ReviewArtifact{
+		specReview(true, 1, digest, nil),
+		implReview(false, []string{"X"}, digest, nil),
+		implReview(false, []string{"bogus"}, "STALE-DIGEST-0000", nil),
+		implReview(false, []string{"X"}, digest, nil),
+	}
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	if st != workflow.StatusSpecified {
+		t.Fatalf("historical artifact after live X must not reset the streak, got %s %v", st, reasons)
+	}
+	if !hasReason(reasons, "same_failure_class_stop_loss:X:2/2") {
+		t.Fatalf("expected same_failure_class_stop_loss:X:2/2, got %v", reasons)
+	}
+}
+
 func TestStopLoss_RevisionBumpAloneDoesNotReset(t *testing.T) {
 	oldTK := specTask(nil)
 	oldDigest, err := workflow.ContractDigest(&oldTK)
