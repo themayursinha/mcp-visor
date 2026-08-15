@@ -864,9 +864,9 @@ func lastMatching(t *Task, cmds []CommandRecord, name string, requirePass *bool)
 }
 
 // DeriveStatus computes status from artifacts + current snapshot binding.
-// reviews is the ordered review sequence (spec + implementation); legacy callers
-// may pass nil when no review evidence exists.
-func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *ReviewArtifact, reviews []ReviewArtifact, snap Snapshot) (Status, []string) {
+// Implementation reviews used for SECURITY_REVIEWED are selected from the
+// ordered journal (`reviews`); there is no sidecar review argument.
+func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, reviews []ReviewArtifact, snap Snapshot) (Status, []string) {
 	if err := ValidateTask(t); err != nil {
 		return StatusUnspecified, []string{"invalid_task: " + err.Error()}
 	}
@@ -1016,12 +1016,17 @@ func DeriveStatus(t *Task, cmds []CommandRecord, scope ScopeResult, review *Revi
 		}
 	}
 
+	review := latestJournalReview(reviews, t, digest)
 	if review != nil && review.Passed {
 		if st != StatusHarnessVerified {
+			reasons = append(reasons, "review_ignored_gates_not_met")
+		} else if review.Phase == "spec" {
 			reasons = append(reasons, "review_ignored_gates_not_met")
 		} else if review.HeadSHA != snap.HeadSHA || review.WorkspaceDigest != snap.WorkspaceDigest || review.BaseSHA != snap.BaseSHA {
 			// Stay at HARNESS_VERIFIED; do not promote a stale review.
 			reasons = append(reasons, "review_snapshot_mismatch")
+		} else if specRegime(t) && (review.ContractDigest != digest || review.SpecRevision != t.SpecRevision) {
+			reasons = append(reasons, "review_contract_mismatch")
 		} else if specRegime(t) && specPass != nil && review.Sequence <= specPass.Sequence {
 			// Same spec-cycle freshness as RED: an impl review from a prior
 			// spec pass cannot promote the current cycle.
@@ -1063,7 +1068,7 @@ func BuildReport(root string, t *Task, base string) (*Report, error) {
 	}
 	digest, digestErr := ContractDigest(t)
 	review := latestJournalReview(reviews, t, digest)
-	st, reasons := DeriveStatus(t, cmds, scope, review, reviews, snap)
+	st, reasons := DeriveStatus(t, cmds, scope, reviews, snap)
 	specPass := false
 	if specRegime(t) && digestErr == nil {
 		specPass = currentSpecPass(reviews, digest, t.SpecRevision) != nil

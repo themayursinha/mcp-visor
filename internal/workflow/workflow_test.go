@@ -533,7 +533,7 @@ func TestRun_UsesContractArgvOnly(t *testing.T) {
 	}, {
 		Name: "harness", Args: []string{"false"}, Exit: 0, Source: "executed", // wrong argv vs contract true
 		WorkspaceDigest: "fake", HeadSHA: "x", BaseSHA: "y",
-	}}, workflow.ScopeResult{Pass: true}, nil, nil, workflow.Snapshot{WorkspaceDigest: "fake", HeadSHA: "x", BaseSHA: "y"})
+	}}, workflow.ScopeResult{Pass: true}, nil, workflow.Snapshot{WorkspaceDigest: "fake", HeadSHA: "x", BaseSHA: "y"})
 	if st != workflow.StatusBlocked {
 		// harness argv mismatch vs contract
 		t.Fatalf("expected blocked on argv mismatch, got %s", st)
@@ -615,7 +615,7 @@ func TestMaxAttempts(t *testing.T) {
 		mk(0),
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
-	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, nil, snap)
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st != workflow.StatusHarnessVerified {
 		t.Fatalf("at limit: %s %v", st, reasons)
 	}
@@ -625,7 +625,7 @@ func TestMaxAttempts(t *testing.T) {
 		mk(1), mk(1), mk(0),
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
-	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, nil, snap)
+	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st != workflow.StatusBlocked {
 		t.Fatalf("above limit: %s %v", st, reasons)
 	}
@@ -641,7 +641,7 @@ func TestDeriveStatus_LatestTargetExecutionWins(t *testing.T) {
 		{Name: "target_test", Args: []string{"true"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
 
-	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, nil, snap)
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st == workflow.StatusTargetVerified || st == workflow.StatusHarnessVerified || st == workflow.StatusSecurityReviewed {
 		t.Fatalf("latest failed target must invalidate verification, got %s %v", st, reasons)
 	}
@@ -657,7 +657,7 @@ func TestDeriveStatus_LatestHarnessExecutionWins(t *testing.T) {
 		{Name: "harness", Args: []string{"true"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
 
-	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, nil, snap)
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st == workflow.StatusHarnessVerified || st == workflow.StatusSecurityReviewed {
 		t.Fatalf("latest failed harness must invalidate harness verification, got %s %v", st, reasons)
 	}
@@ -689,7 +689,7 @@ func TestReviewIgnoredWithoutGates(t *testing.T) {
 	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"}
 	st, rs := workflow.DeriveStatus(&tk, []workflow.CommandRecord{
 		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "old", HeadSHA: "h", BaseSHA: "b"},
-	}, workflow.ScopeResult{Pass: true}, &workflow.ReviewArtifact{Passed: true, HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b"}, nil, snap)
+	}, workflow.ScopeResult{Pass: true}, []workflow.ReviewArtifact{{Passed: true, HeadSHA: "h", WorkspaceDigest: "d", BaseSHA: "b"}}, snap)
 	if st == workflow.StatusSecurityReviewed {
 		t.Fatalf("review override %v", rs)
 	}
@@ -775,7 +775,7 @@ func TestDeriveStatus_BaseMismatchRejectsTarget(t *testing.T) {
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "baseA"},
 	}
 	snap := workflow.Snapshot{WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "baseB"}
-	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, nil, snap)
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st == workflow.StatusTargetVerified || st == workflow.StatusHarnessVerified || st == workflow.StatusSecurityReviewed {
 		t.Fatalf("base mismatch must reject verification, got %s %v", st, reasons)
 	}
@@ -965,7 +965,7 @@ func TestMaxAttempts_PerTargetName(t *testing.T) {
 		{Name: "target_b", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
-	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, nil, snap)
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st != workflow.StatusHarnessVerified {
 		t.Fatalf("one execution per target with max_attempts=1 must be allowed, got %s %v", st, reasons)
 	}
@@ -979,7 +979,7 @@ func TestMaxAttempts_ExceededOnSingleTarget(t *testing.T) {
 		{Name: "target_test", Args: []string{"true"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
-	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, nil, snap)
+	st, reasons := workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, nil, snap)
 	if st != workflow.StatusBlocked {
 		t.Fatalf("two executions of one target with max_attempts=1 must block, got %s %v", st, reasons)
 	}
@@ -1050,7 +1050,7 @@ func TestSpecGate_NoSpecPassBlocksAboveSpecified(t *testing.T) {
 	tk := specTask(nil)
 	// Full green evidence (RED + target + harness) without a current spec pass
 	// must not promote above SPECIFIED for a security task.
-	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, nil, specSnap())
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, specSnap())
 	if st != workflow.StatusSpecified {
 		t.Fatalf("no current spec pass must leave SPECIFIED, got %s %v", st, reasons)
 	}
@@ -1067,7 +1067,7 @@ func TestSpecGate_CurrentSpecPassDerivesSpecReviewed(t *testing.T) {
 	}
 	reviews := []workflow.ReviewArtifact{specReview(true, 1, digest, nil)}
 	// No RED yet: current spec pass alone derives SPEC_REVIEWED.
-	st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, reviews, specSnap())
 	if st != workflow.StatusSpecReviewed {
 		t.Fatalf("current spec pass without RED must derive SPEC_REVIEWED, got %s %v", st, reasons)
 	}
@@ -1075,7 +1075,7 @@ func TestSpecGate_CurrentSpecPassDerivesSpecReviewed(t *testing.T) {
 	red := []workflow.CommandRecord{
 		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b", SpecSequence: 1},
 	}
-	st, reasons = workflow.DeriveStatus(&tk, red, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	st, reasons = workflow.DeriveStatus(&tk, red, workflow.ScopeResult{Pass: true}, reviews, specSnap())
 	if st != workflow.StatusFailureReproduced {
 		t.Fatalf("fresh RED after spec pass must derive FAILURE_REPRODUCED, got %s %v", st, reasons)
 	}
@@ -1092,7 +1092,7 @@ func TestSpecGate_StaleSpecPass(t *testing.T) {
 		"wrong_revision": {specReview(true, 2, digest, nil)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+			st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, reviews, specSnap())
 			if st != workflow.StatusSpecified {
 				t.Fatalf("stale spec pass must not promote, got %s %v", st, reasons)
 			}
@@ -1111,7 +1111,7 @@ func TestSpecGate_LatestSpecReviewWins(t *testing.T) {
 		specReview(true, 1, digest, nil),
 		specReview(false, 1, digest, nil),
 	}
-	st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, reviews, specSnap())
 	if st != workflow.StatusSpecified {
 		t.Fatalf("latest failed spec review must invalidate the pass, got %s %v", st, reasons)
 	}
@@ -1120,7 +1120,7 @@ func TestSpecGate_LatestSpecReviewWins(t *testing.T) {
 		specReview(false, 1, digest, nil),
 		specReview(true, 1, digest, nil),
 	}
-	st, _ = workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	st, _ = workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, reviews, specSnap())
 	if st != workflow.StatusSpecReviewed {
 		t.Fatalf("latest passed spec review must derive SPEC_REVIEWED, got %s", st)
 	}
@@ -1139,7 +1139,7 @@ func TestSpecGate_HistoricalSpecSurvivesTaxonomyExpansion(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldSpec := specReview(true, 1, oldDigest, nil) // covers X,Y only — valid for the old contract
-	st, reasons := workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, []workflow.ReviewArtifact{oldSpec}, specSnap())
+	st, reasons := workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, []workflow.ReviewArtifact{oldSpec}, specSnap())
 	if st == workflow.StatusBlocked {
 		t.Fatalf("historical spec must not block the journal after a class is added, got %s %v", st, reasons)
 	}
@@ -1150,7 +1150,7 @@ func TestSpecGate_HistoricalSpecSurvivesTaxonomyExpansion(t *testing.T) {
 		r.CoveredAttackClasses = []string{"X", "Y", "Z"}
 		r.Sequence = 2
 	})
-	st, reasons = workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, []workflow.ReviewArtifact{oldSpec, newSpec}, specSnap())
+	st, reasons = workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, []workflow.ReviewArtifact{oldSpec, newSpec}, specSnap())
 	if st != workflow.StatusSpecReviewed {
 		t.Fatalf("current spec covering the new taxonomy must derive SPEC_REVIEWED, got %s %v", st, reasons)
 	}
@@ -1176,7 +1176,7 @@ func TestSpecGate_HistoricalImplSurvivesClassRename(t *testing.T) {
 		implReview(false, []string{"X"}, oldDigest, nil),
 		implReview(false, []string{"X"}, oldDigest, nil),
 	}
-	st, reasons := workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	st, reasons := workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, reviews, specSnap())
 	if st == workflow.StatusBlocked {
 		t.Fatalf("impl reviews naming a removed class must not block the journal, got %s %v", st, reasons)
 	}
@@ -1184,7 +1184,7 @@ func TestSpecGate_HistoricalImplSurvivesClassRename(t *testing.T) {
 		r.CoveredAttackClasses = []string{"Y", "X2"}
 		r.Sequence = 4
 	})
-	st, reasons = workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, append(reviews, newSpec), specSnap())
+	st, reasons = workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, append(reviews, newSpec), specSnap())
 	if st != workflow.StatusSpecReviewed {
 		t.Fatalf("current spec after class rename must derive SPEC_REVIEWED, got %s %v", st, reasons)
 	}
@@ -1212,7 +1212,7 @@ func TestSpecGate_PassingSpecReviewRequiresCoverageAndCounterexamples(t *testing
 	} {
 		t.Run(name, func(t *testing.T) {
 			reviews := []workflow.ReviewArtifact{specReview(true, 1, digest, mut)}
-			st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+			st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, reviews, specSnap())
 			if st != workflow.StatusBlocked {
 				t.Fatalf("malformed passing spec review must block, got %s %v", st, reasons)
 			}
@@ -1225,7 +1225,7 @@ func TestSpecGate_PassingSpecReviewRequiresCoverageAndCounterexamples(t *testing
 
 func TestSpecGate_NonSecurityTaskNeedsNoSpecReview(t *testing.T) {
 	tk := baseTask(nil) // non-security: no spec gate
-	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, nil, specSnap())
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, nil, specSnap())
 	if st != workflow.StatusHarnessVerified {
 		t.Fatalf("non-security task must not require a spec pass, got %s %v", st, reasons)
 	}
@@ -1509,7 +1509,7 @@ func TestSpecGate_UnstampedRedIsStaleAgainstJournaledSpec(t *testing.T) {
 	red := []workflow.CommandRecord{
 		{Name: "red_test", Args: []string{"sh", "-c", "exit 1"}, Exit: 1, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
-	st, reasons := workflow.DeriveStatus(&tk, red, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	st, reasons := workflow.DeriveStatus(&tk, red, workflow.ScopeResult{Pass: true}, reviews, specSnap())
 	if st != workflow.StatusSpecReviewed {
 		t.Fatalf("unstamped RED against journaled spec sequence 1 must be stale, got %s %v", st, reasons)
 	}
@@ -1526,7 +1526,7 @@ func TestSpecGate_ImplReviewMustFollowCurrentSpecPass(t *testing.T) {
 	}
 	spec1 := specReview(true, 1, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 1 })
 	impl2 := implReview(true, nil, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 2 })
-	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, &impl2, []workflow.ReviewArtifact{spec1, impl2}, specSnap())
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, []workflow.ReviewArtifact{spec1, impl2}, specSnap())
 	if st != workflow.StatusSecurityReviewed {
 		t.Fatalf("impl review after spec sequence 1 must promote, got %s %v", st, reasons)
 	}
@@ -1537,18 +1537,35 @@ func TestSpecGate_ImplReviewMustFollowCurrentSpecPass(t *testing.T) {
 		{Name: "target_test", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 		{Name: "harness", Args: []string{"true"}, Exit: 0, Source: "executed", WorkspaceDigest: "d", HeadSHA: "h", BaseSHA: "b"},
 	}
-	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, &impl2, []workflow.ReviewArtifact{spec1, impl2, spec3}, specSnap())
+	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, []workflow.ReviewArtifact{spec1, impl2, spec3}, specSnap())
 	if st != workflow.StatusHarnessVerified {
 		t.Fatalf("impl review before the current spec pass must stay HARNESS_VERIFIED, got %s %v", st, reasons)
 	}
-	if !hasReason(reasons, "review_before_current_spec") {
-		t.Fatalf("expected review_before_current_spec, got %v", reasons)
+	if hasReason(reasons, "review_pass") {
+		t.Fatalf("stale impl review must not promote, got %v", reasons)
 	}
 
 	impl4 := implReview(true, nil, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 4 })
-	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, &impl4, []workflow.ReviewArtifact{spec1, impl2, spec3, impl4}, specSnap())
+	st, reasons = workflow.DeriveStatus(&tk, cmds, workflow.ScopeResult{Pass: true}, []workflow.ReviewArtifact{spec1, impl2, spec3, impl4}, specSnap())
 	if st != workflow.StatusSecurityReviewed {
 		t.Fatalf("impl review after spec sequence 3 must promote, got %s %v", st, reasons)
+	}
+}
+
+func TestSpecGate_UnboundImplReviewDoesNotPromote(t *testing.T) {
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec1 := specReview(true, 1, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 1 })
+	unbound := implReview(true, nil, "not-the-live-digest", func(r *workflow.ReviewArtifact) { r.Sequence = 2 })
+	st, reasons := workflow.DeriveStatus(&tk, specCmds(), workflow.ScopeResult{Pass: true}, []workflow.ReviewArtifact{spec1, unbound}, specSnap())
+	if st == workflow.StatusSecurityReviewed {
+		t.Fatalf("impl review not bound to the live contract must not promote, got %s %v", st, reasons)
+	}
+	if st == workflow.StatusBlocked {
+		t.Fatalf("historical digest must not block the journal, got %s %v", st, reasons)
 	}
 }
 
