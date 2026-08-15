@@ -1384,8 +1384,8 @@ func currentSpecPass(reviews []ReviewArtifact, digest string, revision int) *Rev
 // stopLossClass derives the contiguous per-class strike run from the ordered
 // review journal. Implementation reviews advance classes they contain and end
 // classes they do not (multiple findings of one class in a review count once);
-// a current passing spec review — bound to the live contract digest +
-// spec_revision (aligned with currentSpecPass) — resets only the classes it
+// a current passing spec review — bound to a live contract whose spec_revision
+// differs from the reviews that latched the class — resets only the classes it
 // lists in closed_failure_classes. At maxSameFailureClassStrikes the class and
 // run length are returned; the class is the deterministic (sorted canonical
 // order) first at/above threshold. No strike counters are stored.
