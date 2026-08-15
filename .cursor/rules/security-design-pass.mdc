@@ -1,0 +1,32 @@
+---
+description: Mandatory pre-code design pass for security-sensitive work
+alwaysApply: true
+---
+
+# Pre-code design pass
+
+Do not start implementation on a security-sensitive change until this is written and internally coherent. Then wait for adversarial review (Architect) before coding, unless the user said "quick fix, no loop."
+
+Print:
+
+```text
+SECURITY INVARIANT:
+PROTECTED ASSET:
+TRUST BOUNDARY: (trusted / untrusted)
+ATTACKER:
+ATTACK PATH:
+ENFORCEMENT POINT:
+SUPPORTED MODEL:
+NON-GOALS:
+FAILURE SEMANTICS: (every uncertainty fail-closed/open)
+STATE / LIFECYCLE: (if any)
+FAILURE CLASSES:
+MINIMAL DESIGN:
+COMPLEXITY BUDGET:
+RED TESTS: (positive, negative, race, stale, restart, bypass as needed)
+WHAT I WILL NOT BUILD:
+```
+
+Then: RED on the vulnerable baseline → smallest fix → GREEN → focused tests → race if concurrent → `go test ./...` → harness/lint → independent review.
+
+Never claim "tests pass" without exact SHA, exact commands, and the property those tests prove.
