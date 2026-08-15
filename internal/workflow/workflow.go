@@ -1158,6 +1158,9 @@ func LoadReviewSequence(root string, t *Task) ([]ReviewArtifact, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := rejectDuplicateJSONKeys(b); err != nil {
+			return nil, fmt.Errorf("invalid review evidence %s: %w", filepath.Base(f.path), err)
+		}
 		var r ReviewArtifact
 		dec := json.NewDecoder(bytes.NewReader(b))
 		dec.DisallowUnknownFields()
@@ -1256,17 +1259,9 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		}
 		return nil
 	}
-	// Failure-class mappings only exist in the spec regime: for a normal
-	// non-security task canonicalClasses is empty and no stop-loss runs,
-	// so an implementation review that names failure classes must not be
-	// rejected as "unknown".
-	if specRegime(t) {
-		for _, fc := range r.FailureClasses {
-			if _, ok := canon[fc]; !ok {
-				return fmt.Errorf("unknown failure class %q", fc)
-			}
-		}
-	}
+	// Unknown implementation failure_class names are ignored rather than
+	// fatal: stopLossClass only increments live canonical classes, and a
+	// later rename/removal must not BLOCK the append-only journal.
 	// Every implementation review that can advance OR interrupt the
 	// stop-loss streak (classed or classless, passed or failed) must be
 	// bound to a snapshot; otherwise a stale, copied, or unrelated artifact
@@ -1283,6 +1278,57 @@ func ValidateReviewArtifact(r *ReviewArtifact, t *Task) error {
 		return errors.New("implementation review findings require at least one canonical failure_class")
 	}
 	return nil
+}
+
+// rejectDuplicateJSONKeys fails closed when an object repeats a member name.
+// encoding/json otherwise keeps the last value even with DisallowUnknownFields,
+// so a second "failure_classes":[] could silently reset an unlatched streak.
+func rejectDuplicateJSONKeys(data []byte) error {
+	return rejectDuplicateJSONKeysDec(json.NewDecoder(bytes.NewReader(data)))
+}
+
+func rejectDuplicateJSONKeysDec(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]struct{}{}
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyTok.(string)
+			if !ok {
+				return fmt.Errorf("expected JSON object key, got %v", keyTok)
+			}
+			if _, dup := seen[key]; dup {
+				return fmt.Errorf("duplicate JSON key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := rejectDuplicateJSONKeysDec(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+		return err
+	case '[':
+		for dec.More() {
+			if err := rejectDuplicateJSONKeysDec(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+		return err
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %s", delim)
+	}
 }
 
 func containsStr(ss []string, want string) bool {

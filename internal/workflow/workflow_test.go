@@ -1157,6 +1157,40 @@ func TestSpecGate_HistoricalSpecSurvivesTaxonomyExpansion(t *testing.T) {
 	}
 }
 
+func TestSpecGate_HistoricalImplSurvivesClassRename(t *testing.T) {
+	oldTK := specTask(nil)
+	oldDigest, err := workflow.ContractDigest(&oldTK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTK := specTask(nil)
+	newTK.AttackClasses = []workflow.AttackClass{
+		{ID: "Y", FailureClass: "Y", Expected: "deny"},
+		{ID: "X2", FailureClass: "X2", Expected: "deny"},
+	}
+	newDigest, err := workflow.ContractDigest(&newTK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := []workflow.ReviewArtifact{
+		specReview(true, 1, oldDigest, nil),
+		implReview(false, []string{"X"}, nil),
+		implReview(false, []string{"X"}, nil),
+	}
+	st, reasons := workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
+	if st == workflow.StatusBlocked {
+		t.Fatalf("impl reviews naming a removed class must not block the journal, got %s %v", st, reasons)
+	}
+	newSpec := specReview(true, 1, newDigest, func(r *workflow.ReviewArtifact) {
+		r.CoveredAttackClasses = []string{"Y", "X2"}
+		r.Sequence = 4
+	})
+	st, reasons = workflow.DeriveStatus(&newTK, nil, workflow.ScopeResult{Pass: true}, nil, append(reviews, newSpec), specSnap())
+	if st != workflow.StatusSpecReviewed {
+		t.Fatalf("current spec after class rename must derive SPEC_REVIEWED, got %s %v", st, reasons)
+	}
+}
+
 func TestSpecGate_PassingSpecReviewRequiresCoverageAndCounterexamples(t *testing.T) {
 	tk := specTask(nil)
 	digest, err := workflow.ContractDigest(&tk)
@@ -1303,7 +1337,7 @@ func TestStopLoss_InterruptedAndDifferentClassesDoNotTrigger(t *testing.T) {
 	}
 }
 
-func TestStopLoss_UnknownClassInvalid(t *testing.T) {
+func TestStopLoss_UnknownClassDoesNotBlockJournal(t *testing.T) {
 	tk := specTask(nil)
 	digest, err := workflow.ContractDigest(&tk)
 	if err != nil {
@@ -1314,11 +1348,14 @@ func TestStopLoss_UnknownClassInvalid(t *testing.T) {
 		implReview(false, []string{"bogus"}, nil),
 	}
 	st, reasons := workflow.DeriveStatus(&tk, nil, workflow.ScopeResult{Pass: true}, nil, reviews, specSnap())
-	if st != workflow.StatusBlocked {
-		t.Fatalf("unknown failure class must block, got %s %v", st, reasons)
+	if st == workflow.StatusBlocked {
+		t.Fatalf("unknown implementation failure_class must not block the journal, got %s %v", st, reasons)
 	}
-	if !hasReason(reasons, "invalid_review_evidence") {
-		t.Fatalf("expected invalid_review_evidence, got %v", reasons)
+	if st != workflow.StatusSpecReviewed {
+		t.Fatalf("unknown class is ignored and does not prevent SPEC_REVIEWED, got %s %v", st, reasons)
+	}
+	if hasReason(reasons, "same_failure_class_stop_loss") {
+		t.Fatalf("unknown class must not trigger stop-loss: %v", reasons)
 	}
 }
 
@@ -1582,6 +1619,41 @@ func TestLoadReviewSequence_RejectsUnknownJSONFields(t *testing.T) {
 	}
 	if rep.DerivedStatus != workflow.StatusBlocked {
 		t.Fatalf("unknown journal fields must block, got %s %v", rep.DerivedStatus, rep.Reasons)
+	}
+	if !hasReason(rep.Reasons, "invalid_review_evidence") {
+		t.Fatalf("expected invalid_review_evidence, got %v", rep.Reasons)
+	}
+}
+
+func TestLoadReviewSequence_RejectsDuplicateJSONKeys(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	tk := specTask(nil)
+	digest, err := workflow.ContractDigest(&tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "evidence", "workflow", tk.TaskID, "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := json.Marshal(specReview(true, 1, digest, func(r *workflow.ReviewArtifact) { r.Sequence = 0 }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "1.json"), spec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dup := []byte(`{"passed":false,"head_sha":"h","workspace_digest":"d","base_sha":"b","failure_classes":["X"],"failure_classes":[]}`)
+	if err := os.WriteFile(filepath.Join(dir, "2.json"), dup, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := workflow.BuildReport(root, &tk, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.DerivedStatus != workflow.StatusBlocked {
+		t.Fatalf("duplicate JSON keys must block, got %s %v", rep.DerivedStatus, rep.Reasons)
 	}
 	if !hasReason(rep.Reasons, "invalid_review_evidence") {
 		t.Fatalf("expected invalid_review_evidence, got %v", rep.Reasons)
