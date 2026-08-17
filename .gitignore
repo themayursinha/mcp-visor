@@ -62,3 +62,8 @@ package-lock.json
 # Graphify analysis output
 graphify-out/
 AGENTS.md
+
+# Repo housekeeping — keep the public repo project-only: nested worktrees and
+# local Cursor tooling (rules + settings) are private process, not tracked.
+.worktrees/
+.cursor/
