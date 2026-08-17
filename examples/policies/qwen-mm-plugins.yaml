@@ -2,17 +2,19 @@
 #
 # Enforces which multimodal tools an agent may invoke on the real
 # Qwen-MM-Plugins core MCP server (github.com/QwenLM/Qwen-MM-Plugins,
-# Apache-2.0, tag qwen-mm-plugins-core-v1.0.2).
+# Apache-2.0, commit ec9fbd1e11a30841685b949863e9d9d30cd7a4d8,
+# tag qwen-mm-plugins-core-v1.0.2).
 #
 # The policy is a capability allowlist: read-only media tools are allowed;
 # producers/visualizers (crop, draw_bbox, save_view, visualize) are NOT
 # listed, so default_action: deny rejects them before relay.
 #
 # Run:
+#   mkdir -p /tmp/qwen-demo
 #   mcp-visor serve \
 #     -server "$(command -v uvx)" \
 #     -server-arg --from \
-#     -server-arg "qwen-mm-plugins[core] @ git+https://github.com/QwenLM/Qwen-MM-Plugins.git@qwen-mm-plugins-core-v1.0.2" \
+#     -server-arg "qwen-mm-plugins[core] @ git+https://github.com/QwenLM/Qwen-MM-Plugins.git@ec9fbd1e11a30841685b949863e9d9d30cd7a4d8" \
 #     -server-arg qwen-mm-plugins-core \
 #     -server-name qwen-mm-plugins-core \
 #     -policy examples/policies/qwen-mm-plugins.yaml \
