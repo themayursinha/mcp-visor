@@ -48,8 +48,9 @@ mcp-visor serve --demo
 # This is not yet a complete fail-closed policy gate; see the threat model.
 mcp-visor lint --strict examples/policies/session-taint-egress.yaml
 
-# Proxy a real MCP server through a policy boundary
-mcp-visor serve -server <your-mcp-server> -policy policy.yaml
+# Proxy a real MCP server through a policy boundary.
+# Allows fail closed unless -audit-log points at a writable JSONL file.
+mcp-visor serve -server <your-mcp-server> -policy policy.yaml -audit-log ./audit.jsonl
 ```
 
 Two-minute action-boundary demo: `go run ./examples/demo-runner`
@@ -141,7 +142,9 @@ More policies: [`examples/policies/`](examples/policies/) · Interop policies: [
 | Tool-chain detection | Block dangerous sequences such as read → exfiltrate |
 | Session taints | Change later authorization decisions after sensitive context is touched |
 | Human approval | Gate critical tools before execution |
-| Audit log | Selected security and session events, hash-linked within one healthy logger lifetime |
+| Durable allow commit | Terminal allows are appended and `fsync`'d to the JSONL sink before relay (H19) |
+| Stdio identity pin | Optional `stdio_invocation_sha256_v1` binds a local invocation; registry runners are unpinnable |
+| Audit log | Hash-linked JSONL; allows are a durable commit; denies and other selected events are written without the same `fsync` |
 | Policy linting | Validate YAML policy before deployment |
 
 Advanced capabilities include signed decision receipts, Vault Transit signing, webhooks, and experimental remote transport, SIEM, metrics/OTLP, and local dashboard surfaces. The `--trace` formatters are not yet connected to runtime message paths. See [`docs/complexity-budget.md`](docs/complexity-budget.md) and [`docs/threat-model.md`](docs/threat-model.md).
@@ -149,11 +152,12 @@ Advanced capabilities include signed decision receipts, Vault Transit signing, w
 ## Security model
 
 - **Deterministic:** no LLM in the allow/deny path
-- **Fail closed:** unknown tools are denied by default
-- **Layered:** redaction → policy → taint-aware egress → chain detection → approval → post-allow taint marking
-- **Observable:** selected security events are recorded in JSONL; this is not yet a complete per-call ledger or a chain that survives sink failure/reopen
+- **Fail closed:** unknown tools are denied by default; a missing or non-durable `-audit-log` denies every allow
+- **Layered:** optional stdio identity → redaction → policy → taint-aware egress → chain detection → approval → durable allow commit → post-allow taint marking → relay
+- **Observable:** every terminal allow is a standalone JSONL `tool_call_allowed` record, fully appended and `Sync()`'d before relay. Denies, approvals-required, taints, and session events are also JSONL but are not equivalently `fsync`'d. The hash chain recovers when reopening a healthy file; incomplete or corrupt tails fail closed. This is not a signed repudiation control, and it does not survive an untrusted audit directory.
 - **Self-hosted:** single Go binary; no SaaS dependency required
 - **Operator-controlled:** optional telemetry exports to your Prometheus, OTLP, webhook, or SIEM stack
+- **Not a host sandbox:** Visor authorizes MCP `tools/call`. It does not confine arbitrary filesystem, network, or subprocesses.
 
 ## CLI
 
@@ -171,7 +175,7 @@ Full reference: `mcp-visor serve -h`
 
 ## Documentation
 
-[Architecture](docs/architecture.md) · [Policy model](docs/policy-model.md) · [Threat model](docs/threat-model.md) · [Complexity budget](docs/complexity-budget.md) · [Interoperability](docs/interoperability.md) · [Harness](harness/README.md)
+[Architecture](docs/architecture.md) · [Policy model](docs/policy-model.md) · [Threat model](docs/threat-model.md) · [Complexity budget](docs/complexity-budget.md) · [Interoperability](docs/interoperability.md) · [Qwen-MM-Plugins demo](examples/qwen-mm-plugins-demo/README.md) · [Harness](harness/README.md)
 
 ## Development
 
@@ -188,7 +192,8 @@ make bench                     # benchmarks
 - [x] v1.1: Identity/time policies, partial engine hot-reload, CLI approval, experimental remote transport
 - [x] v1.2: Session taints and egress controls
 - [x] v1.3: Documentation truth, security verification, interoperability evidence, and release hardening
-- [ ] Future: sandboxing, richer telemetry, optional policy engines
+- [ ] v1.4: Durable allow-commit before relay, optional stdio identity attestation, Qwen third-party demo, documentation truth — on `main`, not yet tagged
+- [ ] Future: sandboxing, richer telemetry, optional policy engines — only if deployment evidence demands them
 
 ## Contributing
 

@@ -121,7 +121,7 @@ The recommended workflow:
 | Chain detection | Flags possible chains in config | Detects chains in real tool call sequences |
 | Secret redaction | Evaluates redaction accuracy | Replaces configured matches in arguments and textual `Content[].Text`; not comprehensive sanitization |
 | Human approval | No | Yes |
-| Audit logging | Generates test reports | Emits selected structured security/session events; not yet a complete per-call ledger |
+| Audit logging | Generates test reports | Terminal allows are a durable JSONL commit before relay; other selected events are JSONL without the same `fsync`; not a signed repudiation control |
 | LLM prompt injection testing | Yes | No (deterministic, no LLM) |
 | LLM provider comparison | Yes | No |
 | MCP config scanning | Yes | No |

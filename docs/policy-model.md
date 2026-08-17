@@ -465,7 +465,7 @@ Every valid JSON-RPC `tools/call` request with an `id` reaches a terminal `allow
 
 | Decision | Meaning |
 |----------|---------|
-| `allow` | Tool call is permitted. Forwarded to server immediately. |
+| `allow` | Tool call is permitted. Durably committed to the audit sink, then forwarded to the server. |
 | `deny` | Tool call is blocked. Error returned to client. |
 | `require_approval` | Tool call is held. Proceeds only on human approval. |
 
@@ -475,19 +475,21 @@ Decisions include a `reason` field explaining _why_ the decision was made for au
 
 The proxy applies checks in this order:
 
-1. Runtime limits — argument size, session call count, and session timeout
-2. Argument redaction — secrets are removed from the payload prepared for relay
-3. Built-in sensitive-path block
-4. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload.
-5. Existing session taints checked against egress controls
-6. Chain detection against recent calls authorized for relay
-7. Approval check
-8. Post-allow taint marking for matching source tools
-9. Relay to the MCP server
+1. Optional stdio identity attestation — mismatch or unresolved identity denies before argument policy
+2. Runtime limits — argument size, session call count, and session timeout
+3. Argument redaction — secrets are removed from the payload prepared for relay
+4. Built-in sensitive-path block
+5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload.
+6. Existing session taints checked against egress controls
+7. Chain detection against recent calls authorized for relay
+8. Approval check
+9. Durable allow-commit — terminal `tool_call_allowed` is fully appended and `Sync()`'d; failure denies with zero relay and does not mark taints
+10. Post-allow taint marking for matching source tools
+11. Relay to the MCP server
 
 Session history is appended after authorization but before the transport write. It therefore represents calls authorized for relay, including a call whose transport write later fails.
 
-The first terminal deny stops relay. Input-redaction audit is currently emitted before the final decision, so a redacted request that is later denied can produce both an allow-labelled redaction event and a deny event; this ordering is tracked for security hardening.
+The first terminal deny stops relay. Input redaction does not emit a premature allow event; only the terminal decision is written, with redaction noted on that event when applicable (H15). Output-only redaction still has no dedicated JSONL event.
 
 ## Complete Example
 

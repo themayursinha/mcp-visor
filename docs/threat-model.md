@@ -69,7 +69,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
 | Policy file tampering | Critical | Low | Policy files should be owned by root/administrator. The core proxy relies on host filesystem integrity and does not sign policy files. |
-| Audit log tampering | High | Low | Events are hash-linked within one logger lifetime while writes succeed. A failed write advances in-memory chain state, and new logger instances or file reopen start a new segment. Append-only permissions and secure external file shipping remain required. |
+| Audit log tampering | High | Low | Successful records are hash-linked. `NewLogger` recovers the chain from the same fd; incomplete/corrupt tails fail closed. Authorization commits `Sync()` before relay and do not advance in-memory chain state on failure. `Log()` advances only after a full append and does not `Sync()`. The audit directory is trusted; append-only permissions and external shipping remain required. Hostile rename/unlink of the ledger is outside the model. |
 | In-flight message tampering | Medium | Low | Local stdio uses host pipes. Remote `--server-url` supports TLS/mTLS client configuration; operators must enable it for untrusted networks. |
 | Tool output tampering | Medium | Medium | Visor redacts secrets in outputs but does not sanitize against prompt injection. Output sanitization is a separate concern. |
 | Argument tampering | Medium | Low | Visor rewrites arguments after redaction. Attacker could attempt to bypass redaction via encoding tricks. |
@@ -78,7 +78,7 @@ Full STRIDE-based threat analysis for the MCP Visor policy enforcement proxy.
 
 | Threat | Severity | Likelihood | Control in mcp-visor |
 |--------|----------|------------|---------------------|
-| Agent denies making a tool call | Medium | Medium | Logger-lifetime hash-linked events cover selected decisions, but a plain unredacted allow has no standalone audit event and authorized-call history is in-memory. This is not yet a complete repudiation control. |
+| Agent denies making a tool call | Medium | Medium | Every terminal allow writes a standalone JSONL `tool_call_allowed` record (H14) and `Sync()`s it before relay (H19). Denies are also JSONL events but without that `fsync`. `--client-id` is operator-supplied, not authenticated. This is not a signed, complete repudiation control. |
 | Approver denies approving | Medium | Low | File approval relies on approval-directory permissions. Signed receipts are available when the receipt signer is configured, but operator identity still depends on backend and key custody. |
 | Policy author denies a rule | Low | Low | Policy version and content should be tracked in version control. Not a visor concern. |
 
@@ -215,9 +215,11 @@ Which controls mitigate which threats?
 
 Policy integrity relies on filesystem permissions. If an attacker gains write access to the policy file, they can reconfigure the visor to allow any tool. Mitigation: deploy with proper file ownership and minimal visor user privileges.
 
-### 2. Logger-Lifetime Hash Chain vs Signed Decisions
+### 2. Durable Allow-Commit vs Signed Decisions
 
-Audit events are hash-linked within one logger lifetime while the sink remains healthy. A write failure advances in-memory chain state before persistence, so a later event can reference an event missing from the file. New logger instances and file reopen also start a new segment. Policy decisions are not signed end-to-end. Treat files as append-only and ship the JSONL file through a secure external channel.
+Terminal **allows** are durably committed before relay: the `tool_call_allowed` record is fully appended and `Sync()`'d on the JSONL sink opened by `NewLogger` (regular file, `O_NOFOLLOW`, same fd for recovery and appends; parent directory synced once at startup). Commit failure poisons the sink, denies the call, and does not advance taint/chain/allowed state. A missing or non-durable `-audit-log` (stderr fallback) fail-closes every allow.
+
+Denies, `approval_required`, taints, and lifecycle events use `Log()`: full append, no `Sync()`. Hash linkage recovers when reopening a healthy file; incomplete or corrupt tails fail closed. Policy decisions are not signed end-to-end. The audit directory is a **trusted** filesystem; Visor does not defend against a hostile namespace. Ship the JSONL file through a secure external channel. Do not treat plaintext `--siem-target` as the retention ledger.
 
 ### 3. Remote Server Authentication
 
@@ -237,7 +239,7 @@ Visor does not limit request rate from clients. A malicious or buggy agent could
 
 ### 7. Output-Only Redaction Lacks a Standalone Audit Event
 
-Forwarded allows emit a standalone JSONL `tool_call_allowed` event. Output-only redaction of server responses still does not emit its own JSONL event. Use the JSONL ledger plus metrics for coverage of response-side transforms.
+Forwarded allows emit a standalone JSONL `tool_call_allowed` event that is fully appended and `Sync()`'d before relay (H19). Output-only redaction of server responses still does not emit its own JSONL event. Use the JSONL ledger plus metrics for coverage of response-side transforms.
 
 ### 8. Hot Reload Refreshes Runtime Surfaces Atomically
 
@@ -326,7 +328,7 @@ Optional `stdio_invocation_sha256_v1` attestation pins a versioned, deterministi
 │  Layer 4: Chains      → Detect dangerous sequences      │
 │  Layer 5: Session     → Taint + egress sink controls     │
 │  Layer 6: Approval    → Human checkpoint for high-risk  │
-│  Layer 7: Audit       → Logger-lifetime linked events    │
+│  Layer 7: Audit       → Allow-commit before relay; hash-linked JSONL    │
 │                                                          │
 │  Intercepted unknown request → DENY                      │
 │  Deterministic: No LLM in the decision path              │

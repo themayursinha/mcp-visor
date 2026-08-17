@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (intended v1.4.0)
+
+> Documentation-truth and capability release for work already on `main` after `v1.3.0`. No new enforcement in this changelog entry: H19, H20, and the Qwen demo shipped in earlier commits. **Not tagged until Mayur cuts `v1.4.0` of one SHA.**
+
+### Added
+
+- H19: terminal allows (`tool_call_allowed`) are fully appended and `Sync()`'d on the durable JSONL sink before relay. Commit failure denies with zero relay and does not advance taint/chain/allowed state. A missing or non-durable `-audit-log` fail-closes allows (PR #64, `ce5ef246`).
+- H20: optional `stdio_invocation_sha256_v1` local invocation attestation. Registry runners (`npx`, `uvx`, …) are unpinnable. Transitive imports, TOCTOU, and TPM/TEE remain outside the guarantee (PR #60).
+- Qwen-MM-Plugins enforcement demo: real third-party MCP server, default-deny of unlisted mutation tools, JSON-RPC + ledger proof (`examples/qwen-mm-plugins-demo/`). Maintainer-run; launched via `uvx`, so H20 cannot pin that path.
+- Progressive action-boundary demo with server observation proof (PR #54).
+
+### Changed
+
+- Public docs (README, architecture, threat model, `SECURITY.md`, policy model, interop, complexity budget) reconciled with H11/H14/H15/H19/H20: standalone allow events, durable allow-commit, hash-chain recovery on reopen, no `O_SYNC` open, `policy_reloaded` emitted, input-redaction no longer a premature allow.
+
+### Fixed
+
+- Stale claims that plain allows had no standalone audit event, that a failed write always advanced chain state before persistence, and that reopen always started a new hash-chain segment.
+
 ## v1.3.0 (2026-08-03)
 
 > v1.3.0 is the Phase 1 hardening and interoperability release. It closes every security-verification gate (#41/#44/#45/#46), delivers real MCP server interoperability evidence, and reconciles stale documentation claims with code.
