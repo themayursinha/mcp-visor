@@ -30,6 +30,7 @@ import threading
 import time
 import zlib
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any, IO
 
 Json = dict[str, Any]
@@ -123,6 +124,17 @@ class VisorClient:
         assert proc.stdin is not None and proc.stdout is not None
         self.stdin = proc.stdin
         self.stdout = proc.stdout
+        # Background reader so _recv_until can honor its deadline even when
+        # the child never writes a newline (uvx hang, silent server).
+        self._lines: Queue[str | None] = Queue()
+        threading.Thread(target=self._read_stdout, daemon=True).start()
+
+    def _read_stdout(self) -> None:
+        try:
+            for line in self.stdout:
+                self._lines.put(line)
+        finally:
+            self._lines.put(None)
 
     def notify(self, method: str, params: Json | None = None) -> None:
         msg: Json = {"jsonrpc": "2.0", "method": method}
@@ -143,20 +155,22 @@ class VisorClient:
 
     def _recv_until(self, expect_id: int, timeout: float) -> Json:
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            line = self.stdout.readline()
-            if line == "":
-                if self.proc.poll() is not None:
-                    raise ProofError(f"visor exited rc={self.proc.returncode}")
-                time.sleep(0.05)
-                continue
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise ProofError(f"timeout waiting for id {expect_id}")
+            try:
+                line = self._lines.get(timeout=remaining)
+            except Empty:
+                raise ProofError(f"timeout waiting for id {expect_id}")
+            if line is None:
+                raise ProofError(f"visor exited rc={self.proc.returncode}")
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue
             if msg.get("id") == expect_id:
                 return msg
-        raise ProofError(f"timeout waiting for id {expect_id}")
 
 
 def text_of(r: Json) -> str:
