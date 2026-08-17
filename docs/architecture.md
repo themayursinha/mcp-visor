@@ -92,7 +92,7 @@ internal/
     linter.go                   Static policy validation CLI
     watcher.go                  fsnotify engine/registry reload; proxy-derived settings remain static
   audit/                       Structured audit logging
-    logger.go                   JSONL logger with O_SYNC and healthy-sink, logger-lifetime hash linking
+    logger.go                   JSONL logger: durable allow-commit (append + Sync) before relay; hash-chain recovery on reopen
   redaction/                   Sensitive data redaction
     engine.go                   Configurable regex-based secret scanning
   approval/                    Human approval workflow
@@ -174,6 +174,12 @@ intercepted tools/call
    Allow│
         ▼
  ┌──────────────────┐
+ │ Durable allow    │──fail──▶ DENY (zero relay; taint/chain/allowed state
+ │ commit (H19)     │          does not advance)
+ └──────┬───────────┘
+  ok    │
+        ▼
+ ┌──────────────────┐
  │ Post-allow taint │──▶ Matching `taints[]` rules mark session; emit `session_tainted`
  │ marking          │
  └──────┬───────────┘
@@ -189,7 +195,7 @@ intercepted tools/call
 
 When a server policy pins an attestation (`kind: stdio_invocation_sha256_v1`), the proxy resolves the launched stdio invocation exactly once at proxy construction and compares that cached lifecycle identity against the current policy snapshot on every `tools/call` before runtime limits, redaction, argument policy, taint, chains, approval, or relay. The digest always binds the locally resolved launcher executable and every literal argv value in order; only the policy-declared entry argument positions (`attestation.entry_arg_positions`, zero-based indexes into `ServerArgs` excluding the executable) additionally bind the resolved local regular-file content at that position, so mutable runtime data arguments (logs, databases, datasets, output paths) are never opened or hashed. Recognized canonical dynamic registry runners (`npx`, `uvx`, `bunx`, `pnpx`, `pnx`, `npm exec`, `npm x`, `yarn dlx`, `pnpm dlx`, `bun x`, `uv tool run`) are unpinnable: the literal package spec does not bind the registry artifact that will execute, so resolution fails and a configured attestation denies through the unresolved-identity path. Only exact canonical executable names and exact leading subcommand tuples are recognized; options-before-subcommand, renamed launchers, and shell wrappers are not inferred, and ordinary non-registry subcommands (`npm run`, `npm install`, `npm ci`, `yarn add`, `pnpm add`, `pnpm exec`, `bun run`, `bun add`, `uv run`, `uv tool install`) remain resolvable. A configured mismatch or unresolved identity fails closed with one terminal deny event, no arguments, and identity-bound audit fields. A matching local identity continues and emits `server_attested=true` on the terminal event. Policies without an attestation preserve legacy behavior, omit the verdict, and perform zero identity-resolution work at construction. Attestation is restart-bound: identity is measured once for the launched stdio child and is NEVER re-derived on hot reload. Reloading launcher or payload paths cannot attest a replacement artifact as the already-running child; a pin introduced after an unattested start, a changed resolution shape (attestation kind or normalized entry positions), or a same-shape digest replacement all fail closed until a server restart. Unrelated policy/redactor/audit/approval reloads remain atomic. Tool descriptions, schemas, instructions, and handshake `serverInfo` are untrusted presentation data and never satisfy identity. This is local invocation pinning, not remote/hardware attestation; server startup behavior and TOCTOU by a privileged filesystem attacker remain out of scope.
 
-Denied or approval-rejected calls do not enter the relay write path. Selected events cover denies, approvals, argument redactions, session taints, and session lifecycle. Policy lifecycle constants exist but are not emitted. Output redaction and plain unredacted allows lack standalone JSONL events.
+Denied or approval-rejected calls do not enter the relay write path. Terminal **allows** emit a standalone JSONL `tool_call_allowed` event that must be fully appended and `Sync()`'d before relay (H19). Denies, `approval_required`, session taints, and session lifecycle use `Log()` (full append, no `Sync`). `policy_reloaded` is emitted on a successful hot reload; `policy_loaded` is defined but not emitted. Output-only redaction has no dedicated JSONL event.
 
 ## Core Components
 
@@ -277,10 +283,10 @@ Human-in-the-loop approval for high-risk tool calls:
 
 Structured JSONL audit trail (`internal/audit/logger.go`):
 
-- **Event constants**: nine types are defined, but `policy_loaded` and `policy_reloaded` are not currently emitted. A plain unredacted allow and output-only redaction also lack standalone audit events.
-- **Healthy-sink logger-lifetime chain**: successful writes link within one `Logger` instance. The logger advances chain state before confirming persistence, so a failed write can leave the next stored event pointing to a missing hash. Another logger instance or file reopen starts a new segment. Regression: `TestAuditLogHashChain` covers only healthy writes.
+- **Event constants**: `policy_reloaded` is emitted on successful hot reload. `policy_loaded` is defined and not emitted. Output-only redaction has no dedicated JSONL event. Plain allows emit `tool_call_allowed` (H14) via `CommitAuthorization` (H19).
+- **Durable allow-commit**: `CommitAuthorization` prepares a hash-linked `tool_call_allowed` record without mutating chain state, appends the full line, calls `Sync()`, and only then advances `prevHash`/`chainIndex`. Any marshal/write/short-write/sync/non-durable failure poisons the sink, returns an error, and the proxy denies with zero relay. `Log()` also withholds chain advance until a full append succeeds, but it does **not** `Sync()`. The file is opened `O_RDWR|O_APPEND|O_CREATE|O_NOFOLLOW` — not `O_SYNC`.
+- **Hash-chain recovery**: `NewLogger` recovers `prev_hash`/`chain_index` from the same fd. Incomplete tails and corrupt last records fail closed. Regression: `TestNewLoggerRecoversHashChainAcrossRestart`, `TestCommitAuthorizationWritesThenSyncsBeforeAdvancing`.
 - **Redacted data**: arguments, reasons, and result previews scrubbed before write
-- **O_SYNC** append-only file writes
 - **Decision fields**: timestamp, session/agent IDs, server, tool, redacted arguments, `policy_decision`, reason, risk, chain context; egress denials add `session_taints`, `taint_source`, `taint_reason`, `policy_rule`
 
 ## Key Design Decisions

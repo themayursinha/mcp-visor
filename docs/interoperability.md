@@ -1,6 +1,6 @@
 # MCP Visor — Real MCP Interoperability Matrix
 
-Status: **maintained evidence** (Phase 1, verified 2026-08-03 on `main`).
+Status: **maintained evidence** (Phase 1 matrix verified 2026-08-03; Qwen third-party cell added 2026-08-17 on `main`).
 
 This page records which real MCP servers and client invocation paths have been
 run through MCP Visor, what enforcement cells are proven, and what remains
@@ -15,7 +15,9 @@ real MCP servers speak shapes Visor can mediate, real invocation paths still
 hit the action boundary, and a second person can reproduce at least one
 non-mock path from this document.
 
-## Server and client pins (locked 2026-08-03)
+## Server and client pins
+
+### Phase 1 matrix (locked 2026-08-03)
 
 | Component | Pin | Install | Transport |
 |---|---|---|---|
@@ -28,6 +30,12 @@ non-mock path from this document.
 > SDK in a way that is broken with `mcp>=1.27`; pin `mcp==1.26.0` (verified
 > 2026-08-03).
 
+### Qwen third-party cell (locked 2026-08-17)
+
+| Component | Pin | Install | Transport |
+|---|---|---|---|
+| Qwen-MM-Plugins `core` | `qwen-mm-plugins[core] @ git+…@ec9fbd1e11a30841685b949863e9d9d30cd7a4d8` (tag `qwen-mm-plugins-core-v1.0.2`) | `uvx --from` | stdio |
+
 ## Matrix
 
 | # | Client path | Server | Transport | Cases | Result |
@@ -37,7 +45,10 @@ non-mock path from this document.
 | S3 | A (raw JSON-RPC) | Filesystem | stdio | sensitive read taints session → `write_file` egress denied before server execution, audit cites taint + egress control | ✅ `TestInteropFilesystemTaintEgress` |
 | S4 | B (Python SDK) | Filesystem | stdio | initialize, tools/list, allowed `read_file` returns content through Visor | ✅ manual smoke (see reproduce) |
 | R1 | A (raw JSON-RPC) | Local SSE mock remote | HTTP+SSE | initialize, tools/list, allowed `tools/call` reaches remote, denied tool blocked before relay, audit | ✅ `TestInteropRemotePostHandshake` |
+| Q1 | proof client (`examples/qwen-mm-plugins-demo/demo-client.py`) | Qwen-MM-Plugins `core` | stdio | allowlisted `read_image`/`media_info` reach server; unlisted `crop`/`visualize` denied before relay; JSON-RPC + hash-chained ledger | ✅ maintainer-run demo (not CI) |
 | R2 | A | Third-party hosted remote | HTTP+SSE | not tested | ⛔ experimental — see Remote honesty |
+
+Q1 is a **maintainer-run** third-party MCP proof, not an independent deployment. The Qwen server is launched via `uvx`, which H20 treats as an unpinnable registry runner — do not claim stdio identity attestation on that path. Reproduce: `examples/qwen-mm-plugins-demo/README.md`.
 
 The mock demo server remains the regression baseline but does **not** count
 toward the "≥ 2 real servers" requirement.
@@ -178,6 +189,7 @@ Current remote status is deliberately narrow:
   (`fetch`→`fetch` after a sensitive URL). See `TestInteropFilesystemTaintEgress`
   and `TestInteropFetchStdio`.
 - Remote hosted-server parity is the largest remaining interop gap (R2).
+- Qwen (Q1) is maintainer-operated and uses `uvx`; it does not prove independent installation or H20 attestation.
 - Batch `tools/call` and mixed-batch authorization are not implemented; the
   envelope gate rejects batches containing `tools/call` (see threat model).
 
@@ -189,3 +201,4 @@ Current remote status is deliberately narrow:
 - `tests/integration/interop_real_servers_test.go` — the automated matrix
 - `tests/interop/python_sdk_client.py` — client path B
 - `examples/policies/interop/` — interop policies
+- `examples/qwen-mm-plugins-demo/` — third-party Qwen cell (Q1)

@@ -22,17 +22,18 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 ### Defense Layers
 
 1. **Deterministic policy** — No AI in the decision path
-2. **Fail-closed** — Unknown tools denied by default
+2. **Fail-closed** — Unknown tools denied by default; a missing or non-durable `-audit-log` denies every allow
 3. **Pattern redaction** — Replaces configured matches in arguments and textual outputs; encoded, structured, and unmatched secrets can pass
 4. **Chain detection** — Blocks read→send patterns regardless of individual tool policies
-5. **Audit logging** — O_SYNC JSONL for selected events; healthy writes are hash-linked within one logger lifetime
+5. **Audit logging** — JSONL on a trusted regular file. Terminal allows are fully appended and `Sync()`'d before relay (H19). Other selected events are appended without `Sync()`. Healthy files recover hash linkage on reopen; incomplete/corrupt tails fail closed.
 
 ### Known Limitations
 
 - Policy file integrity relies on host filesystem permissions
-- Output-only redaction lacks a dedicated JSONL event; plain allows emit `tool_call_allowed`
-- Audit hash linkage recovers across reopen for healthy files; incomplete/corrupt tails fail closed for `NewLogger` (MustLogger may fall back to stderr)
-- Audit write failure can leave a later stored event referencing an event that was not persisted
+- Output-only redaction lacks a dedicated JSONL event; plain allows emit `tool_call_allowed` and must be `Sync()`'d before relay
+- Audit hash linkage recovers across reopen for healthy files; incomplete/corrupt tails fail closed for `NewLogger` (MustLogger may fall back to stderr, which then fail-closes allows)
+- `Log()` (denies and non-allow events) does not `Sync()`; a crash after a successful allow-commit is in the H19 model, a crash during a deny write is not an equivalent durability guarantee
+- The logger is not opened with `O_SYNC`. Hostile audit-directory mutation is outside the trust model
 - Built-in TCP/UDP SIEM export is plaintext and uses a reduced event envelope that omits hash-link fields and arguments; do not use it as the sole retention ledger
 - No end-to-end cryptographic attestation of all policy decisions
 - `stdio_invocation_sha256_v1` attestation is a pre-launch local invocation measurement cached for the proxy lifecycle, not an OS-bound measurement of child process memory, TPM/TEE attestation, dependency-closure proof, or registry provenance. The digest is a versioned SHA-256 over an injectively framed serialization of the resolved launcher executable, every literal argv value in order, and only the policy-declared entry payload contents; different invocation structures never hash to the same input. It cannot defend against replacing the artifact between measurement and `exec` (TOCTOU), an attacker with host artifact-write authority, or altered transitive/lazy dependencies; host filesystem integrity remains a trust assumption. Identity is resolved once at proxy construction; hot reload never re-hashes launcher or payload paths, so introducing or changing a pin requires a server restart and denies `tools/call` as unresolved/restart-required until then.
