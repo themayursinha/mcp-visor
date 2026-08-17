@@ -63,7 +63,7 @@ package-lock.json
 graphify-out/
 AGENTS.md
 
-# Repo housekeeping — prevent `git add .` on the primary checkout from
-# ingesting nested worktrees or local tool config.
+# Repo housekeeping — keep the public repo project-only: nested worktrees and
+# local Cursor tooling (rules + settings) are private process, not tracked.
 .worktrees/
-.cursor/settings.json
+.cursor/
