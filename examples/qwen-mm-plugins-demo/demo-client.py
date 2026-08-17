@@ -29,7 +29,9 @@ REPO = Path(__file__).resolve().parents[2]
 VISOR = REPO / "mcp-visor"
 POLICY = REPO / "examples" / "policies" / "qwen-mm-plugins.yaml"
 AUDIT = "/tmp/qwen-demo/audit.jsonl"
-UVX = shutil.which("uvx") or "/home/mayur/.local/bin/uvx"  # requires uv; see README
+UVX = shutil.which("uvx")
+if UVX is None:
+    raise SystemExit("uvx not found on PATH - install uv (https://docs.astral.sh/uv/)")
 SRC = ("qwen-mm-plugins[core] @ git+https://github.com/QwenLM/"
        "Qwen-MM-Plugins.git@qwen-mm-plugins-core-v1.0.2")
 
