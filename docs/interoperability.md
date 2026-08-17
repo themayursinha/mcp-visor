@@ -15,7 +15,9 @@ real MCP servers speak shapes Visor can mediate, real invocation paths still
 hit the action boundary, and a second person can reproduce at least one
 non-mock path from this document.
 
-## Server and client pins (locked 2026-08-03)
+## Server and client pins
+
+### Phase 1 matrix (locked 2026-08-03)
 
 | Component | Pin | Install | Transport |
 |---|---|---|---|
@@ -23,11 +25,16 @@ non-mock path from this document.
 | Fetch reference server | `mcp-server-fetch@2026.7.10` | `uvx --with mcp==1.26.0` | stdio |
 | Client path A | raw JSON-RPC 2.0 over stdio (Go test harness) | built-in `tests/integration/interop_real_servers_test.go` | stdio |
 | Client path B | official Python MCP SDK (`mcp==1.26.0`) | `tests/interop/python_sdk_client.py` | stdio |
-| Qwen-MM-Plugins `core` | `qwen-mm-plugins[core] @ git+…@ec9fbd1e11a30841685b949863e9d9d30cd7a4d8` (tag `qwen-mm-plugins-core-v1.0.2`) | `uvx --from` | stdio |
 
 > Fetch pin note: `mcp-server-fetch@2026.7.10` imports `McpError` from the MCP
 > SDK in a way that is broken with `mcp>=1.27`; pin `mcp==1.26.0` (verified
 > 2026-08-03).
+
+### Qwen third-party cell (locked 2026-08-17)
+
+| Component | Pin | Install | Transport |
+|---|---|---|---|
+| Qwen-MM-Plugins `core` | `qwen-mm-plugins[core] @ git+…@ec9fbd1e11a30841685b949863e9d9d30cd7a4d8` (tag `qwen-mm-plugins-core-v1.0.2`) | `uvx --from` | stdio |
 
 ## Matrix
 
