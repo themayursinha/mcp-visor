@@ -208,10 +208,19 @@ def require_denied(r: Json, tool: str) -> None:
 
 
 def read_audit(path: Path) -> list[Json]:
+    """Parse complete JSONL records. A torn trailing line is ignored (not ready)."""
     if not path.is_file():
         raise ProofError(f"audit ledger missing: {path}")
+    raw = path.read_bytes()
+    if not raw:
+        return []
+    if not raw.endswith(b"\n"):
+        idx = raw.rfind(b"\n")
+        if idx < 0:
+            return []
+        raw = raw[: idx + 1]
     events: list[Json] = []
-    for line in path.read_text().splitlines():
+    for line in raw.decode("utf-8").splitlines():
         if not line.strip():
             continue
         try:
@@ -219,6 +228,29 @@ def read_audit(path: Path) -> list[Json]:
         except json.JSONDecodeError as exc:
             raise ProofError(f"corrupt audit line: {line!r}") from exc
     return events
+
+
+def wait_until_audit(
+    path: Path,
+    allowed: list[str],
+    denied: list[str],
+    timeout: float = 5.0,
+) -> None:
+    """Wait until the ledger matches, or fail closed at the deadline."""
+    deadline = time.time() + timeout
+    last: ProofError | None = None
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            if last is not None:
+                raise last
+            raise ProofError("timeout waiting for audit ledger")
+        try:
+            require_audit(read_audit(path), allowed, denied)
+            return
+        except ProofError as exc:
+            last = exc
+            time.sleep(min(0.05, remaining))
 
 
 def require_audit(events: list[Json], allowed: list[str], denied: list[str]) -> None:
@@ -359,8 +391,7 @@ def run() -> None:
             print(f"== {denied_tool} (DENIED) ==")
             print(f"  error: {err.get('code')} {err.get('message')}")
 
-        time.sleep(0.2)
-        require_audit(read_audit(audit), ["read_image", "media_info"], ["crop", "visualize"])
+        wait_until_audit(audit, ["read_image", "media_info"], ["crop", "visualize"])
         print(f"PASS audit ledger {audit}")
     except ProofError:
         if stderr_lines:

@@ -48,9 +48,10 @@ The client speaks id-matched JSON-RPC over stdio: initialize,
 | `crop` | JSON-RPC error `-32000` citing `not registered`; audit `tool_call_denied` |
 | `visualize` | JSON-RPC error `-32000` citing `not registered`; audit `tool_call_denied` |
 
-On success the client prints `PASS audit ledger <path>` and leaves the
-temp workdir in place for inspection. Any mismatch prints `FAIL:` and
-exits 1.
+On success the client polls the durable audit ledger until the expected
+allow/deny records and hash chain are present (or fails closed at a
+deadline), prints `PASS audit ledger <path>`, and leaves the temp workdir
+for inspection. Any mismatch prints `FAIL:` and exits 1.
 
 ## Manual server invocation
 
