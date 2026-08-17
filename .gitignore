@@ -62,3 +62,8 @@ package-lock.json
 # Graphify analysis output
 graphify-out/
 AGENTS.md
+
+# Repo housekeeping — prevent `git add .` on the primary checkout from
+# ingesting nested worktrees or local tool config.
+.worktrees/
+.cursor/settings.json
