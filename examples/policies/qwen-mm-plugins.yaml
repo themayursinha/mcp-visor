@@ -1,0 +1,42 @@
+# Qwen-MM-Plugins core — capability allowlist demo
+#
+# Enforces which multimodal tools an agent may invoke on the real
+# Qwen-MM-Plugins core MCP server (github.com/QwenLM/Qwen-MM-Plugins,
+# Apache-2.0, tag qwen-mm-plugins-core-v1.0.2).
+#
+# The policy is a capability allowlist: read-only media tools are allowed;
+# producers/visualizers (crop, draw_bbox, save_view, visualize) are NOT
+# listed, so default_action: deny rejects them before relay.
+#
+# Run:
+#   mcp-visor serve \
+#     -server "$(command -v uvx)" \
+#     -server-arg --from \
+#     -server-arg "qwen-mm-plugins[core] @ git+https://github.com/QwenLM/Qwen-MM-Plugins.git@qwen-mm-plugins-core-v1.0.2" \
+#     -server-arg qwen-mm-plugins-core \
+#     -server-name qwen-mm-plugins-core \
+#     -policy examples/policies/qwen-mm-plugins.yaml \
+#     -audit-log /tmp/qwen-demo/audit.jsonl
+version: "1.0"
+description: "Qwen-MM-Plugins core demo - allowlist read-only multimodal tools"
+default_action: deny
+
+settings:
+  chain_window_size: 5
+  approval_timeout_seconds: 10
+  log_level: info
+
+servers:
+  - name: "qwen-mm-plugins-core"
+    transport: stdio
+    allowed: true
+    tools:
+      - name: "read_image"
+        allowed: true
+        risk: low
+      - name: "read_video"
+        allowed: true
+        risk: low
+      - name: "media_info"
+        allowed: true
+        risk: low
