@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (intended v1.4.1)
+
+### Fixed
+
+- Release workflow and Docker builder now use Go 1.26.6, matching `go.mod`. v1.4.0's GitHub Release/Docker jobs failed because they ran Go 1.26.5 with `GOTOOLCHAIN=local`.
+
 ## v1.4.0 (2026-08-17)
 
 > v1.4.0 is the claims-and-artifact release for work already on `main` after v1.3.0: H19 durable allow-commit, H20 stdio identity attestation, the Qwen third-party demo, and documentation truth. No new enforcement in this tag.
