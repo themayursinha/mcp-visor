@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased (intended v1.4.0)
+## v1.4.0 (2026-08-17)
 
-> Documentation-truth and capability release for work already on `main` after `v1.3.0`. No new enforcement in this changelog entry: H19, H20, and the Qwen demo shipped in earlier commits. **Not tagged until Mayur cuts `v1.4.0` of one SHA.**
+> v1.4.0 is the claims-and-artifact release for work already on `main` after v1.3.0: H19 durable allow-commit, H20 stdio identity attestation, the Qwen third-party demo, and documentation truth. No new enforcement in this tag.
 
 ### Added
 

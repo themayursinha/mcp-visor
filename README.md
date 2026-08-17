@@ -192,7 +192,7 @@ make bench                     # benchmarks
 - [x] v1.1: Identity/time policies, partial engine hot-reload, CLI approval, experimental remote transport
 - [x] v1.2: Session taints and egress controls
 - [x] v1.3: Documentation truth, security verification, interoperability evidence, and release hardening
-- [ ] v1.4: Durable allow-commit before relay, optional stdio identity attestation, Qwen third-party demo, documentation truth — on `main`, not yet tagged
+- [x] v1.4: Durable allow-commit before relay, optional stdio identity attestation, Qwen third-party demo, documentation truth
 - [ ] Future: sandboxing, richer telemetry, optional policy engines — only if deployment evidence demands them
 
 ## Contributing
