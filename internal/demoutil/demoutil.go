@@ -9,9 +9,9 @@ import (
 
 // ObsLine represents one observation from the synthetic MCP server.
 type ObsLine struct {
-	Tool      string
-	RequestID int
-	Received  bool
+	Tool      string `json:"tool"`
+	RequestID int    `json:"request_id"`
+	Received  bool   `json:"received"`
 }
 
 // ValidateObservations checks that the expected calls reached the server

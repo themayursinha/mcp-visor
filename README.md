@@ -55,6 +55,12 @@ mcp-visor serve -server <your-mcp-server> -policy policy.yaml -audit-log ./audit
 
 Two-minute action-boundary demo: `go run ./examples/demo-runner`
 
+Local Proof Console (not a product dashboard): `go run ./examples/demo-runner -ui` then open the printed URL. Default bind is loopback. To reach it from another machine on a tailnet, bind a CGNAT address in `100.64.0.0/10` (not `0.0.0.0`):
+
+```bash
+go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
+```
+
 ## What it protects against
 
 - Secret reads followed by outbound exfiltration

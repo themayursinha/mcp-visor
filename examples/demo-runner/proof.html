@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Visor Proof Console</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: ui-sans-serif, system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 24px; }
+h1 { color: #58a6ff; font-size: 22px; margin-bottom: 4px; }
+.sub { color: #8b949e; margin-bottom: 20px; font-size: 14px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; min-height: 180px; }
+.panel h2 { color: #f0883e; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 12px; }
+.muted { color: #8b949e; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #21262d; vertical-align: top; }
+th { color: #8b949e; font-size: 11px; text-transform: uppercase; }
+.allow { color: #3fb950; }
+.deny { color: #f85149; }
+.taint { color: #e3b341; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; }
+.badge-allow { background: #1a3320; color: #3fb950; }
+.badge-deny { background: #331a1a; color: #f85149; }
+.badge-wait { background: #21262d; color: #8b949e; }
+.hash { font-family: ui-monospace, monospace; font-size: 11px; color: #8b949e; word-break: break-all; }
+.metric { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+.metric:last-child { border-bottom: none; }
+.refresh { margin-top: 16px; color: #8b949e; font-size: 11px; }
+.error { color: #f85149; }
+</style>
+</head>
+<body>
+<h1>MCP Visor Proof Console</h1>
+<p class="sub">Action-boundary demonstration. Decisions come from the live audit log and mock observe-log. Bind loopback or Tailscale only; not a product dashboard.</p>
+<div class="grid">
+  <section class="panel">
+    <h2>1. Agent timeline</h2>
+    <div id="timeline"><p class="muted">Waiting for audit events.</p></div>
+  </section>
+  <section class="panel">
+    <h2>2. Policy decision</h2>
+    <div id="decision"><p class="muted">No deny recorded.</p></div>
+  </section>
+  <section class="panel">
+    <h2>3. Execution boundary</h2>
+    <div id="boundary"><p class="muted">No server observations yet. Non-relay is not proven.</p></div>
+  </section>
+  <section class="panel">
+    <h2>4. Audit evidence</h2>
+    <div id="evidence"><p class="muted">Waiting for hash-linked allow records.</p></div>
+  </section>
+</div>
+<p class="refresh" id="refresh"></p>
+<script>
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function eventType(ev) { return ev && ev.event_type ? String(ev.event_type) : ''; }
+function isDeny(ev) {
+  return eventType(ev) === 'tool_call_denied' || ev.policy_decision === 'deny';
+}
+function isAllow(ev) { return eventType(ev) === 'tool_call_allowed'; }
+function isTaint(ev) { return eventType(ev) === 'session_tainted'; }
+function renderTimeline(events) {
+  const rows = (events || []).filter(ev => isAllow(ev) || isDeny(ev) || isTaint(ev));
+  if (!rows.length) return '<p class="muted">Waiting for audit events.</p>';
+  let html = '<table><thead><tr><th>Event</th><th>Tool</th><th>Decision</th></tr></thead><tbody>';
+  for (const ev of rows) {
+    const et = eventType(ev);
+    const cls = isDeny(ev) ? 'deny' : (isTaint(ev) ? 'taint' : 'allow');
+    html += '<tr><td class="'+cls+'">'+escapeHtml(et)+'</td><td>'+escapeHtml(ev.tool || '')+'</td><td>'+escapeHtml(ev.policy_decision || '')+'</td></tr>';
+  }
+  return html + '</tbody></table>';
+}
+function renderDecision(events) {
+  const deny = (events || []).filter(ev => eventType(ev) === 'tool_call_denied').pop();
+  if (!deny) return '<p class="muted">No deny recorded.</p>';
+  const taints = Array.isArray(deny.session_taints) ? deny.session_taints.join(', ') : '';
+  return '<div class="metric"><span>Decision</span><span class="badge badge-deny">'+escapeHtml(deny.policy_decision || '')+'</span></div>' +
+    '<div class="metric"><span>Rule</span><span>'+escapeHtml(deny.policy_rule || '')+'</span></div>' +
+    '<div class="metric"><span>Reason</span><span>'+escapeHtml(deny.reason || '')+'</span></div>' +
+    '<div class="metric"><span>Session taints</span><span>'+escapeHtml(taints)+'</span></div>';
+}
+function renderBoundary(obs, events) {
+  if (!obs || obs.length === 0) {
+    return '<p class="muted">No server observations yet. Non-relay is not proven.</p>';
+  }
+  let html = '<table><thead><tr><th>Tool</th><th>ID</th><th>Received</th></tr></thead><tbody>';
+  for (const o of obs) {
+    html += '<tr><td>'+escapeHtml(o.tool || '')+'</td><td>'+escapeHtml(o.request_id)+'</td><td>'+(o.received ? 'yes' : 'no')+'</td></tr>';
+  }
+  html += '</tbody></table>';
+  const sawPost = obs.some(o => o.tool === 'http_post' && Number(o.request_id) === 300 && o.received);
+  const deny = (events || []).some(ev => eventType(ev) === 'tool_call_denied' && ev.tool === 'http_post');
+  if (sawPost) {
+    html += '<p class="error" style="margin-top:10px">http_post #300 was received. Non-relay proof failed.</p>';
+  } else if (deny) {
+    html += '<p class="muted" style="margin-top:10px">http_post #300 is absent from the observe-log.</p>';
+  } else {
+    html += '<p class="muted" style="margin-top:10px">Denied egress is not in the audit log yet.</p>';
+  }
+  return html;
+}
+function renderEvidence(events) {
+  const allows = (events || []).filter(isAllow);
+  if (!allows.length) return '<p class="muted">Waiting for hash-linked allow records.</p>';
+  let html = '';
+  for (const ev of allows) {
+    html += '<div class="metric"><span>'+escapeHtml(ev.tool || 'allow')+'</span><span class="badge badge-allow">'+escapeHtml(ev.policy_decision || '')+'</span></div>';
+    html += '<p class="hash">chain_index='+escapeHtml(ev.chain_index)+' hash='+escapeHtml(ev.hash || '')+' prev='+escapeHtml(ev.prev_hash || '')+'</p>';
+  }
+  return html;
+}
+async function refresh() {
+  try {
+    const resp = await fetch('/api/snapshot', { cache: 'no-store' });
+    if (!resp.ok) throw new Error(resp.statusText);
+    const data = await resp.json();
+    const events = data.audit_events || [];
+    const obs = data.observations || [];
+    document.getElementById('timeline').innerHTML = renderTimeline(events);
+    document.getElementById('decision').innerHTML = renderDecision(events);
+    document.getElementById('boundary').innerHTML = renderBoundary(obs, events);
+    document.getElementById('evidence').innerHTML = renderEvidence(events);
+    let status = 'Last refresh: ' + new Date().toLocaleTimeString();
+    if (data.integrity && data.integrity !== 'ok') status += ' · integrity: ' + data.integrity;
+    if (data.integrity === 'ok') status += ' · integrity ok';
+    document.getElementById('refresh').textContent = status;
+  } catch (e) {
+    document.getElementById('refresh').innerHTML = '<span class="error">Snapshot unavailable</span>';
+  }
+}
+refresh();
+setInterval(refresh, 500);
+</script>
+</body>
+</html>

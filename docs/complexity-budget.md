@@ -39,6 +39,7 @@ Enterprise and operator integrations. **On by flag only**; not required for the 
 | Prometheus + OTLP export | **Experimental** — counters are not synchronized; keep off production claims until race-safe |
 | Trace logging (`--trace`) | **Incomplete** — formatter/config types exist but runtime paths do not invoke the tracer |
 | n8n blueprint | **Keep** — example control plane; Advanced / examples |
+| Proof Console (`examples/demo-runner -ui`) | **Examples-only** — local loopback action-boundary demonstration; unauthenticated; not a product dashboard |
 
 ### Experimental / roadmap
 
@@ -81,6 +82,7 @@ Same binary, tiered documentation.
 | `--dashboard` | Advanced | No |
 | `--metrics-addr`, `--otel-*` | Advanced | No |
 | `examples/n8n` | Advanced | No |
+| `examples/demo-runner -ui` | Advanced / examples | No |
 
 **Collapse in docs, not in code:** README and CONTRIBUTING lead with Core; Advanced flags are grouped in CLI reference.
 

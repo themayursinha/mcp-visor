@@ -1,4 +1,4 @@
-.PHONY: build test bench vet demo clean fmt lint setup-hooks
+.PHONY: build test bench vet demo demo-ui demo-ui-tailscale clean fmt lint setup-hooks
 
 GOPATH ?= $(shell go env GOPATH)
 GO ?= go
@@ -17,6 +17,13 @@ vet:
 
 demo:
 	$(GO) run ./examples/demo-runner/
+
+demo-ui:
+	$(GO) run ./examples/demo-runner/ -ui
+
+demo-ui-tailscale:
+	@test -n "$(TAILSCALE_BIND_ADDRESS)" || (echo "Set TAILSCALE_BIND_ADDRESS to a Tailscale CGNAT address in 100.64.0.0/10"; exit 1)
+	$(GO) run ./examples/demo-runner/ -ui -ui-addr $(TAILSCALE_BIND_ADDRESS):9092
 
 fmt:
 	$(GO) fmt ./...
