@@ -29,6 +29,9 @@ func TestProofHTMLIsProofInterface(t *testing.T) {
 	if !strings.Contains(html, "Non-relay is not proven") {
 		t.Fatal("empty observations must not claim non-relay")
 	}
+	if !strings.Contains(html, "integrity === 'ok'") {
+		t.Fatal("non-relay absence claim must require integrity ok, not a partial observe-log")
+	}
 	if !strings.Contains(html, "/api/snapshot") {
 		t.Fatal("HTML must fetch the live snapshot, not a hardcoded story")
 	}

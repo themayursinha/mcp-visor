@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -77,13 +78,22 @@ func runUI(addr string) error {
 	u := url.URL{Scheme: "http", Host: ln.Addr().String()}
 	fmt.Fprintf(os.Stderr, "Proof Console: %s\n", u.String())
 
-	if err := sess.driveSequence(false, time.Second); err != nil {
-		return err
-	}
-	ps.sequenceDone.Store(true)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-	return nil
+	driveErr := make(chan error, 1)
+	go func() {
+		driveErr <- sess.driveSequence(false, time.Second)
+	}()
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-driveErr:
+		if err != nil {
+			return err
+		}
+		ps.sequenceDone.Store(true)
+		<-ctx.Done()
+		return nil
+	}
 }

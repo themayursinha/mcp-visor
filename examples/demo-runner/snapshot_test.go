@@ -106,6 +106,24 @@ func TestSnapshotEmptyObservationsDoNotProveNonRelay(t *testing.T) {
 	}
 }
 
+func TestIncompleteObservationsDoNotProveNonRelay(t *testing.T) {
+	t.Parallel()
+	s := Snapshot{
+		Observations: []demoutil.ObsLine{
+			{Tool: "file_read", RequestID: 100, Received: true},
+		},
+		AuditEvents: []map[string]any{
+			{"event_type": "tool_call_denied", "tool": "http_post", "policy_decision": "deny"},
+		},
+	}
+	if nonRelayProven(s) {
+		t.Fatal("incomplete observe-log must not prove the denied call never reached the server")
+	}
+	if httpPost300Received(s) {
+		t.Fatal("incomplete observe-log must not claim http_post #300 was received")
+	}
+}
+
 func TestProofIntegrityRejectsPartialLedger(t *testing.T) {
 	t.Parallel()
 	obs := []demoutil.ObsLine{

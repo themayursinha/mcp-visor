@@ -82,7 +82,7 @@ function renderDecision(events) {
     '<div class="metric"><span>Reason</span><span>'+escapeHtml(deny.reason || '')+'</span></div>' +
     '<div class="metric"><span>Session taints</span><span>'+escapeHtml(taints)+'</span></div>';
 }
-function renderBoundary(obs, events) {
+function renderBoundary(obs, events, integrity) {
   if (!obs || obs.length === 0) {
     return '<p class="muted">No server observations yet. Non-relay is not proven.</p>';
   }
@@ -92,13 +92,12 @@ function renderBoundary(obs, events) {
   }
   html += '</tbody></table>';
   const sawPost = obs.some(o => o.tool === 'http_post' && Number(o.request_id) === 300 && o.received);
-  const deny = (events || []).some(ev => eventType(ev) === 'tool_call_denied' && ev.tool === 'http_post');
   if (sawPost) {
     html += '<p class="error" style="margin-top:10px">http_post #300 was received. Non-relay proof failed.</p>';
-  } else if (deny) {
+  } else if (integrity === 'ok') {
     html += '<p class="muted" style="margin-top:10px">http_post #300 is absent from the observe-log.</p>';
   } else {
-    html += '<p class="muted" style="margin-top:10px">Denied egress is not in the audit log yet.</p>';
+    html += '<p class="muted" style="margin-top:10px">Non-relay is not proven.</p>';
   }
   return html;
 }
@@ -121,7 +120,7 @@ async function refresh() {
     const obs = data.observations || [];
     document.getElementById('timeline').innerHTML = renderTimeline(events);
     document.getElementById('decision').innerHTML = renderDecision(events);
-    document.getElementById('boundary').innerHTML = renderBoundary(obs, events);
+    document.getElementById('boundary').innerHTML = renderBoundary(obs, events, data.integrity);
     document.getElementById('evidence').innerHTML = renderEvidence(events);
     let status = 'Last refresh: ' + new Date().toLocaleTimeString();
     if (data.integrity && data.integrity !== 'ok') status += ' · integrity: ' + data.integrity;
