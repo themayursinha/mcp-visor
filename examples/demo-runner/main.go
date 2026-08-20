@@ -108,10 +108,16 @@ func prepareDemo() (*demoSession, error) {
 		observeLog:  filepath.Join(tmpDir, fmt.Sprintf("visor-server-obs-%d.jsonl", pid)),
 		approvalDir: filepath.Join(tmpDir, fmt.Sprintf("visor-approvals-%d", pid)),
 	}
+	sess.cleanup = sess.removeArtifacts
+
+	fail := func(err error) (*demoSession, error) {
+		sess.cleanup()
+		return nil, err
+	}
 
 	repoRoot, err := os.Getwd()
 	if err != nil {
-		return nil, fmt.Errorf("getwd: %w", err)
+		return fail(fmt.Errorf("getwd: %w", err))
 	}
 	for {
 		if _, e := os.Stat(filepath.Join(repoRoot, "go.mod")); e == nil {
@@ -119,22 +125,22 @@ func prepareDemo() (*demoSession, error) {
 		}
 		parent := filepath.Dir(repoRoot)
 		if parent == repoRoot {
-			return nil, errors.New("cannot find repo root (go.mod)")
+			return fail(errors.New("cannot find repo root (go.mod)"))
 		}
 		repoRoot = parent
 	}
 
 	if out, e := exec.Command("go", "build", "-o", sess.mockBin, filepath.Join(repoRoot, "examples", "demo-mcp-server")).CombinedOutput(); e != nil {
-		return nil, fmt.Errorf("build mock server: %w\n%s", e, out)
+		return fail(fmt.Errorf("build mock server: %w\n%s", e, out))
 	}
 	if out, e := exec.Command("go", "build", "-o", sess.visorBin, filepath.Join(repoRoot, "cmd", "mcp-visor")).CombinedOutput(); e != nil {
-		return nil, fmt.Errorf("build visor: %w\n%s", e, out)
+		return fail(fmt.Errorf("build visor: %w\n%s", e, out))
 	}
 	if err := writeDemoPolicy(sess.policyPath, sess.mockBin); err != nil {
-		return nil, fmt.Errorf("write demo policy: %w", err)
+		return fail(fmt.Errorf("write demo policy: %w", err))
 	}
 	if err := os.MkdirAll(sess.approvalDir, 0700); err != nil {
-		return nil, fmt.Errorf("create approval dir: %w", err)
+		return fail(fmt.Errorf("create approval dir: %w", err))
 	}
 
 	visorCmd := exec.Command(sess.visorBin, "serve",
@@ -143,38 +149,43 @@ func prepareDemo() (*demoSession, error) {
 	)
 	stdin, err := visorCmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("visor stdin: %w", err)
+		return fail(fmt.Errorf("visor stdin: %w", err))
 	}
 	stdout, err := visorCmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("visor stdout: %w", err)
+		return fail(fmt.Errorf("visor stdout: %w", err))
 	}
 	stderr, err := visorCmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("visor stderr: %w", err)
+		return fail(fmt.Errorf("visor stderr: %w", err))
 	}
 	if err := visorCmd.Start(); err != nil {
-		return nil, fmt.Errorf("start visor: %w", err)
+		return fail(fmt.Errorf("start visor: %w", err))
 	}
 	sess.visorCmd = visorCmd
 	go drainStderr(stderr)
 
 	sess.ctx = &mcpContext{w: bufio.NewWriter(stdin), r: bufio.NewReader(stdout)}
 	if err := sess.ctx.initialize(); err != nil {
-		_ = visorCmd.Process.Kill()
-		return nil, fmt.Errorf("initialize: %w", err)
-	}
-
-	sess.cleanup = func() {
-		_ = visorCmd.Process.Kill()
-		_ = os.Remove(sess.mockBin)
-		_ = os.Remove(sess.visorBin)
-		_ = os.Remove(sess.policyPath)
-		_ = os.Remove(sess.auditLog)
-		_ = os.Remove(sess.observeLog)
-		_ = os.RemoveAll(sess.approvalDir)
+		return fail(fmt.Errorf("initialize: %w", err))
 	}
 	return sess, nil
+}
+
+func (s *demoSession) removeArtifacts() {
+	if s == nil {
+		return
+	}
+	if s.visorCmd != nil && s.visorCmd.Process != nil {
+		_ = s.visorCmd.Process.Kill()
+		_ = s.visorCmd.Wait()
+	}
+	_ = os.Remove(s.mockBin)
+	_ = os.Remove(s.visorBin)
+	_ = os.Remove(s.policyPath)
+	_ = os.Remove(s.auditLog)
+	_ = os.Remove(s.observeLog)
+	_ = os.RemoveAll(s.approvalDir)
 }
 
 func (s *demoSession) driveSequence(narrate bool, stepSleep time.Duration) error {

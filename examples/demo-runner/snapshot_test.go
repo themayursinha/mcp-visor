@@ -141,6 +141,45 @@ func TestProofIntegrityRejectsPartialLedger(t *testing.T) {
 	if proofIntegrity(missingAllows) == "ok" {
 		t.Fatal("ledger without file_read allows must not report integrity ok")
 	}
+
+	unhashedDeny := canonicalProofSnapshot()
+	delete(unhashedDeny.AuditEvents[3], "hash")
+	if proofIntegrity(unhashedDeny) == "ok" {
+		t.Fatal("deny without hash must not report integrity ok")
+	}
+
+	unhashedTaint := canonicalProofSnapshot()
+	unhashedTaint.AuditEvents[2]["hash"] = ""
+	if proofIntegrity(unhashedTaint) == "ok" {
+		t.Fatal("taint without hash must not report integrity ok")
+	}
+}
+
+func TestReadSnapshotRejectsMalformedLedger(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	audit := filepath.Join(dir, "audit.jsonl")
+	obs := filepath.Join(dir, "obs.jsonl")
+	body := `{"event_type":"tool_call_allowed","tool":"file_read","hash":"h1"}` + "\n" + `{not-json` + "\n"
+	if err := os.WriteFile(audit, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(obs, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSnapshot(audit, obs); err == nil {
+		t.Fatal("malformed audit JSONL must fail closed, not skip the bad line")
+	}
+
+	if err := os.WriteFile(audit, []byte(`{"event_type":"tool_call_allowed","tool":"file_read","hash":"h1"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(obs, []byte("{truncated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSnapshot(audit, obs); err == nil {
+		t.Fatal("malformed observe-log must fail closed, not skip the bad line")
+	}
 }
 
 func TestProofIntegrityAcceptsCanonicalSequence(t *testing.T) {

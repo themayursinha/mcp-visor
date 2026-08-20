@@ -119,11 +119,6 @@ func validateCanonicalProof(s Snapshot) error {
 	if len(allows) < 2 {
 		return errors.New("missing file_read allow events")
 	}
-	for _, a := range allows {
-		if hash, _ := a["hash"].(string); hash == "" {
-			return errors.New("allow missing hash")
-		}
-	}
 	if taint == nil {
 		return errors.New("missing session_tainted")
 	}
@@ -145,7 +140,14 @@ func validateCanonicalProof(s Snapshot) error {
 	if decision, _ := deny["policy_decision"].(string); decision != "deny" {
 		return errors.New("deny decision is not deny")
 	}
-	if err := validateHashLinkage(s.AuditEvents); err != nil {
+	proofEvents := append([]map[string]any{}, allows...)
+	proofEvents = append(proofEvents, taint, deny)
+	for _, ev := range proofEvents {
+		if stringField(ev, "hash") == "" {
+			return errors.New("proof event missing hash")
+		}
+	}
+	if err := validateHashLinkage(proofEvents); err != nil {
 		return err
 	}
 	return nil
@@ -177,7 +179,7 @@ func validateHashLinkage(events []map[string]any) error {
 	for _, ev := range events {
 		hash, _ := ev["hash"].(string)
 		if hash == "" {
-			continue
+			return errors.New("proof event missing hash")
 		}
 		rows = append(rows, rec{
 			idx:  chainIndex(ev),
@@ -234,7 +236,7 @@ func readAuditEvents(path string) ([]map[string]any, error) {
 		}
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
+			return nil, fmt.Errorf("malformed audit event: %w", err)
 		}
 		out = append(out, event)
 	}
@@ -260,7 +262,7 @@ func readObservationsFile(path string) ([]demoutil.ObsLine, error) {
 		}
 		var m map[string]any
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
-			continue
+			return nil, fmt.Errorf("malformed observation: %w", err)
 		}
 		tool, _ := m["tool"].(string)
 		received, _ := m["received"].(bool)

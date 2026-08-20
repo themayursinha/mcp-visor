@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,5 +49,28 @@ func TestSnapshotReadsDenyFromLedger(t *testing.T) {
 	}
 	if !snapshotHasDeny(s) {
 		t.Fatal("deny present in the ledger must appear in the snapshot")
+	}
+}
+
+func TestHandleSnapshotMalformedLedgerHasNoDecision(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	audit := filepath.Join(dir, "audit.jsonl")
+	obs := filepath.Join(dir, "obs.jsonl")
+	if err := os.WriteFile(audit, []byte("{\"event_type\":\"tool_call_denied\"}\n{truncated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(obs, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ps := &proofServer{auditLog: audit, observeLog: obs}
+	ps.sequenceDone.Store(true)
+	rec := httptest.NewRecorder()
+	ps.handleSnapshot(rec, httptest.NewRequest(http.MethodGet, "/api/snapshot", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("malformed ledger must yield no snapshot decision, got %d body %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"integrity":"ok"`) {
+		t.Fatal("malformed ledger must not report integrity ok")
 	}
 }
