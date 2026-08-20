@@ -366,9 +366,11 @@ func (l *Logger) prepareRecord(event Event) (Event, []byte, error) {
 	event.PrevHash = l.prevHash
 	event.ChainIndex = l.chainIndex
 
-	hashData := l.eventHashPayload(event)
-	h := sha256.Sum256(hashData)
-	event.Hash = hex.EncodeToString(h[:])
+	hash, err := RecordHash(event)
+	if err != nil {
+		return Event{}, nil, err
+	}
+	event.Hash = hash
 
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -393,11 +395,29 @@ func (l *Logger) appendFull(data []byte) error {
 	return nil
 }
 
-func (l *Logger) eventHashPayload(event Event) []byte {
+func RecordHash(event Event) (string, error) {
 	e := event
 	e.Hash = ""
-	data, _ := json.Marshal(e)
-	return data
+	data, err := json.Marshal(e)
+	if err != nil {
+		return "", fmt.Errorf("audit hash marshal: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func VerifyEventHash(event Event) error {
+	if event.Hash == "" {
+		return errors.New("audit record missing hash")
+	}
+	got, err := RecordHash(event)
+	if err != nil {
+		return err
+	}
+	if got != event.Hash {
+		return errors.New("audit record hash mismatch")
+	}
+	return nil
 }
 
 func (l *Logger) Close() error {
