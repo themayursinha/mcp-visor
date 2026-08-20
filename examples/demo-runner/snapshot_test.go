@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/themayursinha/mcp-visor/internal/demoutil"
 )
 
 func TestRejectNonLoopbackAddr(t *testing.T) {
@@ -99,5 +101,66 @@ func TestSnapshotEmptyObservationsDoNotProveNonRelay(t *testing.T) {
 	}
 	if httpPost300Received(s) {
 		t.Fatal("empty observe-log must not claim http_post #300 was received")
+	}
+}
+
+func TestProofIntegrityRejectsPartialLedger(t *testing.T) {
+	t.Parallel()
+	obs := []demoutil.ObsLine{
+		{Tool: "file_read", RequestID: 100, Received: true},
+		{Tool: "file_read", RequestID: 200, Received: true},
+	}
+	partial := Snapshot{
+		Observations: obs,
+		AuditEvents: []map[string]any{
+			{
+				"event_type":      "tool_call_denied",
+				"tool":            "http_post",
+				"policy_decision": "deny",
+				"policy_rule":     "unrelated",
+			},
+			{
+				"event_type":     "session_tainted",
+				"tool":           "file_read",
+				"session_taints": []any{"other_taint"},
+			},
+		},
+	}
+	if proofIntegrity(partial) == "ok" {
+		t.Fatal("unrelated/partial ledger must not report integrity ok")
+	}
+
+	brokenChain := canonicalProofSnapshot()
+	brokenChain.AuditEvents[1]["prev_hash"] = "not-the-previous-hash"
+	if proofIntegrity(brokenChain) == "ok" {
+		t.Fatal("broken hash chain must not report integrity ok")
+	}
+
+	missingAllows := canonicalProofSnapshot()
+	missingAllows.AuditEvents = missingAllows.AuditEvents[2:]
+	if proofIntegrity(missingAllows) == "ok" {
+		t.Fatal("ledger without file_read allows must not report integrity ok")
+	}
+}
+
+func TestProofIntegrityAcceptsCanonicalSequence(t *testing.T) {
+	t.Parallel()
+	if got := proofIntegrity(canonicalProofSnapshot()); got != "ok" {
+		t.Fatalf("canonical proof: %s", got)
+	}
+}
+
+func canonicalProofSnapshot() Snapshot {
+	return Snapshot{
+		Observations: []demoutil.ObsLine{
+			{Tool: "file_read", RequestID: 100, Received: true},
+			{Tool: "file_read", RequestID: 200, Received: true},
+		},
+		AuditEvents: []map[string]any{
+			{"event_type": "tool_call_allowed", "tool": "file_read", "policy_decision": "allow", "hash": "h1", "prev_hash": "", "chain_index": float64(1)},
+			{"event_type": "tool_call_allowed", "tool": "file_read", "policy_decision": "allow", "hash": "h2", "prev_hash": "h1", "chain_index": float64(2)},
+			{"event_type": "session_tainted", "tool": "file_read", "session_taints": []any{"sensitive_file_accessed"}, "hash": "h3", "prev_hash": "h2", "chain_index": float64(3)},
+			{"event_type": "tool_call_denied", "tool": "http_post", "policy_decision": "deny", "policy_rule": "block_sensitive_egress", "hash": "h4", "prev_hash": "h3", "chain_index": float64(4)},
+		},
 	}
 }

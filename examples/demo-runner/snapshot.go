@@ -91,29 +91,131 @@ func readSnapshot(auditPath, observePath string) (Snapshot, error) {
 }
 
 func proofIntegrity(s Snapshot) string {
-	if err := demoutil.ValidateObservations(s.Observations); err != nil {
-		return err.Error()
-	}
-	if err := demoutil.ValidateEvidence(evidenceFromEvents(s.AuditEvents)); err != nil {
+	if err := validateCanonicalProof(s); err != nil {
 		return err.Error()
 	}
 	return "ok"
 }
 
-func evidenceFromEvents(events []map[string]any) *demoutil.DemoEvidence {
-	ev := &demoutil.DemoEvidence{}
-	for _, event := range events {
-		switch event["event_type"] {
+func validateCanonicalProof(s Snapshot) error {
+	if err := demoutil.ValidateObservations(s.Observations); err != nil {
+		return err
+	}
+
+	var allows []map[string]any
+	var taint, deny map[string]any
+	for _, ev := range s.AuditEvents {
+		switch ev["event_type"] {
+		case "tool_call_allowed":
+			if tool, _ := ev["tool"].(string); tool == "file_read" {
+				allows = append(allows, ev)
+			}
 		case "session_tainted":
-			ev.Taint = extractTaintName(event)
-			ev.SourceTool, _ = event["tool"].(string)
+			taint = ev
 		case "tool_call_denied":
-			ev.SinkTool, _ = event["tool"].(string)
-			ev.Rule, _ = event["policy_rule"].(string)
-			ev.Decision, _ = event["policy_decision"].(string)
+			deny = ev
 		}
 	}
-	return ev
+	if len(allows) < 2 {
+		return errors.New("missing file_read allow events")
+	}
+	for _, a := range allows {
+		if hash, _ := a["hash"].(string); hash == "" {
+			return errors.New("allow missing hash")
+		}
+	}
+	if taint == nil {
+		return errors.New("missing session_tainted")
+	}
+	if tool, _ := taint["tool"].(string); tool != "file_read" {
+		return errors.New("taint source is not file_read")
+	}
+	if !eventHasTaint(taint, "sensitive_file_accessed") {
+		return errors.New("missing taint sensitive_file_accessed")
+	}
+	if deny == nil {
+		return errors.New("missing tool_call_denied")
+	}
+	if tool, _ := deny["tool"].(string); tool != "http_post" {
+		return errors.New("deny sink is not http_post")
+	}
+	if rule, _ := deny["policy_rule"].(string); rule != "block_sensitive_egress" {
+		return errors.New("deny rule is not block_sensitive_egress")
+	}
+	if decision, _ := deny["policy_decision"].(string); decision != "deny" {
+		return errors.New("deny decision is not deny")
+	}
+	if err := validateHashLinkage(s.AuditEvents); err != nil {
+		return err
+	}
+	return nil
+}
+
+func eventHasTaint(ev map[string]any, name string) bool {
+	if extractTaintName(ev) == name {
+		return true
+	}
+	raw, ok := ev["session_taints"].([]any)
+	if !ok {
+		return false
+	}
+	for _, v := range raw {
+		if s, ok := v.(string); ok && s == name {
+			return true
+		}
+	}
+	return false
+}
+
+func validateHashLinkage(events []map[string]any) error {
+	type rec struct {
+		idx  uint64
+		hash string
+		prev string
+	}
+	var rows []rec
+	for _, ev := range events {
+		hash, _ := ev["hash"].(string)
+		if hash == "" {
+			continue
+		}
+		rows = append(rows, rec{
+			idx:  chainIndex(ev),
+			hash: hash,
+			prev: stringField(ev, "prev_hash"),
+		})
+	}
+	if len(rows) < 2 {
+		return errors.New("missing hash-linked audit events")
+	}
+	for i := 1; i < len(rows); i++ {
+		for j := i; j > 0 && rows[j].idx < rows[j-1].idx; j-- {
+			rows[j], rows[j-1] = rows[j-1], rows[j]
+		}
+	}
+	for i := 1; i < len(rows); i++ {
+		if rows[i].prev != rows[i-1].hash {
+			return errors.New("audit hash chain is broken")
+		}
+	}
+	return nil
+}
+
+func stringField(ev map[string]any, key string) string {
+	s, _ := ev[key].(string)
+	return s
+}
+
+func chainIndex(ev map[string]any) uint64 {
+	switch v := ev["chain_index"].(type) {
+	case float64:
+		if v < 0 {
+			return 0
+		}
+		return uint64(v)
+	default:
+		return 0
+	}
 }
 
 func readAuditEvents(path string) ([]map[string]any, error) {
