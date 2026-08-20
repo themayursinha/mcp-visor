@@ -21,6 +21,29 @@ if git grep -n -I -E '(/home/mayur|/datadisk|/Users/[^/[:space:]]+|C:\\Users\\|[
 fi
 rm -f /tmp/mcp-visor-sensitive-hits.txt
 
+# Reject machine-specific Tailscale CGNAT host addresses (100.64.0.0/10).
+# The CIDR documentation string and the allowlisted test/example addresses
+# used in this repository are permitted. Do not add private host IPs here.
+allowed_cgnat='^(100\.64\.0\.0|100\.64\.0\.1|100\.64\.1\.2|100\.127\.255\.254)$'
+if git grep -n -I -E '\b100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+\b' -- . ':(exclude)scripts/check-sensitive-content' >/tmp/mcp-visor-cgnat-hits.txt 2>/dev/null; then
+  : >/tmp/mcp-visor-cgnat-bad.txt
+  while IFS= read -r line; do
+    ips=$(printf '%s\n' "$line" | grep -oE '100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+' || true)
+    for ip in $ips; do
+      if ! printf '%s\n' "$ip" | grep -qxE "$allowed_cgnat"; then
+        printf '%s\n' "$line" >> /tmp/mcp-visor-cgnat-bad.txt
+        break
+      fi
+    done
+  done < /tmp/mcp-visor-cgnat-hits.txt
+  if [[ -s /tmp/mcp-visor-cgnat-bad.txt ]]; then
+    echo "BLOCKED: tracked files contain machine-specific Tailscale CGNAT addresses:" >&2
+    cat /tmp/mcp-visor-cgnat-bad.txt >&2
+    fail=1
+  fi
+fi
+rm -f /tmp/mcp-visor-cgnat-hits.txt /tmp/mcp-visor-cgnat-bad.txt
+
 if [[ "$fail" -ne 0 ]]; then
   echo "Sensitive content guard failed." >&2
   exit 1
