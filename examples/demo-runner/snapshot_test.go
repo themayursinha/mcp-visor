@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/demoutil"
 )
 
@@ -69,7 +71,7 @@ func TestSnapshotEmptyHasNoDeny(t *testing.T) {
 	}
 
 	allowOnly := filepath.Join(dir, "allow.jsonl")
-	if err := os.WriteFile(allowOnly, []byte(`{"event_type":"tool_call_allowed","policy_decision":"allow","hash":"abc","prev_hash":"","chain_index":1}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(allowOnly, []byte(`{"event_type":"tool_call_allowed","policy_decision":"allow"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err = readSnapshot(allowOnly, filepath.Join(dir, "empty.jsonl"))
@@ -130,25 +132,25 @@ func TestProofIntegrityRejectsPartialLedger(t *testing.T) {
 		t.Fatal("unrelated/partial ledger must not report integrity ok")
 	}
 
-	brokenChain := canonicalProofSnapshot()
+	brokenChain := hashedCanonicalProofSnapshot(t)
 	brokenChain.AuditEvents[1]["prev_hash"] = "not-the-previous-hash"
 	if proofIntegrity(brokenChain) == "ok" {
 		t.Fatal("broken hash chain must not report integrity ok")
 	}
 
-	missingAllows := canonicalProofSnapshot()
+	missingAllows := hashedCanonicalProofSnapshot(t)
 	missingAllows.AuditEvents = missingAllows.AuditEvents[2:]
 	if proofIntegrity(missingAllows) == "ok" {
 		t.Fatal("ledger without file_read allows must not report integrity ok")
 	}
 
-	unhashedDeny := canonicalProofSnapshot()
+	unhashedDeny := hashedCanonicalProofSnapshot(t)
 	delete(unhashedDeny.AuditEvents[3], "hash")
 	if proofIntegrity(unhashedDeny) == "ok" {
 		t.Fatal("deny without hash must not report integrity ok")
 	}
 
-	unhashedTaint := canonicalProofSnapshot()
+	unhashedTaint := hashedCanonicalProofSnapshot(t)
 	unhashedTaint.AuditEvents[2]["hash"] = ""
 	if proofIntegrity(unhashedTaint) == "ok" {
 		t.Fatal("taint without hash must not report integrity ok")
@@ -182,24 +184,131 @@ func TestReadSnapshotRejectsMalformedLedger(t *testing.T) {
 	}
 }
 
+func TestReadSnapshotRejectsUnverifiableHash(t *testing.T) {
+	t.Parallel()
+	snap := hashedCanonicalProofSnapshot(t)
+	snap.AuditEvents[3]["tool"] = "slack_send_message"
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	obsPath := filepath.Join(dir, "obs.jsonl")
+	var body []byte
+	for _, ev := range snap.AuditEvents {
+		line, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = append(body, line...)
+		body = append(body, '\n')
+	}
+	if err := os.WriteFile(auditPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(obsPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSnapshot(auditPath, obsPath); err == nil {
+		t.Fatal("payload mutation with stored hash must fail closed at snapshot read")
+	}
+}
+
 func TestProofIntegrityAcceptsCanonicalSequence(t *testing.T) {
 	t.Parallel()
-	if got := proofIntegrity(canonicalProofSnapshot()); got != "ok" {
+	if got := proofIntegrity(hashedCanonicalProofSnapshot(t)); got != "ok" {
 		t.Fatalf("canonical proof: %s", got)
 	}
 }
 
-func canonicalProofSnapshot() Snapshot {
+func TestProofIntegrityRejectsPayloadMutationWithUnchangedHash(t *testing.T) {
+	t.Parallel()
+	base := hashedCanonicalProofSnapshot(t)
+	if got := proofIntegrity(base); got != "ok" {
+		t.Fatalf("hashed canonical proof must pass before mutation: %s", got)
+	}
+
+	mutatedTimestamp := cloneProofSnapshot(base)
+	mutatedTimestamp.AuditEvents[3]["timestamp"] = "2099-01-01T00:00:00Z"
+	if proofIntegrity(mutatedTimestamp) == "ok" {
+		t.Fatal("payload mutation with unchanged hash/prev_hash/chain_index must not report integrity ok")
+	}
+
+	mutatedTool := cloneProofSnapshot(base)
+	mutatedTool.AuditEvents[0]["tool"] = "file_write"
+	if proofIntegrity(mutatedTool) == "ok" {
+		t.Fatal("mutated tool with unchanged hash must not report integrity ok")
+	}
+
+	mutatedRule := cloneProofSnapshot(base)
+	mutatedRule.AuditEvents[3]["policy_rule"] = "unrelated_rule"
+	if proofIntegrity(mutatedRule) == "ok" {
+		t.Fatal("mutated policy_rule with unchanged hash must not report integrity ok")
+	}
+
+	mutatedDecision := cloneProofSnapshot(base)
+	mutatedDecision.AuditEvents[3]["policy_decision"] = "allow"
+	if proofIntegrity(mutatedDecision) == "ok" {
+		t.Fatal("mutated policy_decision with unchanged hash must not report integrity ok")
+	}
+
+	mutatedTaint := cloneProofSnapshot(base)
+	mutatedTaint.AuditEvents[2]["session_taints"] = []any{"other_taint"}
+	if proofIntegrity(mutatedTaint) == "ok" {
+		t.Fatal("mutated taint with unchanged hash must not report integrity ok")
+	}
+
+	mutatedHash := cloneProofSnapshot(base)
+	mutatedHash.AuditEvents[3]["hash"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if proofIntegrity(mutatedHash) == "ok" {
+		t.Fatal("arbitrarily modified hash must not report integrity ok")
+	}
+}
+
+func hashedCanonicalProofSnapshot(t *testing.T) Snapshot {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	events := []audit.Event{
+		{EventType: audit.EventToolAllowed, SessionID: "proof", Server: "mock", Tool: "file_read", Decision: "allow"},
+		{EventType: audit.EventToolAllowed, SessionID: "proof", Server: "mock", Tool: "file_read", Decision: "allow"},
+		{EventType: audit.EventSessionTainted, SessionID: "proof", Server: "mock", Tool: "file_read", SessionTaints: []string{"sensitive_file_accessed"}},
+		{EventType: audit.EventToolDenied, SessionID: "proof", Server: "mock", Tool: "http_post", Decision: "deny", PolicyRule: "block_sensitive_egress"},
+	}
+	for _, ev := range events {
+		if err := l.Log(ev); err != nil {
+			t.Fatalf("log audit event: %v", err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+	parsed, err := readAuditEvents(path)
+	if err != nil {
+		t.Fatalf("read hashed audit events: %v", err)
+	}
+	if len(parsed) != 4 {
+		t.Fatalf("expected 4 hashed audit events, got %d", len(parsed))
+	}
 	return Snapshot{
 		Observations: []demoutil.ObsLine{
 			{Tool: "file_read", RequestID: 100, Received: true},
 			{Tool: "file_read", RequestID: 200, Received: true},
 		},
-		AuditEvents: []map[string]any{
-			{"event_type": "tool_call_allowed", "tool": "file_read", "policy_decision": "allow", "hash": "h1", "prev_hash": "", "chain_index": float64(1)},
-			{"event_type": "tool_call_allowed", "tool": "file_read", "policy_decision": "allow", "hash": "h2", "prev_hash": "h1", "chain_index": float64(2)},
-			{"event_type": "session_tainted", "tool": "file_read", "session_taints": []any{"sensitive_file_accessed"}, "hash": "h3", "prev_hash": "h2", "chain_index": float64(3)},
-			{"event_type": "tool_call_denied", "tool": "http_post", "policy_decision": "deny", "policy_rule": "block_sensitive_egress", "hash": "h4", "prev_hash": "h3", "chain_index": float64(4)},
-		},
+		AuditEvents: parsed,
 	}
+}
+
+func cloneProofSnapshot(s Snapshot) Snapshot {
+	events := make([]map[string]any, len(s.AuditEvents))
+	for i, ev := range s.AuditEvents {
+		cp := make(map[string]any, len(ev))
+		for k, v := range ev {
+			cp[k] = v
+		}
+		events[i] = cp
+	}
+	obs := make([]demoutil.ObsLine, len(s.Observations))
+	copy(obs, s.Observations)
+	return Snapshot{Observations: obs, AuditEvents: events}
 }

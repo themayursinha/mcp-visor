@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/demoutil"
 )
 
@@ -143,14 +144,30 @@ func validateCanonicalProof(s Snapshot) error {
 	proofEvents := append([]map[string]any{}, allows...)
 	proofEvents = append(proofEvents, taint, deny)
 	for _, ev := range proofEvents {
-		if stringField(ev, "hash") == "" {
-			return errors.New("proof event missing hash")
+		rec, err := auditEventFromMap(ev)
+		if err != nil {
+			return fmt.Errorf("unreadable proof event: %w", err)
+		}
+		if err := audit.VerifyEventHash(rec); err != nil {
+			return err
 		}
 	}
 	if err := validateHashLinkage(proofEvents); err != nil {
 		return err
 	}
 	return nil
+}
+
+func auditEventFromMap(m map[string]any) (audit.Event, error) {
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return audit.Event{}, err
+	}
+	var event audit.Event
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return audit.Event{}, err
+	}
+	return event, nil
 }
 
 func eventHasTaint(ev map[string]any, name string) bool {
@@ -237,6 +254,15 @@ func readAuditEvents(path string) ([]map[string]any, error) {
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			return nil, fmt.Errorf("malformed audit event: %w", err)
+		}
+		var rec audit.Event
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			return nil, fmt.Errorf("malformed audit event: %w", err)
+		}
+		if rec.Hash != "" {
+			if err := audit.VerifyEventHash(rec); err != nil {
+				return nil, fmt.Errorf("unverifiable audit event: %w", err)
+			}
 		}
 		out = append(out, event)
 	}
