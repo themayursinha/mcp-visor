@@ -1,0 +1,94 @@
+{
+  "task_id": "T-DEMO-001-proof-console",
+  "invariant_ids": [
+    "H9",
+    "H10",
+    "H19"
+  ],
+  "security_sensitive": true,
+  "security_problem": "SECURITY INVARIANT: The Proof Console never invents an allow/deny. Panels render only records already written by the real proxy (audit JSONL) and the mock server (observe-log). A missing deny or a received http_post is shown as incomplete/failed proof, not as a scripted success. SUPPORTED MODEL: Local one-shot scripted proof (file_read 100 → file_read 200 → http_post 300) against the built-in mock server, served on loopback or Tailscale CGNAT (100.64.0.0/10) only. ATTACK CLASSES: simulated-decision; non-loopback-bind; missing-non-relay-claim; dashboard-feed-as-evidence. FAILURE SEMANTICS: Wildcard, LAN, and public binds fail closed. Empty or malformed ledger yields no decision. Observe-log showing http_post #300 fails the proof. Uncertainty never renders a successful deny. NON-GOALS: policy editor, accounts, fleet views, replacing --dashboard, changing allow/deny, exposing the UI from the mcp-visor binary or on 0.0.0.0.",
+  "required_behavior": "examples/demo-runner -ui serves a local Proof Console on loopback (default 127.0.0.1:9092) or an explicit Tailscale CGNAT address in 100.64.0.0/10. GET /api/snapshot returns parsed audit JSONL events and observe-log lines from the files the runner already creates; it does not call DashboardProvider or invent policy_decision values. After the real three-call sequence, the snapshot contains tool_call_allowed, session_tainted, and tool_call_denied (policy_rule=block_sensitive_egress), allow events carry hash/prev_hash/chain_index, and http_post #300 is absent from observations. The HTML maps event_type/fields only; empty ledger shows no deny.",
+  "failure_behavior": "Empty host, 0.0.0.0, ::, RFC1918 LAN, and public IPs are rejected before Listen. Loopback and Tailscale CGNAT (100.64.0.0/10) are allowed. Missing or empty audit/observe files yield empty arrays and no deny. If the mock observe-log records http_post #300, integrity reports failure and the console must not claim non-relay success.",
+  "spec_revision": 2,
+  "non_goals": [
+    "policy editor",
+    "user accounts or authentication beyond loopback or Tailscale bind",
+    "fleet or multi-session views",
+    "Grafana/SIEM browser",
+    "MCP inspector for arbitrary agents",
+    "replacing or hardening mcp-visor serve -dashboard",
+    "changing proxy allow/deny/audit behavior",
+    "exposing the Proof Console from the mcp-visor binary"
+  ],
+  "attack_classes": [
+    {
+      "id": "simulated-decision",
+      "failure_class": "simulated-decision",
+      "expected": "empty or deny-less audit JSONL never produces policy_decision=deny in the snapshot; the UI does not hardcode a successful deny"
+    },
+    {
+      "id": "non-loopback-bind",
+      "failure_class": "non-loopback-bind",
+      "expected": "listen addresses that are not loopback or Tailscale CGNAT (100.64.0.0/10) fail closed before the HTTP server starts; 0.0.0.0, empty host, RFC1918, and public IPs are rejected"
+    },
+    {
+      "id": "missing-non-relay-claim",
+      "failure_class": "missing-non-relay-claim",
+      "expected": "non-relay is claimed only from observe-log absence of http_post #300; empty observations do not prove the denied call never reached the server"
+    },
+    {
+      "id": "dashboard-feed-as-evidence",
+      "failure_class": "dashboard-feed-as-evidence",
+      "expected": "snapshot is built from audit JSONL and observe-log only, never from Proxy.DashboardProvider or /api/calls session history"
+    }
+  ],
+  "allowed_paths": [
+    "harness/tasks/T-DEMO-001-proof-console.json",
+    "examples/demo-runner",
+    "internal/demoutil",
+    "tests/integration",
+    "README.md",
+    "Makefile",
+    "docs/complexity-budget.md",
+    ".gitignore"
+  ],
+  "approval_gated_paths": [
+    "tests/integration",
+    "README.md"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": [
+        "go",
+        "test",
+        "./examples/demo-runner",
+        "-run",
+        "TestSnapshotEmptyHasNoDeny|TestRejectNonLoopbackAddr|TestSnapshotEmptyObservationsDoNotProveNonRelay",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": [
+        "go",
+        "test",
+        "./examples/demo-runner",
+        "./tests/integration",
+        "-run",
+        "TestSnapshotEmptyHasNoDeny|TestRejectNonLoopbackAddr|TestSnapshotEmptyObservationsDoNotProveNonRelay|TestProofConsoleSnapshot",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ]
+}

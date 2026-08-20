@@ -16,10 +16,10 @@ DRAFT.md
 PRIVATE.md
 INTERNAL.md
 
-# Build artifacts
-mcp-visor
-demo-mcp-server
-demo-runner
+# Build artifacts (root binaries only; do not ignore examples/<name>/ sources)
+/mcp-visor
+/demo-mcp-server
+/demo-runner
 *.test
 dist/
 *.exe
