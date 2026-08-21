@@ -93,4 +93,3 @@ isolated-vm 7.0.0 — upgrade to 7.0.1 / 6.2.0.
 
 - GHSA-864f-rcv7-6rh4 — https://github.com/laverdet/isolated-vm/security/advisories/GHSA-864f-rcv7-6rh4
 - Endor Labs writeup — https://www.endorlabs.com/learn/ghsa-864f-rcv7-6rh4-critical-type-confusion-vulnerability-in-isolated-vm
-- Obsidian: `isolated-vm Sandbox Escape — Boundary Composition and Containment Attestation`
