@@ -1,0 +1,7 @@
+# node_modules (both env installs)
+node_modules/
+envs/*/node_modules/
+
+# npm debug logs
+npm-debug.log*
+*.log
