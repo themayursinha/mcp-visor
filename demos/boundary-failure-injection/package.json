@@ -1,0 +1,14 @@
+{
+  "name": "boundary-failure-injection",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Boundary Failure Injection demo — isolated-vm 7.0.0 (GHSA-864f-rcv7-6rh4) vs 7.0.1 containment attestation",
+  "type": "commonjs",
+  "scripts": {
+    "setup": "node scripts/setup-envs.js",
+    "run": "node scripts/run-demo.js",
+    "test": "node scripts/run-demo.js --self-test"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
