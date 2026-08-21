@@ -18,6 +18,20 @@ Model guardrails try to shape what the model says or thinks inside the context w
 
 ---
 
+## The Visor Trust Plane research program
+
+MCP Visor is the production enforcement layer of a broader research program on **governing autonomous agents at the boundary**. Two deterministic prototypes prove the semantics before any integration into this repo:
+
+| Repo | Question it answers | Status |
+|---|---|---|
+| [**mcp-visor**](https://github.com/themayursinha/mcp-visor) | What may an agent do? (runtime policy at the MCP `tools/call` boundary) | **Production** |
+| [**authority-graph-simulator**](https://github.com/themayursinha/authority-graph-simulator) | What authority can an agent *reach*? (counterfactual delegation analysis) | Prototype, merged |
+| [**capability-delta-receipts**](https://github.com/themayursinha/capability-delta-receipts) | What capability can an agent *acquire*? (trajectory-level capability accounting) | Prototype, merged |
+
+The Trust Plane governs not just what authority an agent is *given*, but what new authority its *discoveries make possible* — authorization must be re-evaluated when an agent materially increases its effective capabilities, even when nominal permissions are unchanged.
+
+---
+
 ## Why MCP Visor exists
 
 AI agents can now read files, call APIs, run commands, query databases, and modify infrastructure through MCP tools. Prompt-only controls are useful guidance, but they are not an execution boundary.
