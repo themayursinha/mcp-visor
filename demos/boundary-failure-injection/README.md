@@ -40,7 +40,7 @@ all valid.
 ```bash
 npm run setup   # installs isolated-vm 7.0.0 + 7.0.1 into envs/
 npm run run     # runs the demo: escape repro + Visor boundary decision
-npm test        # self-test: asserts vulnerable=affected, fixed=not affected
+npm test        # self-test: vulnerable crashes SIGSEGV/139; fixed refuses cleanly (asserts runGuest outcomes)
 ```
 
 ## Expected output (verified on Node 22 / Linux)
