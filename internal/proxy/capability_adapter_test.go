@@ -610,3 +610,22 @@ func TestP2GenericToolUrlArgDoesNotPause(t *testing.T) {
 		t.Fatal("exec({url}) reached approval; url was treated as a structured destination")
 	}
 }
+
+// TestP1CommandBearingArrayOfObjectsPauses: Codex P1 — arguments as an
+// array of objects must still expose the buried command and pause.
+func TestP1CommandBearingArrayOfObjectsPauses(t *testing.T) {
+	dir := t.TempDir()
+	p := optedInWorkspaceProxy(t, dir, "sess-args-array-obj")
+	approved := approveFirstRequest(t, filepath.Join(dir, "approvals"))
+	action := callTool(t, p, 1, "run", map[string]any{
+		"arguments": []any{map[string]any{"command": "bash -c id"}},
+	})
+	if action != "forward" {
+		t.Fatalf("arguments:[{command}] must PAUSE → approval → forward, got %q", action)
+	}
+	select {
+	case <-approved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("array-of-objects command never reached approval; maps in the array were dropped")
+	}
+}

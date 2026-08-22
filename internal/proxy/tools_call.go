@@ -540,14 +540,13 @@ func attachCapabilityArtifact(event *audit.Event, artifact any) {
 }
 
 // stringArgs converts the redacted args map into the evaluator's typed
-// observation surface. String scalars and argv slices are preserved.
-// Nested objects under a command-bearing key (command/cmd/args/arguments/
-// executable/shell_command) are flattened recursively into a space-joined
-// string so a schema such as run({"arguments":{"command":"bash -c id"}})
-// cannot drop the command surface (fail-open ALLOW). Non-command nested
-// objects, numbers, and booleans are omitted — they are not a command
-// invocation. Deterministic: map iteration order does not matter because
-// nested keys are sorted before joining.
+// observation surface. Under a command-bearing key, ANY JSON subtree
+// (string, argv array, nested object, array of objects) is command surface
+// and is flattened recursively so run({"arguments":[{"command":"bash -c id"}]})
+// cannot drop the command (fail-open ALLOW). Under a payload key, only
+// string scalars and string arrays are kept; nested objects stay dropped
+// (Rev 15). Numbers and booleans are omitted. Nested map keys are sorted
+// so the joined result is deterministic; array order is preserved.
 func stringArgs(redactedArgs map[string]any) map[string]string {
 	if len(redactedArgs) == 0 {
 		return nil
@@ -561,20 +560,15 @@ func stringArgs(redactedArgs map[string]any) map[string]string {
 	return out
 }
 
-// flattenArgValue reduces one redacted arg value to the typed string the
-// evaluator scans. Command-bearing nested objects are command surface and
-// are flattened; any other nested object is dropped.
 func flattenArgValue(key string, v any) string {
+	if isCommandBearingKey(key) {
+		return flattenCommandSurface(v)
+	}
 	switch tv := v.(type) {
 	case string:
 		return tv
 	case []any, []string:
-		return joinArgSlice(tv)
-	case map[string]any:
-		if !isCommandBearingKey(key) {
-			return ""
-		}
-		return flattenCommandBearingMap(tv)
+		return joinStringSlice(tv)
 	default:
 		return ""
 	}
@@ -588,58 +582,61 @@ func isCommandBearingKey(k string) bool {
 	return false
 }
 
-// flattenCommandBearingMap walks a nested object that sits under a
-// command-bearing key. Every string and argv-slice in the subtree is
-// command surface; nested maps are walked in sorted-key order so the
-// joined result is deterministic. This is fail-closed relative to
-// dropping the object: a buried `command` token remains visible.
-func flattenCommandBearingMap(m map[string]any) string {
-	if len(m) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var parts []string
-	for _, k := range keys {
-		switch tv := m[k].(type) {
-		case string:
-			if s := strings.TrimSpace(tv); s != "" {
-				parts = append(parts, s)
-			}
-		case []any, []string:
-			if s := joinArgSlice(tv); s != "" {
-				parts = append(parts, s)
-			}
-		case map[string]any:
-			if s := flattenCommandBearingMap(tv); s != "" {
+// flattenCommandSurface walks a command-bearing JSON value and joins every
+// string it finds. Maps are visited in sorted-key order; arrays keep order.
+// Non-string scalars are skipped so a number cannot forge a token.
+func flattenCommandSurface(v any) string {
+	switch tv := v.(type) {
+	case string:
+		return strings.TrimSpace(tv)
+	case []string:
+		return joinStringSlice(tv)
+	case []any:
+		var parts []string
+		for _, e := range tv {
+			if s := flattenCommandSurface(e); s != "" {
 				parts = append(parts, s)
 			}
 		}
+		return strings.Join(parts, " ")
+	case map[string]any:
+		if len(tv) == 0 {
+			return ""
+		}
+		keys := make([]string, 0, len(tv))
+		for k := range tv {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var parts []string
+		for _, k := range keys {
+			if s := flattenCommandSurface(tv[k]); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, " ")
+	default:
+		return ""
 	}
-	return strings.Join(parts, " ")
 }
 
-// joinArgSlice flattens an argv slice into a space-joined string. Nested
-// string elements are joined in order; non-string elements are skipped so a
-// mixed array cannot forge a token out of a number. This preserves the exact
-// argv ordering the tool received (bash -c id -> "bash -c id") for the
-// capability signal extractor, while remaining deterministic.
-func joinArgSlice(v any) string {
+// joinStringSlice flattens a string argv slice. Non-string elements of a
+// mixed []any are skipped (payload arrays are not command objects).
+func joinStringSlice(v any) string {
 	var parts []string
 	switch slice := v.(type) {
 	case []string:
 		for _, s := range slice {
-			if s != "" {
-				parts = append(parts, strings.TrimSpace(s))
+			if s = strings.TrimSpace(s); s != "" {
+				parts = append(parts, s)
 			}
 		}
 	case []any:
 		for _, e := range slice {
-			if s, ok := e.(string); ok && s != "" {
-				parts = append(parts, strings.TrimSpace(s))
+			if s, ok := e.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					parts = append(parts, s)
+				}
 			}
 		}
 	}

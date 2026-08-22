@@ -131,6 +131,29 @@ func TestStringArgsFlattensNestedCommandBearingObject(t *testing.T) {
 	}
 }
 
+// TestStringArgsFlattensArrayOfCommandObjects: a command-bearing array of
+// objects is the same surface as a nested object. Dropping map elements
+// is fail-open (run({"arguments":[{"command":"bash -c id"}]}) → ALLOW).
+func TestStringArgsFlattensArrayOfCommandObjects(t *testing.T) {
+	got := stringArgs(map[string]any{
+		"arguments": []any{map[string]any{"command": "bash -c id"}},
+	})
+	if got["arguments"] != "bash -c id" {
+		t.Fatalf("array of command objects dropped; got %#v", got)
+	}
+}
+
+// TestStringArgsDropsPayloadArrayOfObjects: a payload-key array of objects
+// is not command surface (Rev 15).
+func TestStringArgsDropsPayloadArrayOfObjects(t *testing.T) {
+	got := stringArgs(map[string]any{
+		"content": []any{map[string]any{"command": "bash -c id"}},
+	})
+	if _, ok := got["content"]; ok {
+		t.Fatalf("payload array of objects leaked into typed args: %#v", got)
+	}
+}
+
 // TestStringArgsFlattensDoublyNestedCommandBearing: a command two maps deep
 // under arguments is still command surface.
 func TestStringArgsFlattensDoublyNestedCommandBearing(t *testing.T) {
