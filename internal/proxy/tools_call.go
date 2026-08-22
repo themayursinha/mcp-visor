@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -221,7 +222,7 @@ func (p *Proxy) processToolsCall(
 	// (denies) only when approval is unavailable or rejected. Never a silent
 	// allow and never a hard deny that skips the approval gate.
 	capPauseReason := ""
-	var capPauseReceipt *capability.PauseReceipt
+	var capArtifact any
 	if p.capEval != nil {
 		step := capability.Step{
 			SessionID: p.session.ID,
@@ -239,24 +240,31 @@ func (p *Proxy) processToolsCall(
 		if err != nil {
 			stepID := step.StepID
 			prevHash := p.capLastHash
-			p.capEvalMu.Unlock()
-			// Evaluator error: build the pause-to-proof artifact and route to
-			// the approval gate (pause-to-approval, fail closed on approval
-			// unavailable/rejected). Do not deny inline.
+			// Evaluator error: seal the pause-to-proof artifact, make it the
+			// predecessor for the next step (so the chain cannot fork around
+			// the pause), and route to the approval gate. Do not deny inline.
 			if pr, err2 := capability.NewPauseReceipt(p.session.ID, stepID, prevHash, err); err2 == nil {
-				capPauseReceipt = pr
+				capArtifact = pr
+				p.capLastHash = pr.Hash
+				if adv, ok := p.capEval.(interface{ AdvanceAfterError(int, string) }); ok {
+					adv.AdvanceAfterError(stepID, pr.Hash)
+				}
 			}
+			p.capEvalMu.Unlock()
 			capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (evaluator error)"
 		} else {
-			p.capLastHash = receipt.Hash
-			p.capEvalMu.Unlock()
-			if receipt.Decision == capability.DecisionPauseRequireProof {
-				// Boundary signal not attributable to the declared envelope (E5):
-				// route to the approval gate so an operator can supply fresh proof.
-				// Fail closed when approval is unavailable or rejected. Never deny
-				// inline and never silently allow.
-				capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (effect outside declared envelope)"
+			if receipt != nil {
+				p.capLastHash = receipt.Hash
+				capArtifact = receipt
+				if receipt.Decision == capability.DecisionPauseRequireProof {
+					// Boundary signal not attributable to the declared envelope (E5):
+					// route to the approval gate so an operator can supply fresh proof.
+					// Fail closed when approval is unavailable or rejected. Never deny
+					// inline and never silently allow.
+					capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (effect outside declared envelope)"
+				}
 			}
+			p.capEvalMu.Unlock()
 		}
 		// Route the pause through the existing approval gate: set decision to
 		// ActionRequireApproval and fall through to the switch below. The
@@ -297,6 +305,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
+		attachCapabilityArtifact(&deniedEvent, capArtifact)
 		_ = p.audit.Log(deniedEvent)
 		release()
 		p.forwardAudit(deniedEvent)
@@ -317,20 +326,11 @@ func (p *Proxy) processToolsCall(
 		// SAME snapshot used for evaluation and the identity gate.
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
 		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
-		// Persist the capability pause receipt (if any) durably on the
-		// approval-required event so the pause-to-proof artifact is never lost
-		// (P2): it carries the stable error_code and the hash-linked receipt
-		// for downstream audit, dedup, and alerting. The receipt is the
-		// error-to-pause artifact the contract requires.
-		if capPauseReceipt != nil {
-			if data, err := json.Marshal(capPauseReceipt); err == nil {
-				approvalEvent.ApprovalReceiptHash = sha256Hex(data)
-				var recMap map[string]any
-				if err := json.Unmarshal(data, &recMap); err == nil {
-					approvalEvent.ApprovalReceipt = recMap
-				}
-			}
-		}
+		// Persist the capability receipt (ALLOW, E5 pause, or evaluator-error
+		// pause) on the terminal event so the accounting trajectory is
+		// durable. Dropping a successful Eval receipt would leave only the
+		// in-memory hash, which disappears on process exit.
+		attachCapabilityArtifact(&approvalEvent, capArtifact)
 		// Write the JSONL ledger record while holding runtimeMu to
 		// preserve audit ordering with respect to policy reloads.
 		_ = p.audit.Log(approvalEvent)
@@ -388,6 +388,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
+		attachCapabilityArtifact(&allowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
@@ -414,6 +415,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
+		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
@@ -518,37 +520,106 @@ func findServerByName(pol *policy.Policy, name string) *policy.Server {
 	return nil
 }
 
+// attachCapabilityArtifact writes a sealed capability receipt (Eval Receipt
+// or PauseReceipt) onto the terminal audit event. Nil artifacts are a no-op
+// so the default no-eval path is unchanged. Uses the existing optional
+// approval_receipt fields; it does not add audit schema.
+func attachCapabilityArtifact(event *audit.Event, artifact any) {
+	if event == nil || artifact == nil {
+		return
+	}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		return
+	}
+	event.ApprovalReceiptHash = sha256Hex(data)
+	var recMap map[string]any
+	if err := json.Unmarshal(data, &recMap); err == nil {
+		event.ApprovalReceipt = recMap
+	}
+}
+
 // stringArgs converts the redacted args map into the evaluator's typed
-// observation surface: only plain string values are carried; non-string
-// values (numbers, booleans, nested objects) are skipped. Deterministic —
-// map iteration order does not matter because the result is a map.
+// observation surface. String scalars and argv slices are preserved.
+// Nested objects under a command-bearing key (command/cmd/args/arguments/
+// executable/shell_command) are flattened recursively into a space-joined
+// string so a schema such as run({"arguments":{"command":"bash -c id"}})
+// cannot drop the command surface (fail-open ALLOW). Non-command nested
+// objects, numbers, and booleans are omitted — they are not a command
+// invocation. Deterministic: map iteration order does not matter because
+// nested keys are sorted before joining.
 func stringArgs(redactedArgs map[string]any) map[string]string {
 	if len(redactedArgs) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(redactedArgs))
 	for k, v := range redactedArgs {
-		switch tv := v.(type) {
-		case string:
-			out[k] = tv
-		case []any, []string:
-			// Command-bearing args often arrive as an argv array (e.g.
-			// {"args":["bash","-c","id"]}). Preserve them as a space-joined
-			// string so the capability package's commandBearingArgs can see
-			// the shell invocation. Dropping them would be fail-open: an
-			// args-derived host_exec/net_egress boundary signal would never
-			// be extracted. Nested objects are flattened the same way only
-			// under command-bearing keys; ordinary payload arrays (e.g. a
-			// list of paths) are also joined so the args surface is never
-			// silently lost.
-			out[k] = joinArgSlice(tv)
-		default:
-			// Numbers, booleans, and nested objects are not string-scalar
-			// command surfaces; leave them out of the typed args map. They
-			// cannot carry a command invocation token.
+		if s := flattenArgValue(k, v); s != "" {
+			out[k] = s
 		}
 	}
 	return out
+}
+
+// flattenArgValue reduces one redacted arg value to the typed string the
+// evaluator scans. Command-bearing nested objects are command surface and
+// are flattened; any other nested object is dropped.
+func flattenArgValue(key string, v any) string {
+	switch tv := v.(type) {
+	case string:
+		return tv
+	case []any, []string:
+		return joinArgSlice(tv)
+	case map[string]any:
+		if !isCommandBearingKey(key) {
+			return ""
+		}
+		return flattenCommandBearingMap(tv)
+	default:
+		return ""
+	}
+}
+
+func isCommandBearingKey(k string) bool {
+	switch k {
+	case "command", "cmd", "args", "arguments", "executable", "shell_command":
+		return true
+	}
+	return false
+}
+
+// flattenCommandBearingMap walks a nested object that sits under a
+// command-bearing key. Every string and argv-slice in the subtree is
+// command surface; nested maps are walked in sorted-key order so the
+// joined result is deterministic. This is fail-closed relative to
+// dropping the object: a buried `command` token remains visible.
+func flattenCommandBearingMap(m map[string]any) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		switch tv := m[k].(type) {
+		case string:
+			if s := strings.TrimSpace(tv); s != "" {
+				parts = append(parts, s)
+			}
+		case []any, []string:
+			if s := joinArgSlice(tv); s != "" {
+				parts = append(parts, s)
+			}
+		case map[string]any:
+			if s := flattenCommandBearingMap(tv); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // joinArgSlice flattens an argv slice into a space-joined string. Nested

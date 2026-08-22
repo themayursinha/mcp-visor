@@ -599,10 +599,13 @@ func hostExecFromArgs(step Step, blob string) bool {
 // isHostExecToolName reports whether the TOOL NAME itself is a canonical
 // host-exec surface. The tool name is the mediated executable. Rev 11
 // (reviewer run 191): EXACT shell-surface names only — "shellac",
-// "reshell", "shellfish" are not shell invocations.
+// "reshell", "shellfish" are not shell invocations. The visor-shipped
+// demo/policy tool `shell_exec` is the same surface as `host_exec`/`shell`:
+// a call such as shell_exec({"command":"id"}) executes on the host even
+// when the command string contains no canonical shell token.
 func isHostExecToolName(t string) bool {
 	switch t {
-	case "host_exec", "bash", "sh", "/bin/sh", "/bin/bash", "shell":
+	case "host_exec", "bash", "sh", "/bin/sh", "/bin/bash", "shell", "shell_exec":
 		return true
 	}
 	return false

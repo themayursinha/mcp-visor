@@ -335,6 +335,22 @@ func (c *ChainEvaluator) Eval(ctx context.Context, step Step, prior string) (*Re
 	return r, nil
 }
 
+// AdvanceAfterError records that the proxy sealed a pause receipt for a
+// step Eval rejected, so the next Eval continues the same hash-linked
+// chain instead of forking around the pause. stepID must be strictly
+// greater than lastStep (the proxy's per-session counter); a rewind or
+// empty hash is ignored and the live chain is left unchanged.
+func (c *ChainEvaluator) AdvanceAfterError(stepID int, pauseHash string) {
+	if stepID <= 0 || pauseHash == "" {
+		return
+	}
+	if c.lastStep != 0 && stepID <= c.lastStep {
+		return
+	}
+	c.lastStep = stepID
+	c.lastHash = pauseHash
+}
+
 // EnvelopeState values (canonical, serialized).
 const (
 	EnvelopeStateHigh             = "HIGH"

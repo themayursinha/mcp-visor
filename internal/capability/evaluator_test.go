@@ -1604,4 +1604,69 @@ func TestStepIDNotStrictlyIncreasingRejected(t *testing.T) {
 	}
 }
 
+// TestP1ShellExecToolNamePauses: visor's shipped host-exec tool is
+// shell_exec. A call with {"command":"id"} contains no canonical shell
+// token; the TOOL NAME is the host-exec surface. Eval must PAUSE (E5),
+// never ALLOW as a pure observation.
+func TestP1ShellExecToolNamePauses(t *testing.T) {
+	ws := t.TempDir()
+	e, err := NewChainEvaluator("sess-shell-exec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.Eval(context.Background(), Step{
+		SessionID: "sess-shell-exec",
+		StepID:    1,
+		Tool:      "shell_exec",
+		Args:      map[string]string{"command": "id"},
+		Declared:  DeclaredAuthority{Target: "target", WorkspaceRoot: ws},
+	}, GenesisPrevHash)
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if r.Decision != DecisionPauseRequireProof {
+		t.Fatalf("shell_exec({command:id}) must PAUSE (E5), got %s", r.Decision)
+	}
+	if !hasSignal(r.Signals, SignalBoundaryHostExec) {
+		t.Fatalf("shell_exec must emit boundary.request_host_exec, got %+v", r.Signals)
+	}
+}
+
+// TestAdvanceAfterErrorContinuesHashChain: a sealed pause receipt for an
+// Eval error must become the predecessor of the next successful step.
+func TestAdvanceAfterErrorContinuesHashChain(t *testing.T) {
+	ws := t.TempDir()
+	e, err := NewChainEvaluator("sess-adv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Eval(context.Background(), Step{
+		SessionID: "sess-adv",
+		StepID:    1,
+		Tool:      "file_write",
+		Declared:  DeclaredAuthority{Target: "target"}, // missing workspace root
+	}, GenesisPrevHash)
+	if err == nil {
+		t.Fatal("missing workspace root must be evaluator error")
+	}
+	pr, err := NewPauseReceipt("sess-adv", 1, GenesisPrevHash, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.AdvanceAfterError(1, pr.Hash)
+	r, err := e.Eval(context.Background(), Step{
+		SessionID: "sess-adv",
+		StepID:    2,
+		Tool:      "file_write",
+		Path:      ws + "/a.txt",
+		Declared:  DeclaredAuthority{Target: "target", WorkspaceRoot: ws},
+	}, pr.Hash)
+	if err != nil {
+		t.Fatalf("step 2 after pause must evaluate, got %v", err)
+	}
+	if r.PrevHash != pr.Hash {
+		t.Fatalf("step 2 prev_hash=%q, want pause hash %q (chain forked around the error receipt)", r.PrevHash, pr.Hash)
+	}
+}
+
 // StepID <= 0 is rejected.

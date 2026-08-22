@@ -459,6 +459,12 @@ func (p *Proxy) refreshPolicyRuntime(pol *policy.Policy) {
 	if p.audit != nil {
 		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
 	}
+	// Capability enablement is a policy-derived runtime surface, same as
+	// the redactor and approval timeout. Both the reload-commit path and
+	// the constructor-registration reconcile path must sync it against the
+	// published generation so a stale cfg.Policy cannot leave capEval nil
+	// while the engine already exposes capability_accounting: true.
+	p.syncCapabilityEvaluator(pol)
 	p.runtimeMu.Unlock()
 }
 

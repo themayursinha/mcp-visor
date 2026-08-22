@@ -104,4 +104,40 @@ func TestDestIPStillWorks(t *testing.T) {
 	}
 }
 
+// TestStringArgsFlattensNestedCommandBearingObject: a command buried in a
+// nested object under a command-bearing key must remain visible. Dropping
+// the object is fail-open (run({"arguments":{"command":"bash -c id"}}) → ALLOW).
+func TestStringArgsFlattensNestedCommandBearingObject(t *testing.T) {
+	got := stringArgs(map[string]any{
+		"arguments": map[string]any{"command": "bash -c id"},
+	})
+	if got["arguments"] != "bash -c id" {
+		t.Fatalf("nested command-bearing object dropped; got %#v", got)
+	}
+}
+
+// TestStringArgsFlattensDoublyNestedCommandBearing: a command two maps deep
+// under arguments is still command surface.
+func TestStringArgsFlattensDoublyNestedCommandBearing(t *testing.T) {
+	got := stringArgs(map[string]any{
+		"arguments": map[string]any{
+			"nested": map[string]any{"command": "bash -c id"},
+		},
+	})
+	if got["arguments"] != "bash -c id" {
+		t.Fatalf("doubly nested command dropped; got %#v", got)
+	}
+}
+
+// TestStringArgsDropsNestedNonCommandObject: Rev 15 false-positive control —
+// a nested object under a payload key is not command surface.
+func TestStringArgsDropsNestedNonCommandObject(t *testing.T) {
+	got := stringArgs(map[string]any{
+		"content": map[string]any{"command": "bash -c id"},
+	})
+	if _, ok := got["content"]; ok {
+		t.Fatalf("non-command nested object leaked into typed args: %#v", got)
+	}
+}
+
 var _ = capability.ErrInvalidStep

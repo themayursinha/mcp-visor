@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,5 +380,187 @@ servers:
 	matches, _ := filepath.Glob(filepath.Join(approvalDir, "req-*.json"))
 	if len(matches) > 0 {
 		t.Fatal("P1 RED: policy-denied call with evaluator error reached the approval gate")
+	}
+}
+
+func approveFirstRequest(t *testing.T, approvalDir string) <-chan struct{} {
+	t.Helper()
+	approved := make(chan struct{})
+	go func() {
+		for {
+			matches, _ := filepath.Glob(filepath.Join(approvalDir, "req-*.json"))
+			if len(matches) > 0 {
+				id := strings.TrimSuffix(filepath.Base(matches[0]), ".json")
+				_ = os.WriteFile(filepath.Join(approvalDir, id+".ok"), []byte{}, 0o600)
+				close(approved)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	return approved
+}
+
+func optedInWorkspaceProxy(t *testing.T, dir, sessionID string) *Proxy {
+	t.Helper()
+	p := New(Config{
+		ServerName:   "workspace",
+		SessionID:    sessionID,
+		ClientID:     "agent-" + sessionID,
+		AuditLogPath: filepath.Join(dir, "audit.jsonl"),
+		ApprovalDir:  filepath.Join(dir, "approvals"),
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: allow
+settings:
+  capability_accounting: true
+servers:
+  - name: "workspace"
+    allowed: true
+    workspace_root: "`+dir+`"
+`),
+	})
+	t.Cleanup(func() { p.audit.Close() })
+	if p.capEval == nil {
+		t.Fatal("capEval must be constructed with capability_accounting: true")
+	}
+	return p
+}
+
+// TestREDPublishedPolicyCapabilityReconciledAtRegistration: a stale
+// cfg.Policy without capability_accounting must not leave capEval nil when
+// the supplied Engine already publishes a generation with the setting on.
+// wirePolicyReload → reconcilePublishedRuntime is the parent path.
+func TestREDPublishedPolicyCapabilityReconciledAtRegistration(t *testing.T) {
+	dir := t.TempDir()
+	stale := mustLoadPolicy(t, `
+version: "1.0"
+default_action: allow
+servers:
+  - name: "workspace"
+    allowed: true
+`)
+	published := mustLoadPolicy(t, `
+version: "1.0"
+default_action: allow
+settings:
+  capability_accounting: true
+servers:
+  - name: "workspace"
+    allowed: true
+`)
+	eng := policy.NewEngine(published)
+	p := New(Config{
+		ServerName:   "workspace",
+		SessionID:    "sess-reconcile-cap",
+		ClientID:     "agent-reconcile-cap",
+		AuditLogPath: filepath.Join(dir, "audit.jsonl"),
+		Policy:       stale,
+		Engine:       eng,
+	})
+	defer p.audit.Close()
+	if p.capEval == nil {
+		t.Fatal("published capability_accounting: true must construct capEval at registration reconcile even when cfg.Policy is stale")
+	}
+}
+
+// TestP1ShellExecOptedInPauses: visor's shipped shell_exec tool with
+// {"command":"id"} must pause-to-approval when opted in.
+func TestP1ShellExecOptedInPauses(t *testing.T) {
+	dir := t.TempDir()
+	p := optedInWorkspaceProxy(t, dir, "sess-shell-exec-proxy")
+	approved := approveFirstRequest(t, filepath.Join(dir, "approvals"))
+	action := callTool(t, p, 1, "shell_exec", map[string]any{"command": "id"})
+	if action != "forward" {
+		t.Fatalf("shell_exec({command:id}) must PAUSE → approval → forward, got %q", action)
+	}
+	select {
+	case <-approved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shell_exec never reached the approval dir; call ALLOWed instead of pausing")
+	}
+}
+
+// TestP1NestedCommandBearingArgumentsPauses: run({"arguments":{"command":"bash -c id"}})
+// must pause, not ALLOW, because the nested command surface is preserved.
+func TestP1NestedCommandBearingArgumentsPauses(t *testing.T) {
+	dir := t.TempDir()
+	p := optedInWorkspaceProxy(t, dir, "sess-nested-args")
+	approved := approveFirstRequest(t, filepath.Join(dir, "approvals"))
+	action := callTool(t, p, 1, "run", map[string]any{
+		"arguments": map[string]any{"command": "bash -c id"},
+	})
+	if action != "forward" {
+		t.Fatalf("nested command-bearing arguments must PAUSE → approval → forward, got %q", action)
+	}
+	select {
+	case <-approved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("nested arguments call never reached approval; nested command was dropped")
+	}
+}
+
+// TestREDCapabilityReceiptPersistedOnAllow: an ordinary ALLOW receipt must
+// be attached to the terminal audit event, not discarded after updating
+// the in-memory hash.
+func TestREDCapabilityReceiptPersistedOnAllow(t *testing.T) {
+	dir := t.TempDir()
+	p := optedInWorkspaceProxy(t, dir, "sess-persist-allow")
+	action := callTool(t, p, 1, "file_write", map[string]any{"path": filepath.Join(dir, "out.txt")})
+	if action != "forward" {
+		t.Fatalf("in-workspace file_write must ALLOW/forward, got %q", action)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal(line, &ev); err != nil {
+			t.Fatalf("audit jsonl: %v", err)
+		}
+		rec, _ := ev["approval_receipt"].(map[string]any)
+		if rec == nil {
+			continue
+		}
+		if rec["decision"] == capability.DecisionAllow && rec["hash"] != nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ALLOW capability receipt missing from audit jsonl:\n%s", data)
+	}
+}
+
+// TestREDEvaluatorErrorAdvancesReceiptChain: after an evaluator error, the
+// sealed pause receipt must become capLastHash so the next step cannot fork
+// around it.
+func TestREDEvaluatorErrorAdvancesReceiptChain(t *testing.T) {
+	dir := t.TempDir()
+	p := optedInWorkspaceProxy(t, dir, "sess-chain-adv")
+	genesis := p.capLastHash
+	approved := approveFirstRequest(t, filepath.Join(dir, "approvals"))
+	// Missing workspace-root attribution is forced by pointing at a server
+	// with an empty root: use a path outside the workspace so Eval errors
+	// (untyped file-boundary / missing root). The default policy has a root,
+	// so use a malformed DestHost via url to force evaluator error.
+	action := callTool(t, p, 1, "web_fetch", map[string]any{"url": "https://bad host!/"})
+	if action != "forward" {
+		t.Fatalf("malformed dest must pause-to-approval, got %q", action)
+	}
+	select {
+	case <-approved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("malformed dest never reached approval")
+	}
+	p.capEvalMu.Lock()
+	defer p.capEvalMu.Unlock()
+	if p.capLastHash == "" || p.capLastHash == genesis {
+		t.Fatalf("evaluator-error pause receipt must become capLastHash (got %q, genesis %q)", p.capLastHash, genesis)
 	}
 }
