@@ -564,3 +564,34 @@ func TestREDEvaluatorErrorAdvancesReceiptChain(t *testing.T) {
 		t.Fatalf("evaluator-error pause receipt must become capLastHash (got %q, genesis %q)", p.capLastHash, genesis)
 	}
 }
+
+// TestP1AbsoluteExecPathOptedInPauses: Codex P1 on f30be23 — an absolute
+// path to a canonical shell/net executable must pause-to-approval, same as
+// the bare name. Path identity is filepath-base, not an extra name in the
+// allowlist.
+func TestP1AbsoluteExecPathOptedInPauses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool string
+		args map[string]any
+	}{
+		{"usr-bin-bash", "run", map[string]any{"command": "/usr/bin/bash -c id"}},
+		{"usr-bin-curl", "run", map[string]any{"command": "/usr/bin/curl example.com"}},
+		{"bash-exe", "run", map[string]any{"command": "/usr/local/bin/bash.exe -c id"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := optedInWorkspaceProxy(t, dir, "sess-abs-"+tc.name)
+			approved := approveFirstRequest(t, filepath.Join(dir, "approvals"))
+			action := callTool(t, p, 1, tc.tool, tc.args)
+			if action != "forward" {
+				t.Fatalf("%v must PAUSE → approval → forward, got %q", tc.args, action)
+			}
+			select {
+			case <-approved:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%v never reached approval; absolute path was treated as observation", tc.args)
+			}
+		})
+	}
+}

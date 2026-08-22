@@ -73,6 +73,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -537,13 +538,7 @@ func isBuildToolArgs(step Step) bool {
 		lv := strings.ToLower(v)
 		toks := shellTokens(lv)
 		for i, tok := range toks {
-			base := tok
-			for j := 1; j < len(tok); j++ {
-				if tok[j] == '-' {
-					base = tok[:j]
-					break
-				}
-			}
+			base := compilerTokenBase(tok)
 			switch base {
 			case "gcc", "clang", "cc":
 				return true
@@ -604,11 +599,7 @@ func hostExecFromArgs(step Step, blob string) bool {
 // a call such as shell_exec({"command":"id"}) executes on the host even
 // when the command string contains no canonical shell token.
 func isHostExecToolName(t string) bool {
-	switch t {
-	case "host_exec", "bash", "sh", "/bin/sh", "/bin/bash", "shell", "shell_exec":
-		return true
-	}
-	return false
+	return isCanonicalShellName(t)
 }
 
 // argsContainShellToken reports whether any arg value under a
@@ -635,8 +626,7 @@ func argsContainShellToken(args map[string]string) bool {
 	for _, v := range commandBearingArgs(args) {
 		lv := strings.ToLower(v)
 		for _, tok := range shellTokens(lv) {
-			switch tok {
-			case "bash", "sh", "/bin/sh", "/bin/bash", "host_exec", "shell":
+			if isCanonicalShellName(tok) {
 				return true
 			}
 		}
@@ -689,6 +679,56 @@ func isCommandBoundary(c byte) bool {
 		return true
 	}
 	return false
+}
+
+// canonicalCommandToken reduces a command-boundary token to the executable
+// identity the classifiers match: the final path component. Backslash is
+// treated as a separator and a trailing ".exe" is stripped. HTTP(S) URLs
+// are returned unchanged so a destination is never mistaken for a file
+// name. Bare names (bash, curl) are unchanged.
+//
+// This eliminates the parent of the exact-spelling siblings (/bin/bash vs
+// /usr/bin/bash vs ./bash vs bash.exe): classifiers match the frozen
+// canonical names against this identity, not against raw path spellings.
+func canonicalCommandToken(tok string) string {
+	if tok == "" {
+		return tok
+	}
+	if strings.HasPrefix(tok, "http://") || strings.HasPrefix(tok, "https://") {
+		return tok
+	}
+	n := strings.ReplaceAll(tok, "\\", "/")
+	if strings.Contains(n, "/") {
+		base := path.Base(n)
+		if base != "." && base != "/" {
+			n = base
+		}
+	}
+	return strings.TrimSuffix(n, ".exe")
+}
+
+// isCanonicalShellName reports whether tok, after path identity reduction,
+// is one of the frozen host-exec names. The set is exact and closed:
+// interpreters not in this list (python, node, perl, ruby) are out of
+// scope, not additional names to enumerate.
+func isCanonicalShellName(tok string) bool {
+	switch canonicalCommandToken(tok) {
+	case "host_exec", "bash", "sh", "shell", "shell_exec":
+		return true
+	}
+	return false
+}
+
+// compilerTokenBase is canonicalCommandToken plus the gcc-11 / clang-18
+// flag-suffix strip used by build-tool matching.
+func compilerTokenBase(tok string) string {
+	n := canonicalCommandToken(tok)
+	for j := 1; j < len(n); j++ {
+		if n[j] == '-' {
+			return n[:j]
+		}
+	}
+	return n
 }
 
 // structuredDestination reports whether a STRUCTURED DestHost/DestIP field
@@ -757,6 +797,7 @@ func egressFromArgs(step Step, blob string) bool {
 // web_fetch/browse/fetch_url, or any tool starting with "http"
 // (http_get, http-client, http_request).
 func isNetToolName(t string) bool {
+	t = canonicalCommandToken(t)
 	switch t {
 	case "curl", "wget", "http_get", "http", "fetch", "request", "net",
 		"web_fetch", "browse", "fetch_url":
@@ -777,7 +818,7 @@ func argsContainURLOrNetTool(args map[string]string) bool {
 			if strings.HasPrefix(tok, "http://") || strings.HasPrefix(tok, "https://") {
 				return true
 			}
-			switch tok {
+			switch canonicalCommandToken(tok) {
 			case "curl", "wget":
 				return true
 			}
@@ -869,7 +910,7 @@ func bindDerivedTarget(step Step, kind string) Step {
 		// → evaluator error → PAUSE).
 		exe := ""
 		if isHostExecToolName(strings.ToLower(step.Tool)) {
-			exe = filepath.Base(step.Tool)
+			exe = canonicalCommandToken(strings.ToLower(step.Tool))
 		}
 		step.Effect = EffectHostExec
 		step.Executable = exe
@@ -1088,14 +1129,7 @@ func isBuildTool(tool string) bool {
 	if t == "go build" {
 		return true
 	}
-	base := t
-	for i := 1; i < len(t); i++ {
-		if t[i] == '-' {
-			base = t[:i]
-			break
-		}
-	}
-	switch base {
+	switch compilerTokenBase(t) {
 	case "gcc", "clang", "cc":
 		return true
 	}

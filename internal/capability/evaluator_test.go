@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -1629,6 +1630,87 @@ func TestP1ShellExecToolNamePauses(t *testing.T) {
 	}
 	if !hasSignal(r.Signals, SignalBoundaryHostExec) {
 		t.Fatalf("shell_exec must emit boundary.request_host_exec, got %+v", r.Signals)
+	}
+}
+
+func TestCanonicalCommandToken(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"bash", "bash"},
+		{"/bin/bash", "bash"},
+		{"/usr/bin/bash", "bash"},
+		{"/usr/local/bin/bash", "bash"},
+		{"./bash", "bash"},
+		{"../bin/bash", "bash"},
+		{"bin/bash", "bash"},
+		{"bash.exe", "bash"},
+		{"/usr/bin/bash.exe", "bash"},
+		{`C:\Windows\System32\bash.exe`, "bash"},
+		{"/usr/bin/curl", "curl"},
+		{"wget.exe", "wget"},
+		{"https://example.com/foo", "https://example.com/foo"},
+		{"http://example.com/bar", "http://example.com/bar"},
+		{"bashful", "bashful"},
+		{"/tmp/bashful", "bashful"},
+		{"/usr/bin/gcc-11", "gcc-11"},
+	}
+	for _, c := range cases {
+		if got := canonicalCommandToken(c.in); got != c.want {
+			t.Fatalf("canonicalCommandToken(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestP1AbsoluteExecPathPauses: command-bearing absolute paths to canonical
+// shells must PAUSE. Matching the raw token against a frozen name list is
+// the parent that let /usr/bin/bash ALLOW while bash paused.
+func TestP1AbsoluteExecPathPauses(t *testing.T) {
+	ws := t.TempDir()
+	commands := []string{
+		"/usr/bin/bash -c id",
+		"/usr/bin/sh -c id",
+		"./bash -c id",
+		`C:\Windows\System32\bash.exe -c id`,
+		"/usr/bin/curl example.com",
+		"/usr/bin/wget https://example.com/",
+	}
+	for i, cmd := range commands {
+		e, err := NewChainEvaluator(fmt.Sprintf("sess-abs-%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := e.Eval(context.Background(), Step{
+			SessionID: fmt.Sprintf("sess-abs-%d", i),
+			StepID:    1,
+			Tool:      "run",
+			Args:      map[string]string{"command": cmd},
+			Declared:  DeclaredAuthority{Target: "target", WorkspaceRoot: ws},
+		}, GenesisPrevHash)
+		if err == nil && r != nil && r.Decision == DecisionAllow {
+			t.Fatalf("%q must not ALLOW; got %s signals=%+v", cmd, r.Decision, r.Signals)
+		}
+		if err == nil && r == nil {
+			t.Fatalf("%q: nil receipt and nil error (silent no-op)", cmd)
+		}
+	}
+}
+
+// TestP1AbsolutePathPayloadNegative: a path-shaped shell token under a
+// payload key remains benign (Rev 15 command-bearing-key rule).
+func TestP1AbsolutePathPayloadNegative(t *testing.T) {
+	step := Step{Tool: "write_file", Args: map[string]string{"content": "/usr/bin/bash -c id"}}
+	if hostExecFromArgs(step, "") {
+		t.Fatal("content:/usr/bin/bash must not be host-exec")
+	}
+	if egressFromArgs(Step{Tool: "write_file", Args: map[string]string{"content": "/usr/bin/curl example.com"}}, "") {
+		t.Fatal("content:/usr/bin/curl must not be egress")
+	}
+	if hostExecFromArgs(Step{Tool: "run", Args: map[string]string{"command": "/tmp/bashful"}}, "") {
+		t.Fatal("/tmp/bashful must not become bash")
+	}
+	if hostExecFromArgs(Step{Tool: "run", Args: map[string]string{"command": "/usr/bin/python -c id"}}, "") {
+		t.Fatal("python is outside the frozen shell name set")
 	}
 }
 

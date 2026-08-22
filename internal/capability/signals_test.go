@@ -23,6 +23,9 @@ func TestBuildArtifactWithoutPathAndMagic(t *testing.T) {
 	if !found {
 		t.Fatalf("build tool without Path must emit artifact.build_artifact")
 	}
+	if !isBuildTool("/usr/bin/gcc") || !isBuildToolArgs(Step{Args: map[string]string{"command": "/usr/bin/gcc-11 -o x"}}) {
+		t.Fatal("absolute compiler paths must still be build tools")
+	}
 	// ELF magic fingerprint.
 	sigs = ExtractSignals(Step{ArtifactMagic: "ELF"})
 	found = false
@@ -294,10 +297,16 @@ func TestRev11HostExecPositiveControls(t *testing.T) {
 		{Tool: "exec", Args: map[string]string{"command": "/bin/sh -c 'ls'"}},
 		{Tool: "exec", Args: map[string]string{"command": "bash -c id"}},
 		{Tool: "exec", Args: map[string]string{"command": "sh -c 'ls'"}},
+		{Tool: "exec", Args: map[string]string{"command": "/usr/bin/bash -c id"}},
+		{Tool: "exec", Args: map[string]string{"command": "/usr/bin/sh -c id"}},
+		{Tool: "exec", Args: map[string]string{"command": "./bash -c id"}},
+		{Tool: "exec", Args: map[string]string{"command": `C:\Windows\System32\bash.exe -c id`}},
 		{Tool: "bash"},
 		{Tool: "sh"},
 		{Tool: "host_exec"},
 		{Tool: "/bin/bash"},
+		{Tool: "/usr/bin/bash"},
+		{Tool: "bash.exe"},
 	}
 	for _, step := range cases {
 		if !hostExecFromArgs(step, "") {
