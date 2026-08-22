@@ -271,7 +271,7 @@ func (c *ChainEvaluator) Eval(ctx context.Context, step Step, prior string) (*Re
 	// is provisional and never a delta. Accumulation is recorded regardless
 	// of the authorization decision (a boundary request records the
 	// requested capability even though the effect is paused).
-	delta := confirmedDelta(step, signals, attrib, c.held)
+	delta := confirmedDelta(signals, attrib, c.held)
 	before := cloneCaps(c.held)
 	after := unionLattice(before, delta)
 	observed := highestCapability(delta)

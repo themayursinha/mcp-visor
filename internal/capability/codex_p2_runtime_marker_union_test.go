@@ -2,15 +2,15 @@ package capability
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
-// Codex P2 (PR #76): confirmedDelta used else-if between the two runtime
-// marker kinds. ExtractSignals already emits both from one in-envelope
-// observation (Result "SIGSEGV sandbox escape", or args payload containing
-// both marker classes). The lattice must UNION both confirmed sets on that
-// step: oob_read/oob_write AND heap_escape/native_exec. E3 still never
-// pauses. This is accounting completeness, not a new post-relay Eval.
+// Parent class (PR #76 Codex P2s): confirmedDelta reduced independently
+// observed signals through a single Effect (else-if on markers; host_exec
+// precedence over egress). Deltas are a UNION over signals. Effect remains
+// attribution-only (one kind for E5 vs ALLOW). E3 still never pauses.
+// Runtime-marker confirmation stays on pure in-envelope observation only.
 
 func TestP2BothRuntimeMarkerKindsUnionOnOneStep(t *testing.T) {
 	ws := t.TempDir()
@@ -103,5 +103,57 @@ func TestP2SingleRuntimeMarkerKindUnchanged(t *testing.T) {
 	}
 	if hasCap(r2.CapabilityDelta, CapOOBRead) || hasCap(r2.CapabilityDelta, CapOOBWrite) {
 		t.Fatalf("escape-only marker must not confirm oob caps, got %v", r2.CapabilityDelta)
+	}
+}
+
+func TestP2BothBoundaryKindsUnionOnOneStep(t *testing.T) {
+	ws := t.TempDir()
+	e, err := NewChainEvaluator("sess-p2-both-bound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Attribution uses one derived Effect (host_exec from the tool name).
+	// Accounting must still union the independently observed egress signal.
+	r, err := e.Eval(context.Background(), Step{
+		SessionID: "sess-p2-both-bound",
+		StepID:    1,
+		Tool:      "bash",
+		Args:      map[string]string{"command": "bash -c 'curl https://example.com'"},
+		Declared:  DeclaredAuthority{Target: "target", WorkspaceRoot: ws},
+	}, GenesisPrevHash)
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if r.Decision != DecisionPauseRequireProof {
+		t.Fatalf("dual boundary request must PAUSE (E5), got %s", r.Decision)
+	}
+	if !hasCap(r.CapabilityDelta, CapHostExec) || !hasCap(r.CapabilityDelta, CapNetEgress) {
+		t.Fatalf("host-exec + egress on one step must union both deltas, got %v", r.CapabilityDelta)
+	}
+	if !hasSignal(r.Signals, SignalBoundaryHostExec) || !hasSignal(r.Signals, SignalBoundaryEgress) {
+		t.Fatalf("receipt must carry both boundary signals, got %+v", r.Signals)
+	}
+}
+
+func TestP2EgressSignalObservationUsesStructuredDest(t *testing.T) {
+	step := Step{
+		Tool:     "web_fetch",
+		Args:     map[string]string{"url": "https://api.example.com"},
+		DestHost: "api.example.com",
+	}
+	var obs string
+	for _, s := range ExtractSignals(step) {
+		if s.Kind == SignalBoundaryEgress {
+			obs = s.Observation
+			if s.SourceDigest != digestOf("api.example.com") {
+				t.Fatalf("egress digest must be of DestHost, got %s", s.SourceDigest)
+			}
+		}
+	}
+	if obs != "egress to api.example.com" {
+		t.Fatalf("egress observation must use DestHost when EffectTarget is empty, got %q", obs)
+	}
+	if strings.TrimSpace(obs) == "egress to" {
+		t.Fatal("egress observation must not be an empty target")
 	}
 }

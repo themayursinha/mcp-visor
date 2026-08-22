@@ -221,6 +221,11 @@ func (p *Proxy) processToolsCall(
 	// approval) so an operator can supply fresh proof, and fails closed
 	// (denies) only when approval is unavailable or rejected. Never a silent
 	// allow and never a hard deny that skips the approval gate.
+	//
+	// Eval is consulted once, on this post-gate pre-forward path. Identity,
+	// runtime-limit, sensitive-file, and chain-deny already failed closed
+	// above; those terminal denies are not capability-accounted. Post-relay
+	// Result Eval is out of scope (a second hash-chain step per tools/call).
 	capPauseReason := ""
 	var capArtifact any
 	if p.capEval != nil {

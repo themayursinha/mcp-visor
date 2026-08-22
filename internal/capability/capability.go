@@ -387,11 +387,12 @@ func ExtractSignals(step Step) []Signal {
 			SourceDigest:  digestOf(step.Executable),
 		})
 	case EffectNetEgress:
+		target := egressObservationTarget(step)
 		out = append(out, Signal{
 			Kind:          SignalBoundaryEgress,
-			Observation:   "egress to " + step.EffectTarget,
+			Observation:   "egress to " + target,
 			EvidenceLevel: EvidenceBoundaryRequest,
-			SourceDigest:  digestOf(step.EffectTarget),
+			SourceDigest:  digestOf(target),
 		})
 	case EffectFileAccess:
 		// Rev 6 (reviewer run 181): when Step.Path is present it is the
@@ -438,11 +439,12 @@ func ExtractSignals(step Step) []Signal {
 		})
 	}
 	if !hasSignal(out, SignalBoundaryEgress) && egressFromArgs(step, blob) {
+		target := egressObservationTarget(step)
 		out = append(out, Signal{
 			Kind:          SignalBoundaryEgress,
-			Observation:   "egress to " + step.EffectTarget,
+			Observation:   "egress to " + target,
 			EvidenceLevel: EvidenceBoundaryRequest,
-			SourceDigest:  digestOf(step.EffectTarget),
+			SourceDigest:  digestOf(target),
 		})
 	}
 	// Rev 10 (reviewer run 189): per-kind dedup across ALL sources. A kind
@@ -848,37 +850,23 @@ func hasSignal(signals []Signal, kind string) bool {
 // confirmedDelta is D1/D4: a confirmed lattice primitive requires a
 // non-declared signal at matching evidence. Declared intent and artifact
 // construction never confirm. Runtime markers confirm bug A/B only on a
-// pure in-envelope observation step. Boundary requests confirm the
-// requested out-of-envelope primitive (recorded, not executed).
-//
-// Rev 10 (reviewer run 189): the effect kind used for the switch is the
-// DERIVED kind (the same value Eval bound for attribution), so an
-// args/tool-derived boundary signal with an empty structured Effect still
-// records its capability delta.
-func confirmedDelta(step Step, signals []Signal, attrib bool, held []string) []string {
+// pure in-envelope observation step (no boundary signal). Boundary requests
+// confirm every independently observed out-of-envelope primitive (recorded,
+// not executed). Effect is not consulted: it is attribution-only.
+func confirmedDelta(signals []Signal, attrib bool, held []string) []string {
 	var add []string
-	effect := step.Effect
-	if effect == "" {
-		effect = deriveEffectKind(step, signals)
+	// Deltas are a UNION over independently observed signals. Effect is
+	// attribution-only (one derived kind for E5 vs ALLOW). Reducing through
+	// a single Effect dropped the second kind whenever ExtractSignals
+	// emitted two (runtime-marker xor; host_exec precedence over egress).
+	if hasSignalLevel(signals, SignalBoundaryHostExec, EvidenceBoundaryRequest) {
+		add = append(add, CapHostExec)
 	}
-	switch effect {
-	case EffectHostExec:
-		if hasSignalLevel(signals, SignalBoundaryHostExec, EvidenceBoundaryRequest) {
-			add = []string{CapHostExec}
-		}
-	case EffectNetEgress:
-		if hasSignalLevel(signals, SignalBoundaryEgress, EvidenceBoundaryRequest) {
-			add = []string{CapNetEgress}
-		}
-	case "":
-		// Pure observation step (mediated result scan). Only in-envelope
-		// (attributable) runtime markers confirm deltas.
-		if !attrib {
-			break
-		}
-		// The two runtime-marker kinds are independent. ExtractSignals can
-		// emit both from one observation (e.g. Result "SIGSEGV sandbox
-		// escape"); exclusive-or would drop heap_escape/native_exec.
+	if hasSignalLevel(signals, SignalBoundaryEgress, EvidenceBoundaryRequest) {
+		add = append(add, CapNetEgress)
+	}
+	if attrib && !hasBoundarySignal(signals) {
+		// Runtime markers confirm only on a pure in-envelope observation.
 		if hasSignalLevel(signals, SignalRuntimeMemoryCorruption, EvidenceRuntimeMarker) {
 			add = append(add, CapOOBRead, CapOOBWrite)
 		}
@@ -887,6 +875,24 @@ func confirmedDelta(step Step, signals []Signal, attrib bool, held []string) []s
 		}
 	}
 	return newlyHeld(add, held)
+}
+
+// egressObservationTarget is the destination string sealed into an egress
+// signal. ExtractSignals runs BEFORE bindDerivedTarget, so EffectTarget is
+// often still empty on adapter-produced steps; DestIP/DestHost (and an
+// args URL) are already populated and are the same sources bindDerivedTarget
+// uses.
+func egressObservationTarget(step Step) string {
+	if step.EffectTarget != "" {
+		return step.EffectTarget
+	}
+	if step.DestIP.IsValid() {
+		return step.DestIP.String()
+	}
+	if step.DestHost != "" {
+		return step.DestHost
+	}
+	return egressURLFromArgs(step)
 }
 
 // bindDerivedTarget canonicalizes a derived boundary step (Rev 10, reviewer
