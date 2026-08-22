@@ -41,6 +41,8 @@ type Settings struct {
 	ApprovalTimeoutSecs  int    `yaml:"approval_timeout_seconds"`
 	ChainWindowSize      int    `yaml:"chain_window_size"`
 	LogLevel             string `yaml:"log_level"`
+	// CapabilityEval opts the session into the capability accounting evaluator (default false = no-op evaluator, zero behavioral delta).
+	CapabilityEval bool `yaml:"capability_accounting"`
 }
 
 type Server struct {
@@ -49,6 +51,7 @@ type Server struct {
 	Allowed             bool               `yaml:"allowed"`
 	AllowedDestinations []string           `yaml:"allowed_destinations"`
 	DeniedDestinations  []string           `yaml:"denied_destinations"`
+	WorkspaceRoot       string             `yaml:"workspace_root,omitempty"`
 	Attestation         *ServerAttestation `yaml:"attestation,omitempty"`
 	Tools               []ToolRule         `yaml:"tools"`
 }

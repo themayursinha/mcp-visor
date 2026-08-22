@@ -1,11 +1,16 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
+	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
@@ -206,6 +211,82 @@ func (p *Proxy) processToolsCall(
 		}
 	}
 
+	// Capability accounting adapter (opt-in). With the evaluator disabled
+	// (nil = no-op default) this block is skipped entirely: zero behavioral
+	// delta. When opted in, the redacted observation of this call is reduced
+	// to a hash-linked receipt BEFORE the policy switch. The evaluator is
+	// ACCOUNTING, not a second allow gate: an ALLOW receipt falls through to
+	// the existing decision unchanged; a PAUSE_REQUIRE_NEW_PROOF receipt or
+	// an evaluator error routes to the EXISTING approval gate (pause-to-
+	// approval) so an operator can supply fresh proof, and fails closed
+	// (denies) only when approval is unavailable or rejected. Never a silent
+	// allow and never a hard deny that skips the approval gate.
+	//
+	// Eval is consulted once, on this post-gate pre-forward path. Identity,
+	// runtime-limit, sensitive-file, and chain-deny already failed closed
+	// above; those terminal denies are not capability-accounted. Post-relay
+	// Result Eval is out of scope (a second hash-chain step per tools/call).
+	capPauseReason := ""
+	var capArtifact any
+	if p.capEval != nil {
+		step := capability.Step{
+			SessionID: p.session.ID,
+			Tool:      callReq.Name,
+			Args:      stringArgs(redactedArgs),
+			Path:      pathArgFromRedacted(callReq.Name, redactedArgs),
+			DestIP:    destIPFromArgs(callReq.Name, redactedArgs),
+			DestHost:  destHostFromArgs(callReq.Name, redactedArgs),
+			Declared:  capabilityDeclaredAuthority(snapshot.policy, serverName),
+		}
+		p.capEvalMu.Lock()
+		p.capStepID++
+		step.StepID = p.capStepID
+		receipt, err := p.capEval.Eval(context.Background(), step, p.capLastHash)
+		if err != nil {
+			stepID := step.StepID
+			prevHash := p.capLastHash
+			// Evaluator error: seal the pause-to-proof artifact, make it the
+			// predecessor for the next step (so the chain cannot fork around
+			// the pause), and route to the approval gate. Do not deny inline.
+			if pr, err2 := capability.NewPauseReceipt(p.session.ID, stepID, prevHash, err); err2 == nil {
+				capArtifact = pr
+				p.capLastHash = pr.Hash
+				if adv, ok := p.capEval.(interface{ AdvanceAfterError(int, string) }); ok {
+					adv.AdvanceAfterError(stepID, pr.Hash)
+				}
+			}
+			p.capEvalMu.Unlock()
+			capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (evaluator error)"
+		} else {
+			if receipt != nil {
+				p.capLastHash = receipt.Hash
+				capArtifact = receipt
+				if receipt.Decision == capability.DecisionPauseRequireProof {
+					// Boundary signal not attributable to the declared envelope (E5):
+					// route to the approval gate so an operator can supply fresh proof.
+					// Fail closed when approval is unavailable or rejected. Never deny
+					// inline and never silently allow.
+					capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (effect outside declared envelope)"
+				}
+			}
+			p.capEvalMu.Unlock()
+		}
+		// Route the pause through the existing approval gate: set decision to
+		// ActionRequireApproval and fall through to the switch below. The
+		// approval case owns evidence, the audit event, the blocking operator
+		// wait, fail-closed denial on unavailable/rejected approval, and the
+		// allow/forward path. Do NOT release here — the approval case owns the
+		// barrier release.
+		//
+		// Guard: the capability adapter is ACCOUNTING and may only upgrade a
+		// non-deny decision to pause-to-approval. A terminal policy/chain deny
+		// is the strongest fail-closed signal and must never be downgraded
+		// into an approvable request.
+		if capPauseReason != "" && decision.Action != policy.ActionDeny {
+			decision = policy.Decision{Action: policy.ActionRequireApproval, Reason: capPauseReason}
+		}
+	}
+
 	switch decision.Action {
 	case policy.ActionDeny:
 		p.metrics.IncrementDenied()
@@ -229,6 +310,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
+		attachCapabilityArtifact(&deniedEvent, capArtifact)
 		_ = p.audit.Log(deniedEvent)
 		release()
 		p.forwardAudit(deniedEvent)
@@ -249,6 +331,11 @@ func (p *Proxy) processToolsCall(
 		// SAME snapshot used for evaluation and the identity gate.
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
 		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
+		// Persist the capability receipt (ALLOW, E5 pause, or evaluator-error
+		// pause) on the terminal event so the accounting trajectory is
+		// durable. Dropping a successful Eval receipt would leave only the
+		// in-memory hash, which disappears on process exit.
+		attachCapabilityArtifact(&approvalEvent, capArtifact)
 		// Write the JSONL ledger record while holding runtimeMu to
 		// preserve audit ordering with respect to policy reloads.
 		_ = p.audit.Log(approvalEvent)
@@ -306,6 +393,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
+		attachCapabilityArtifact(&allowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
@@ -332,6 +420,7 @@ func (p *Proxy) processToolsCall(
 			RiskLevel: string(risk),
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
+		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
@@ -434,4 +523,238 @@ func findServerByName(pol *policy.Policy, name string) *policy.Server {
 		}
 	}
 	return nil
+}
+
+// attachCapabilityArtifact writes a sealed capability receipt (Eval Receipt
+// or PauseReceipt) onto the terminal audit event. Nil artifacts are a no-op
+// so the default no-eval path is unchanged. Uses the existing optional
+// approval_receipt fields; it does not add audit schema.
+func attachCapabilityArtifact(event *audit.Event, artifact any) {
+	if event == nil || artifact == nil {
+		return
+	}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		return
+	}
+	event.ApprovalReceiptHash = sha256Hex(data)
+	var recMap map[string]any
+	if err := json.Unmarshal(data, &recMap); err == nil {
+		event.ApprovalReceipt = recMap
+	}
+}
+
+// stringArgs converts the redacted args map into the evaluator's typed
+// observation surface. Under a command-bearing key, ANY JSON subtree
+// (string, argv array, nested object, array of objects) is command surface
+// and is flattened recursively so run({"arguments":[{"command":"bash -c id"}]})
+// cannot drop the command (fail-open ALLOW). Under a payload key, only
+// string scalars and string arrays are kept; nested objects stay dropped
+// (Rev 15). Numbers and booleans are omitted. Nested map keys are sorted
+// so the joined result is deterministic; array order is preserved.
+func stringArgs(redactedArgs map[string]any) map[string]string {
+	if len(redactedArgs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(redactedArgs))
+	for k, v := range redactedArgs {
+		if s := flattenArgValue(k, v); s != "" {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+func flattenArgValue(key string, v any) string {
+	if isCommandBearingKey(key) {
+		return flattenCommandSurface(v)
+	}
+	switch tv := v.(type) {
+	case string:
+		return tv
+	case []any, []string:
+		return joinStringSlice(tv)
+	default:
+		return ""
+	}
+}
+
+func isCommandBearingKey(k string) bool {
+	switch k {
+	case "command", "cmd", "args", "arguments", "executable", "shell_command":
+		return true
+	}
+	return false
+}
+
+// flattenCommandSurface walks a command-bearing JSON value and joins every
+// string it finds. Maps are visited in sorted-key order; arrays keep order.
+// Non-string scalars are skipped so a number cannot forge a token.
+func flattenCommandSurface(v any) string {
+	switch tv := v.(type) {
+	case string:
+		return strings.TrimSpace(tv)
+	case []string:
+		return joinStringSlice(tv)
+	case []any:
+		var parts []string
+		for _, e := range tv {
+			if s := flattenCommandSurface(e); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, " ")
+	case map[string]any:
+		if len(tv) == 0 {
+			return ""
+		}
+		keys := make([]string, 0, len(tv))
+		for k := range tv {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var parts []string
+		for _, k := range keys {
+			if s := flattenCommandSurface(tv[k]); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, " ")
+	default:
+		return ""
+	}
+}
+
+// joinStringSlice flattens a string argv slice. Non-string elements of a
+// mixed []any are skipped (payload arrays are not command objects).
+func joinStringSlice(v any) string {
+	var parts []string
+	switch slice := v.(type) {
+	case []string:
+		for _, s := range slice {
+			if s = strings.TrimSpace(s); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	case []any:
+		for _, e := range slice {
+			if s, ok := e.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					parts = append(parts, s)
+				}
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// pathArgFromRedacted derives the mediated file-tool path from the REDACTED
+// args only (same key set as the proxy's raw extractPath), so a redaction
+// replacement is what the evaluator observes and no raw secret can reach
+// the step or its receipt through Path.
+//
+// path/file/file_path/uri become Step.Path only on a recognized file-tool
+// surface (same parent as destHostFromArgs: payload keys are not structured
+// observations on a generic tool). get_metadata({"path":"/docs"}) must not
+// hit Eval's empty-Effect outside-workspace probe.
+func pathArgFromRedacted(tool string, redactedArgs map[string]any) string {
+	if !capability.IsFileToolName(tool) {
+		return ""
+	}
+	for _, key := range []string{"path", "file", "file_path", "uri"} {
+		if v, ok := redactedArgs[key].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// destIPFromArgs derives the structured network destination from a
+// redacted IP-literal arg. Explicit dest_ip is always a destination
+// surface. url/host/ip are destinations only on a recognized network tool
+// (Rev 15: those keys are payload on exec/write_file). A hostname is NOT
+// resolved here.
+func destIPFromArgs(tool string, redactedArgs map[string]any) netip.Addr {
+	keys := []string{"dest_ip"}
+	if capability.IsNetworkToolName(tool) {
+		keys = []string{"dest_ip", "ip", "host", "url"}
+	}
+	for _, key := range keys {
+		v, ok := redactedArgs[key].(string)
+		if !ok || v == "" {
+			continue
+		}
+		if i := strings.Index(v, "://"); i >= 0 {
+			v = v[i+3:]
+		}
+		if i := strings.IndexAny(v, "/?#"); i >= 0 {
+			v = v[:i]
+		}
+		if i := strings.LastIndex(v, ":"); i >= 0 && !strings.Contains(v[:i], ":") {
+			v = v[:i]
+		}
+		if addr, err := netip.ParseAddr(strings.Trim(v, "[]")); err == nil {
+			return addr
+		}
+	}
+	return netip.Addr{}
+}
+
+// destHostFromArgs derives the structured hostname destination from a
+// redacted arg. Explicit dest_host is always a destination surface.
+// url/host/uri/domain are destinations only on a recognized network tool
+// so web_fetch({"url":...}) still pauses while exec({"url":...}) keeps
+// url as payload (Rev 15). An IP literal is NOT returned here.
+func destHostFromArgs(tool string, redactedArgs map[string]any) string {
+	keys := []string{"dest_host"}
+	if capability.IsNetworkToolName(tool) {
+		keys = []string{"host", "url", "dest_host", "uri", "domain"}
+	}
+	for _, key := range keys {
+		v, ok := redactedArgs[key].(string)
+		if !ok || v == "" {
+			continue
+		}
+		if i := strings.Index(v, "://"); i >= 0 {
+			v = v[i+3:]
+		}
+		if i := strings.IndexAny(v, "/?#"); i >= 0 {
+			v = v[:i]
+		}
+		if i := strings.LastIndex(v, ":"); i >= 0 && !strings.Contains(v[:i], ":") {
+			v = v[:i]
+		}
+		v = strings.Trim(v, "[]")
+		// An IP literal is not a hostname; the IP path owns it.
+		if _, err := netip.ParseAddr(v); err == nil {
+			continue
+		}
+		if v == "" {
+			continue
+		}
+		return strings.ToLower(strings.TrimSuffix(v, "."))
+	}
+	return ""
+}
+
+// capabilityDeclaredAuthority builds the declared authority for an opted-in
+// step from the snapshot policy generation: Target is the logical server
+// name, WorkspaceRoot is the server-declared root ONLY. It does NOT fall back
+// to the proxy process's working directory: a missing server-declared root
+// leaves WorkspaceRoot empty so the capability evaluator fails closed
+// (missing workspace root -> evaluator error -> PAUSE) rather than silently
+// classifying files beside the visor process as in-envelope (P2: forging the
+// root with os.Getwd() was a fail-open that treated any sibling file as
+// in-workspace). The optional envelope sets (Network, Host,
+// DeclaredExecutables) stay empty on this first wiring: derived host_exec /
+// net_egress boundaries then fail closed to PAUSE_REQUIRE_NEW_PROOF.
+func capabilityDeclaredAuthority(pol *policy.Policy, serverName string) capability.DeclaredAuthority {
+	root := ""
+	if srv := findServerByName(pol, serverName); srv != nil {
+		root = srv.WorkspaceRoot
+	}
+	return capability.DeclaredAuthority{
+		Target:        serverName,
+		WorkspaceRoot: root,
+	}
 }

@@ -72,6 +72,7 @@ func main() {
 	otelInsecure := serveCmd.Bool("otel-insecure", true, "Use insecure gRPC for OTLP (typical for local LGTM)")
 	otelService := serveCmd.String("otel-service-name", "mcp-visor", "OpenTelemetry service.name")
 	otelTraceSample := serveCmd.Float64("otel-trace-sample", 1.0, "Trace sampling ratio 0..1 when OTLP is enabled")
+	capabilityEval := serveCmd.Bool("capability-eval", false, "Enable capability accounting evaluator (default: no-op)")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
@@ -219,6 +220,7 @@ func main() {
 				ServiceName:       *otelService,
 				TraceSampleRatio:  *otelTraceSample,
 			},
+			CapabilityEval: *capabilityEval,
 		})
 
 		p.SetLogLevel(logLevelOpt)

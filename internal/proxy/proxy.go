@@ -16,6 +16,7 @@ import (
 
 	"github.com/themayursinha/mcp-visor/internal/approval"
 	"github.com/themayursinha/mcp-visor/internal/audit"
+	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/observability"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -44,6 +45,15 @@ type Proxy struct {
 	siem           *siem.Exporter
 	approvalSigner signer.Signer
 	obs            *observability.Runtime
+
+	// capEval is the per-session capability accounting evaluator. With
+	// CapabilityEval disabled it is the no-op evaluator (zero behavioral
+	// delta). capEvalMu serializes Eval and the last-cap-hash / step-counter
+	// updates so one session's receipt chain cannot interleave.
+	capEval     capability.Evaluator
+	capEvalMu   sync.Mutex
+	capLastHash string
+	capStepID   int
 
 	// resolvedIdentity is the immutable stdio executable identity resolved
 	// once per launched proxy process. identityResolved records whether the
@@ -106,6 +116,9 @@ type Config struct {
 	SIEMFormat        string
 	Vault             VaultConfig
 	Observability     observability.Config
+	// CapabilityEval opts into the capability accounting evaluator. The
+	// default (false) constructs a no-op evaluator with zero behavioral delta.
+	CapabilityEval bool
 }
 
 type VaultConfig struct {
@@ -210,6 +223,10 @@ func New(cfg Config) *Proxy {
 		webhook:        wh,
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
+		capEval:        newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+	}
+	if proxy.capEval != nil {
+		proxy.capLastHash = capability.GenesisPrevHash
 	}
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
@@ -265,11 +282,40 @@ func NewWithTracing(cfg Config) *Proxy {
 		webhook:        wh,
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
+		capEval:        newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+	}
+	if proxy.capEval != nil {
+		proxy.capLastHash = capability.GenesisPrevHash
 	}
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
+}
+
+// capEvalEnabled reports whether the capability evaluator is enabled for this
+// configuration. It is enabled by the CLI flag (--capability-eval) OR by the
+// loaded policy's settings.capability_accounting: true. Both New and
+// NewWithTracing honor the policy setting so a policy opt-in is never silently
+// ignored. When neither is set, the default is the no-op evaluator (zero
+// behavioral delta).
+func capEvalEnabled(cfg Config) bool {
+	return cfg.CapabilityEval || (cfg.Policy != nil && cfg.Policy.Settings.CapabilityEval)
+}
+
+// newCapabilityEvaluator builds the per-session capability evaluator. An
+// opted-in session gets a ChainEvaluator bound to its SessionID; the default
+// is the no-op evaluator (zero behavioral delta). A nil return means the
+// whole adapter call site is skipped.
+func newCapabilityEvaluator(sessionID string, enabled bool) capability.Evaluator {
+	if !enabled {
+		return nil
+	}
+	chain, err := capability.NewChainEvaluator(sessionID)
+	if err != nil {
+		return nil
+	}
+	return chain
 }
 
 // resolveLaunchedIdentity captures the immutable stdio executable identity
@@ -363,6 +409,28 @@ func (p *Proxy) wirePolicyReload() {
 	p.engine.SetReloadCommitter(p.commitPolicyRuntime, p.reconcilePublishedRuntime)
 }
 
+// syncCapabilityEvaluator reconciles the capability evaluator with the current
+// policy generation during a reload. The effective enable is the CLI flag
+// (--capability-eval, persistent for the process) OR the loaded policy's
+// settings.capability_accounting. A reload that turns the policy setting OFF
+// removes the evaluator (unless the CLI flag is set); a reload that turns it ON
+// constructs it. This is called under runtimeMu.Lock() while tools/call is
+// excluded, so the evaluator toggle is invisible to an in-flight call. The
+// session/last-hash state is preserved across a reconstruction only when the
+// evaluator never actually changed; a genuine off->on reconstruction starts a
+// fresh chain (GenesisPrevHash), which is the correct fail-closed default.
+func (p *Proxy) syncCapabilityEvaluator(pol *policy.Policy) {
+	enabled := p.cfg.CapabilityEval || (pol != nil && pol.Settings.CapabilityEval)
+	if enabled && p.capEval == nil {
+		p.capEval = newCapabilityEvaluator(p.session.ID, true)
+		if p.capEval != nil {
+			p.capLastHash = capability.GenesisPrevHash
+		}
+	} else if !enabled && p.capEval != nil {
+		p.capEval = nil
+	}
+}
+
 // reconcilePublishedRuntime refreshes redactor, audit patterns, and approval
 // timeout to match an already-published policy generation. It is invoked while
 // the watcher/engine registration lock is held, so it must not publish() or
@@ -391,6 +459,12 @@ func (p *Proxy) refreshPolicyRuntime(pol *policy.Policy) {
 	if p.audit != nil {
 		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
 	}
+	// Capability enablement is a policy-derived runtime surface, same as
+	// the redactor and approval timeout. Both the reload-commit path and
+	// the constructor-registration reconcile path must sync it against the
+	// published generation so a stale cfg.Policy cannot leave capEval nil
+	// while the engine already exposes capability_accounting: true.
+	p.syncCapabilityEvaluator(pol)
 	p.runtimeMu.Unlock()
 }
 
@@ -426,6 +500,7 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 	if p.approval != nil {
 		p.approval.SetTimeout(timeout)
 	}
+	p.syncCapabilityEvaluator(pol)
 	if p.audit != nil {
 		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
 		// Record the generation transition before exposing it to tools/call.

@@ -1,0 +1,113 @@
+{
+  "task_id": "T-CAPABILITY-001-capability-evaluator-adapter",
+  "invariant_ids": [
+    "H8",
+    "H19"
+  ],
+  "security_sensitive": true,
+  "security_problem": "SECURITY INVARIANT: On an opted-in session (--capability-eval), the capability evaluator (a deterministic, stdlib-only accounting device) is consulted at tools/call; an evaluator error (unparseable/missing/invalid effect target, missing declared authority, prior-hash mismatch, replay, non-canonical CIDR/host/path, raw/structured target disagreement, malformed declared host/executable, unknown receipt version) is mapped to PAUSE_REQUIRE_NEW_PROOF (reason evaluator_error) and routes to the existing approval gate — NEVER a silent allow. When the flag is off (the default), the NoopEvaluator returns (nil, nil): zero behavioral delta on the existing tools/call decision path. SUPPORTED MODEL: mediated tools/call surface only; ambient MCP-server activity (child processes, server-side egress, unmediated file ops) is NOT observable and is out of scope. ATTACK CLASSES: (1) opted-in evaluator error being swallowed and the call allowed; (2) boundary-request signal with an effect NOT attributable to the declared envelope (E5) reaching ALLOW instead of PAUSE; (3) an empty-Effect file-boundary observation reaching ALLOW instead of a fail-closed evaluator error; (4) args-derived boundary signal with empty structured Effect falling through to the Effect==\"\" ALLOW branch; (5) false-positive boundary signals from benign payload content (substring shell tokens, non-command arg keys). FAILURE SEMANTICS: every uncertainty and every evaluator error fails closed to PAUSE_REQUIRE_NEW_PROOF (deny-with-proof, zero silent allow). NON-GOALS: NO LLM in the decision path; no new dependency (stdlib only); no ambient (non-mediated) observability claims; no change to audit invariants; no change to public security claims; no auto-deny beyond the pause-to-approval routing.",
+  "required_behavior": "internal/capability package with the Rev 15 contract surface (Evaluator interface, NoopEvaluator default, ChainEvaluator, 8-kind signal extraction with command-bearing-key-aware args scanning, canonical hash-linked receipt Encode/Decode/Validate, PauseReceipt with stable error_code only) is created; internal/policy/types.go gains the opt-in field; cmd/mcp-visor/main.go wires --capability-eval; internal/proxy/tools_call.go calls the adapter ONLY behind the opt-in flag (default NoopEvaluator = zero behavioral delta). The fail-closed RED test proves an opted-in evaluator error → PAUSE_REQUIRE_NEW_PROOF (reason evaluator_error), never silent allow.",
+  "failure_behavior": "Fail closed: an opted-in evaluator error or E5 boundary-request signal is PAUSE_REQUIRE_NEW_PROOF and routes to the existing approval gate; never silent allow. Default (flag off) keeps the existing tools/call behavior byte-identical.",
+  "spec_revision": 15,
+  "non_goals": [
+    "integrating the evaluator decision into processToolsCall without an explicit opt-in flag",
+    "ambient (non-mediated) MCP-server activity observation or completeness claims",
+    "LLM verdicts or automatic deny in the decision path",
+    "new third-party dependencies (stdlib only)",
+    "changes to internal/audit invariants or public security claims",
+    "envelope extension beyond empty optional sets (declared_executables/declared_network/declared_hosts stay empty by default)",
+    "writing .hermes/plans or private notes into the repository"
+  ],
+  "attack_classes": [
+    {
+      "id": "evaluator-error-silent-allow",
+      "failure_class": "evaluator-error-silent-allow",
+      "expected": "an opted-in evaluator error is mapped to PAUSE_REQUIRE_NEW_PROOF (reason evaluator_error, stable error_code) and never results in a silent allow or forward"
+    },
+    {
+      "id": "boundary-not-attributable-reaches-allow",
+      "failure_class": "boundary-not-attributable-reaches-allow",
+      "expected": "a boundary-request signal (host_exec/net_egress) with empty optional declared sets is ALWAYS E5 → PAUSE_REQUIRE_NEW_PROOF; a malformed observed DestHost or raw/structured disagreement is an evaluator error → PAUSE"
+    },
+    {
+      "id": "empty-effect-file-boundary-allow",
+      "failure_class": "empty-effect-file-boundary-allow",
+      "expected": "a file-boundary observation WITHOUT an explicit structured Effect (pre-populated SignalBoundaryFileOutside, or an outside/unresolvable mediated file surface) is UNTYPED → evaluator error → PAUSE, never ALLOW, never a row-8 signal"
+    },
+    {
+      "id": "args-derived-boundary-allow",
+      "failure_class": "args-derived-boundary-allow",
+      "expected": "an args/tool-derived boundary signal with empty Step.Effect binds to the derived kind (host_exec tool name / net_egress DestIP→DestHost→args-URL); an args-only host_exec surface fails closed (evaluator error → PAUSE), never ALLOW"
+    },
+    {
+      "id": "benign-payload-false-positive",
+      "failure_class": "benign-payload-false-positive",
+      "expected": "command-invocation signatures are scanned ONLY under command-bearing keys (command/cmd/args/arguments/executable/shell_command); benign payload in non-command keys (content/path/url/output/body) never emits boundary signals and never pauses"
+    }
+  ],
+  "allowed_paths": [
+    "internal/capability/evaluator.go",
+    "internal/capability/signals.go",
+    "internal/capability/normalize.go",
+    "internal/capability/capability.go",
+    "internal/capability/receipt.go",
+    "internal/capability/evaluator_test.go",
+    "internal/capability/signals_test.go",
+    "internal/capability/receipt_test.go",
+    "internal/capability/normalize_test.go",
+    "internal/capability/rev14_review_findings_test.go",
+    "internal/capability/rev15_review_findings_test.go",
+    "internal/policy/types.go",
+    "internal/policy/types_test.go",
+    "cmd/mcp-visor/main.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/capability_adapter_test.go",
+    "harness/tasks/T-CAPABILITY-001-capability-evaluator-adapter.json",
+    "harness/invariants.md"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "internal/policy/types.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/proxy.go",
+    "cmd/mcp-visor/main.go",
+    "internal/capability/evaluator.go"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": [
+        "go",
+        "test",
+        "./internal/capability",
+        "-run",
+        "^TestRedOptedInEvaluatorErrorNeverSilentAllow$",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "./internal/capability",
+        "./internal/policy",
+        "./internal/proxy",
+        "./cmd/mcp-visor"
+      ]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ]
+}
