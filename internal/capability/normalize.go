@@ -250,7 +250,7 @@ func CanonicalHostIsValid(s string) (string, error) {
 			return "", fmt.Errorf("%w: label starts/ends with hyphen in host %q", ErrInvalidStep, s)
 		}
 		for _, r := range part {
-			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 				return "", fmt.Errorf("%w: malformed host %q", ErrInvalidStep, s)
 			}
 		}

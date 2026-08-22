@@ -362,17 +362,17 @@ func checkNoDuplicateKeys(data []byte) error {
 	i, n := 0, len(data)
 	for i < n {
 		c := data[i]
-		switch {
-		case c == '{':
+		switch c {
+		case '{':
 			stack = append(stack, map[string]bool{})
 			i++
-		case c == '}':
+		case '}':
 			if len(stack) == 0 {
 				return fmt.Errorf("%w: unbalanced object", ErrInvalidStep)
 			}
 			stack = stack[:len(stack)-1]
 			i++
-		case c == '"':
+		case '"':
 			start := i
 			i++
 			for i < n && data[i] != '"' {
@@ -400,9 +400,9 @@ func checkNoDuplicateKeys(data []byte) error {
 				}
 				stack[len(stack)-1][key] = true
 			}
-		case c == '[' || c == ']' || c == ',' || c == ':':
+		case '[', ']', ',', ':':
 			i++
-		case c == ' ' || c == '	' || c == '\n' || c == '\r':
+		case ' ', '	', '\n', '\r':
 			i++
 		default:
 			// number / true / false / null literal — skip to next structural char.
