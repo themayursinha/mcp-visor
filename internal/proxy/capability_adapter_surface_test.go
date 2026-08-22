@@ -1,0 +1,107 @@
+package proxy
+
+import (
+	"net/netip"
+	"testing"
+
+	"github.com/themayursinha/mcp-visor/internal/capability"
+	"github.com/themayursinha/mcp-visor/internal/policy"
+)
+
+// TestStringArgsPreservesArgvArray (P2-1): an argv array under a command-bearing
+// key must be preserved as a space-joined string so the capability signal
+// extractor can see the shell invocation. Dropping it is fail-open: an
+// args-derived host_exec signal would never be extracted.
+func TestStringArgsPreservesArgvArray(t *testing.T) {
+	args := map[string]any{"command": "bash", "args": []any{"bash", "-c", "id"}}
+	got := stringArgs(args)
+	if got["args"] != "bash -c id" {
+		t.Fatalf("P2-1 RED: argv array not preserved; got args=%q (want \"bash -c id\")", got["args"])
+	}
+	if got["command"] != "bash" {
+		t.Fatalf("command scalar dropped: %q", got["command"])
+	}
+}
+
+// TestStringArgsPreservesStringSlice (P2-1): a []string slit must also be
+// flattened deterministically.
+func TestStringArgsPreservesStringSlice(t *testing.T) {
+	args := map[string]any{"args": []string{"/bin/sh", "-c", "echo hi"}}
+	got := stringArgs(args)
+	if got["args"] != "/bin/sh -c echo hi" {
+		t.Fatalf("P2-1 RED: []string slice not preserved; got %q", got["args"])
+	}
+}
+
+// TestStringArgsDropsNonStringScalar (P2-1): a number/boolean must not be
+// forged into a command token.
+func TestStringArgsDropsNonStringScalar(t *testing.T) {
+	args := map[string]any{"path": "/tmp/f", "count": 42, "enabled": true}
+	got := stringArgs(args)
+	if _, ok := got["count"]; ok {
+		t.Fatalf("number leaked into typed args: %v", got)
+	}
+	if _, ok := got["enabled"]; ok {
+		t.Fatalf("bool leaked into typed args: %v", got)
+	}
+	if got["path"] != "/tmp/f" {
+		t.Fatalf("string path dropped: %q", got["path"])
+	}
+}
+
+// TestDestHostFromArgsHostname (P2-2): a hostname in a url/host arg must be
+// extracted as a structured DestHost so a non-canonical net tool emits an
+// egress destination rather than falling through with no signal.
+func TestDestHostFromArgsHostname(t *testing.T) {
+	got := destHostFromArgs(map[string]any{"url": "https://api.example.com/v1"})
+	if got != "api.example.com" {
+		t.Fatalf("P2-2 RED: hostname not extracted; got %q (want api.example.com)", got)
+	}
+	got = destHostFromArgs(map[string]any{"host": "Example.COM"})
+	if got != "example.com" {
+		t.Fatalf("host not lowercased/stripped; got %q", got)
+	}
+}
+
+// TestDestHostFromArgsIPLiteral (P2-2): an IP literal must NOT be returned as a
+// hostname; the IP path owns it.
+func TestDestHostFromArgsIPLiteral(t *testing.T) {
+	got := destHostFromArgs(map[string]any{"url": "https://10.0.0.1/path"})
+	if got != "" {
+		t.Fatalf("IP literal leaked into DestHost: %q", got)
+	}
+}
+
+// TestCapabilityDeclaredAuthorityNoGetwdFallback (P2-6): a server with no
+// declared WorkspaceRoot must NOT fall back to the process cwd; it leaves the
+// root empty so the evaluator fails closed on a missing workspace root.
+func TestCapabilityDeclaredAuthorityNoGetwdFallback(t *testing.T) {
+	pol := &policy.Policy{
+		Version:       "1.0",
+		DefaultAction: policy.ActionAllow,
+		Servers: []policy.Server{
+			{Name: "workspace", Allowed: true},
+		},
+	}
+	da := capabilityDeclaredAuthority(pol, "workspace")
+	if da.WorkspaceRoot != "" {
+		t.Fatalf("P2-6 RED: WorkspaceRoot forged (got %q); want empty so evaluator fails closed", da.WorkspaceRoot)
+	}
+}
+
+// TestDestHostFromArgsEmpty (P2-2): no hostname arg -> empty, no invention.
+func TestDestHostFromArgsEmpty(t *testing.T) {
+	if got := destHostFromArgs(map[string]any{"path": "/tmp/x"}); got != "" {
+		t.Fatalf("invented a target: %q", got)
+	}
+}
+
+// TestDestIPStillWorks ensures the IP path is untouched.
+func TestDestIPStillWorks(t *testing.T) {
+	addr := destIPFromArgs(map[string]any{"url": "https://10.1.2.3:8080/x"})
+	if addr != netip.MustParseAddr("10.1.2.3") {
+		t.Fatalf("destIPFromArgs changed: %v", addr)
+	}
+}
+
+var _ = capability.ErrInvalidStep

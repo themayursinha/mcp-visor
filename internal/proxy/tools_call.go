@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
-	"os"
 	"strings"
 	"time"
 
@@ -222,6 +221,7 @@ func (p *Proxy) processToolsCall(
 	// (denies) only when approval is unavailable or rejected. Never a silent
 	// allow and never a hard deny that skips the approval gate.
 	capPauseReason := ""
+	var capPauseReceipt *capability.PauseReceipt
 	if p.capEval != nil {
 		step := capability.Step{
 			SessionID: p.session.ID,
@@ -229,6 +229,7 @@ func (p *Proxy) processToolsCall(
 			Args:      stringArgs(redactedArgs),
 			Path:      pathArgFromRedacted(redactedArgs),
 			DestIP:    destIPFromArgs(redactedArgs),
+			DestHost:  destHostFromArgs(redactedArgs),
 			Declared:  capabilityDeclaredAuthority(snapshot.policy, serverName),
 		}
 		p.capEvalMu.Lock()
@@ -239,13 +240,11 @@ func (p *Proxy) processToolsCall(
 			stepID := step.StepID
 			prevHash := p.capLastHash
 			p.capEvalMu.Unlock()
-			// Evaluator error: record the pause receipt for the audit trail,
-			// then route to the approval gate (pause-to-approval, fail closed
-			// on approval unavailable/rejected). Do not deny inline.
+			// Evaluator error: build the pause-to-proof artifact and route to
+			// the approval gate (pause-to-approval, fail closed on approval
+			// unavailable/rejected). Do not deny inline.
 			if pr, err2 := capability.NewPauseReceipt(p.session.ID, stepID, prevHash, err); err2 == nil {
-				if data, err3 := json.Marshal(pr); err3 == nil && len(data) > 0 {
-					p.logger.Warn("capability pause receipt (evaluator error)", "pause_receipt", string(data), "session", p.session.ID)
-				}
+				capPauseReceipt = pr
 			}
 			capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (evaluator error)"
 		} else {
@@ -318,6 +317,20 @@ func (p *Proxy) processToolsCall(
 		// SAME snapshot used for evaluation and the identity gate.
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
 		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
+		// Persist the capability pause receipt (if any) durably on the
+		// approval-required event so the pause-to-proof artifact is never lost
+		// (P2): it carries the stable error_code and the hash-linked receipt
+		// for downstream audit, dedup, and alerting. The receipt is the
+		// error-to-pause artifact the contract requires.
+		if capPauseReceipt != nil {
+			if data, err := json.Marshal(capPauseReceipt); err == nil {
+				approvalEvent.ApprovalReceiptHash = sha256Hex(data)
+				var recMap map[string]any
+				if err := json.Unmarshal(data, &recMap); err == nil {
+					approvalEvent.ApprovalReceipt = recMap
+				}
+			}
+		}
 		// Write the JSONL ledger record while holding runtimeMu to
 		// preserve audit ordering with respect to policy reloads.
 		_ = p.audit.Log(approvalEvent)
@@ -515,11 +528,51 @@ func stringArgs(redactedArgs map[string]any) map[string]string {
 	}
 	out := make(map[string]string, len(redactedArgs))
 	for k, v := range redactedArgs {
-		if s, ok := v.(string); ok {
-			out[k] = s
+		switch tv := v.(type) {
+		case string:
+			out[k] = tv
+		case []any, []string:
+			// Command-bearing args often arrive as an argv array (e.g.
+			// {"args":["bash","-c","id"]}). Preserve them as a space-joined
+			// string so the capability package's commandBearingArgs can see
+			// the shell invocation. Dropping them would be fail-open: an
+			// args-derived host_exec/net_egress boundary signal would never
+			// be extracted. Nested objects are flattened the same way only
+			// under command-bearing keys; ordinary payload arrays (e.g. a
+			// list of paths) are also joined so the args surface is never
+			// silently lost.
+			out[k] = joinArgSlice(tv)
+		default:
+			// Numbers, booleans, and nested objects are not string-scalar
+			// command surfaces; leave them out of the typed args map. They
+			// cannot carry a command invocation token.
 		}
 	}
 	return out
+}
+
+// joinArgSlice flattens an argv slice into a space-joined string. Nested
+// string elements are joined in order; non-string elements are skipped so a
+// mixed array cannot forge a token out of a number. This preserves the exact
+// argv ordering the tool received (bash -c id -> "bash -c id") for the
+// capability signal extractor, while remaining deterministic.
+func joinArgSlice(v any) string {
+	var parts []string
+	switch slice := v.(type) {
+	case []string:
+		for _, s := range slice {
+			if s != "" {
+				parts = append(parts, strings.TrimSpace(s))
+			}
+		}
+	case []any:
+		for _, e := range slice {
+			if s, ok := e.(string); ok && s != "" {
+				parts = append(parts, strings.TrimSpace(s))
+			}
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // pathArgFromRedacted derives the mediated file-tool path from the REDACTED
@@ -561,20 +614,60 @@ func destIPFromArgs(redactedArgs map[string]any) netip.Addr {
 	return netip.Addr{}
 }
 
+// destHostFromArgs derives the structured hostname destination from a
+// redacted host/url arg value, lowercased with a trailing dot stripped, so
+// non-canonical net tools (web_fetch, browse, fetch_url) that carry a
+// hostname in a url/host arg emit a structured egress destination rather
+// than falling through with no signal (P2: fail-open). An IP literal is NOT
+// returned here — destIPFromArgs owns that and the evaluator treats a
+// populated DestHost as a hostname it must canonically validate. Empty or a
+// value that still parses as an IP literal returns "" (the IP path owns it).
+// This also must not invent a target when the hostname is malformed: it is
+// the evaluator's job to reject (fail closed to PAUSE), not the proxy's to
+// guess.
+func destHostFromArgs(redactedArgs map[string]any) string {
+	for _, key := range []string{"host", "url", "dest_host", "uri", "domain"} {
+		v, ok := redactedArgs[key].(string)
+		if !ok || v == "" {
+			continue
+		}
+		if i := strings.Index(v, "://"); i >= 0 {
+			v = v[i+3:]
+		}
+		if i := strings.IndexAny(v, "/?#"); i >= 0 {
+			v = v[:i]
+		}
+		if i := strings.LastIndex(v, ":"); i >= 0 && !strings.Contains(v[:i], ":") {
+			v = v[:i]
+		}
+		v = strings.Trim(v, "[]")
+		// An IP literal is not a hostname; the IP path owns it.
+		if _, err := netip.ParseAddr(v); err == nil {
+			continue
+		}
+		if v == "" {
+			continue
+		}
+		return strings.ToLower(strings.TrimSuffix(v, "."))
+	}
+	return ""
+}
+
 // capabilityDeclaredAuthority builds the declared authority for an opted-in
 // step from the snapshot policy generation: Target is the logical server
-// name, WorkspaceRoot is the server-declared root or the proxy process's
-// working directory. The optional envelope sets (Network, Host,
+// name, WorkspaceRoot is the server-declared root ONLY. It does NOT fall back
+// to the proxy process's working directory: a missing server-declared root
+// leaves WorkspaceRoot empty so the capability evaluator fails closed
+// (missing workspace root -> evaluator error -> PAUSE) rather than silently
+// classifying files beside the visor process as in-envelope (P2: forging the
+// root with os.Getwd() was a fail-open that treated any sibling file as
+// in-workspace). The optional envelope sets (Network, Host,
 // DeclaredExecutables) stay empty on this first wiring: derived host_exec /
 // net_egress boundaries then fail closed to PAUSE_REQUIRE_NEW_PROOF.
 func capabilityDeclaredAuthority(pol *policy.Policy, serverName string) capability.DeclaredAuthority {
 	root := ""
 	if srv := findServerByName(pol, serverName); srv != nil {
 		root = srv.WorkspaceRoot
-	}
-	if root == "" {
-		cwd, _ := os.Getwd()
-		root = cwd
 	}
 	return capability.DeclaredAuthority{
 		Target:        serverName,
