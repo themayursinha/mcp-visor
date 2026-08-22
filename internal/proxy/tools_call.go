@@ -233,7 +233,7 @@ func (p *Proxy) processToolsCall(
 			SessionID: p.session.ID,
 			Tool:      callReq.Name,
 			Args:      stringArgs(redactedArgs),
-			Path:      pathArgFromRedacted(redactedArgs),
+			Path:      pathArgFromRedacted(callReq.Name, redactedArgs),
 			DestIP:    destIPFromArgs(callReq.Name, redactedArgs),
 			DestHost:  destHostFromArgs(callReq.Name, redactedArgs),
 			Declared:  capabilityDeclaredAuthority(snapshot.policy, serverName),
@@ -652,7 +652,15 @@ func joinStringSlice(v any) string {
 // args only (same key set as the proxy's raw extractPath), so a redaction
 // replacement is what the evaluator observes and no raw secret can reach
 // the step or its receipt through Path.
-func pathArgFromRedacted(redactedArgs map[string]any) string {
+//
+// path/file/file_path/uri become Step.Path only on a recognized file-tool
+// surface (same parent as destHostFromArgs: payload keys are not structured
+// observations on a generic tool). get_metadata({"path":"/docs"}) must not
+// hit Eval's empty-Effect outside-workspace probe.
+func pathArgFromRedacted(tool string, redactedArgs map[string]any) string {
+	if !capability.IsFileToolName(tool) {
+		return ""
+	}
 	for _, key := range []string{"path", "file", "file_path", "uri"} {
 		if v, ok := redactedArgs[key].(string); ok && v != "" {
 			return v

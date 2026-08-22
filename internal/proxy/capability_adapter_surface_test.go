@@ -119,6 +119,27 @@ func TestDestHostIgnoresPayloadURLOnGenericTool(t *testing.T) {
 	}
 }
 
+func TestPathArgIgnoredOnGenericTool(t *testing.T) {
+	if got := pathArgFromRedacted("get_metadata", map[string]any{"path": "/docs"}); got != "" {
+		t.Fatalf("get_metadata({path}) must not populate Step.Path, got %q", got)
+	}
+	if got := pathArgFromRedacted("exec", map[string]any{"file": "/etc/passwd"}); got != "" {
+		t.Fatalf("exec({file}) must not populate Step.Path, got %q", got)
+	}
+}
+
+func TestPathArgPopulatedOnFileTool(t *testing.T) {
+	if got := pathArgFromRedacted("file_write", map[string]any{"path": "/tmp/out.txt"}); got != "/tmp/out.txt" {
+		t.Fatalf("file_write({path}) must populate Step.Path, got %q", got)
+	}
+	if got := pathArgFromRedacted("write_file", map[string]any{"file_path": "/tmp/a"}); got != "/tmp/a" {
+		t.Fatalf("write_file({file_path}) must populate Step.Path, got %q", got)
+	}
+	if got := pathArgFromRedacted("read_file", map[string]any{"file": "/tmp/b"}); got != "/tmp/b" {
+		t.Fatalf("read_file({file}) must populate Step.Path, got %q", got)
+	}
+}
+
 // TestStringArgsFlattensNestedCommandBearingObject: a command buried in a
 // nested object under a command-bearing key must remain visible. Dropping
 // the object is fail-open (run({"arguments":{"command":"bash -c id"}}) → ALLOW).

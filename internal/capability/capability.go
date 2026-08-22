@@ -816,6 +816,19 @@ func IsNetworkToolName(tool string) bool {
 	return isNetToolName(strings.ToLower(strings.TrimSpace(tool)))
 }
 
+// IsFileToolName reports whether a mediated tool name is a file-operation
+// surface. The proxy may promote path/file/file_path/uri args to Step.Path
+// only for these tools. On a generic tool those keys are Rev 15 payload
+// (get_metadata/exec path) and must not become a structured file observation
+// that trips Eval's empty-Effect outside-workspace probe.
+func IsFileToolName(tool string) bool {
+	switch canonicalCommandToken(strings.ToLower(strings.TrimSpace(tool))) {
+	case "file_write", "write_file", "read_file", "file_read":
+		return true
+	}
+	return false
+}
+
 // argsContainURLOrNetTool reports whether any arg value under a
 // COMMAND-BEARING KEY contains an http(s) URL or an exact network-tool token
 // (curl/wget) at a command boundary. Rev 15 (reviewer run 200): non-command

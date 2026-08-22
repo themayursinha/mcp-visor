@@ -611,6 +611,21 @@ func TestP2GenericToolUrlArgDoesNotPause(t *testing.T) {
 	}
 }
 
+// TestP2GenericToolPathArgDoesNotPause: Codex P2 — a generic tool with a
+// payload path must not hit Eval's empty-Effect outside-workspace probe.
+func TestP2GenericToolPathArgDoesNotPause(t *testing.T) {
+	dir := t.TempDir()
+	p := optedInWorkspaceProxy(t, dir, "sess-meta-path")
+	action := callTool(t, p, 1, "get_metadata", map[string]any{"path": "/docs"})
+	if action != "forward" {
+		t.Fatalf("get_metadata({path}) must ALLOW/forward, got %q", action)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "approvals", "req-*.json"))
+	if len(matches) > 0 {
+		t.Fatal("get_metadata({path}) reached approval; payload path was treated as a file observation")
+	}
+}
+
 // TestP1CommandBearingArrayOfObjectsPauses: Codex P1 — arguments as an
 // array of objects must still expose the buried command and pause.
 func TestP1CommandBearingArrayOfObjectsPauses(t *testing.T) {
