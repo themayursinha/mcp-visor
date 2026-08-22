@@ -79,6 +79,13 @@ import (
 )
 
 func EffectAttributable(step Step) (bool, error) {
+	// A populated-but-malformed DestHost is an evaluator error (fail
+	// closed), independent of Effect kind — never ALLOW and never ordinary
+	// E5. Valid DestHost/DestIP is handled below; this only rejects
+	// unparseable observations (Codex P1 / host_exec Rev 8 hoist).
+	if _, err := structuredDestination(step); err != nil {
+		return false, err
+	}
 	da := step.Declared
 	switch step.Effect {
 	case EffectHostExec:
@@ -681,6 +688,33 @@ func isCommandBoundary(c byte) bool {
 	return false
 }
 
+// structuredDestination reports whether a STRUCTURED DestHost/DestIP field
+// is authoritative proof of an egress request, independent of the args
+// surface (Codex P1). Distinguishes:
+//
+//	(true, nil)  — DestIP is valid, or DestHost is a non-empty valid
+//	               hostname (or an IP-literal dual-destination spelling)
+//	(false, nil) — no structured destination
+//	(_, err)     — DestHost is populated but not a valid hostname and not
+//	               an IP literal → evaluator error, never ALLOW / never E5
+func structuredDestination(step Step) (bool, error) {
+	if step.DestHost != "" {
+		if _, err := CanonicalHostIsValid(step.DestHost); err != nil {
+			// Rev 6 dual-destination: DestHost may be an IP-literal spelling
+			// of DestIP. That is not a malformed hostname; attribution
+			// enforces DestIP/DestHost agreement.
+			if _, ipErr := netip.ParseAddr(strings.Trim(step.DestHost, "[]")); ipErr != nil {
+				return false, fmt.Errorf("%w: malformed structured DestHost %q", ErrInvalidStep, step.DestHost)
+			}
+		}
+		return true, nil
+	}
+	if step.DestIP.IsValid() {
+		return true, nil
+	}
+	return false, nil
+}
+
 // egressFromArgs reports whether the mediated tool call (name or args)
 // requests network egress: a network tool (curl/wget/http_get/fetch/request)
 // or a URL/IP argument. Deterministic and redacted-args-only.
@@ -695,7 +729,15 @@ func isCommandBoundary(c byte) bool {
 // command-bearing key (`command`/`cmd`/`args`/`arguments`/`executable`/
 // `shell_command`). `write_file` `content:"curl"` is benign payload, not a
 // mediated egress request.
+//
+// Codex P1: a STRUCTURED DestHost/DestIP is authoritative proof of an
+// egress request, orthogonal to the args scan. Malformed DestHost still
+// reports true here so ExtractSignals emits the boundary signal; Eval
+// fails closed via EffectAttributable's evaluator-error path.
 func egressFromArgs(step Step, blob string) bool {
+	if ok, err := structuredDestination(step); err != nil || ok {
+		return true
+	}
 	t := strings.ToLower(step.Tool)
 	if isNetToolName(t) {
 		return true
@@ -708,11 +750,13 @@ func egressFromArgs(step Step, blob string) bool {
 }
 
 // isNetToolName reports whether the tool name is a documented network-tool
-// surface: an EXACT match on curl/wget/http_get/http/fetch/request/net, or
-// any tool starting with "http" (http_get, http-client, http_request).
+// surface: an EXACT match on curl/wget/http_get/http/fetch/request/net/
+// web_fetch/browse/fetch_url, or any tool starting with "http"
+// (http_get, http-client, http_request).
 func isNetToolName(t string) bool {
 	switch t {
-	case "curl", "wget", "http_get", "http", "fetch", "request", "net":
+	case "curl", "wget", "http_get", "http", "fetch", "request", "net",
+		"web_fetch", "browse", "fetch_url":
 		return true
 	}
 	return strings.HasPrefix(t, "http")
