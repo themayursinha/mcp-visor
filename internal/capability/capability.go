@@ -806,6 +806,14 @@ func isNetToolName(t string) bool {
 	return strings.HasPrefix(t, "http")
 }
 
+// IsNetworkToolName reports whether a mediated tool name is a destination
+// surface. The proxy may promote url/host/uri/domain args to DestHost/DestIP
+// only for these tools. On a generic tool those keys are Rev 15 payload
+// (write_file/exec url) and must not become structured destinations.
+func IsNetworkToolName(tool string) bool {
+	return isNetToolName(strings.ToLower(strings.TrimSpace(tool)))
+}
+
 // argsContainURLOrNetTool reports whether any arg value under a
 // COMMAND-BEARING KEY contains an http(s) URL or an exact network-tool token
 // (curl/wget) at a command boundary. Rev 15 (reviewer run 200): non-command

@@ -53,11 +53,11 @@ func TestStringArgsDropsNonStringScalar(t *testing.T) {
 // extracted as a structured DestHost so a non-canonical net tool emits an
 // egress destination rather than falling through with no signal.
 func TestDestHostFromArgsHostname(t *testing.T) {
-	got := destHostFromArgs(map[string]any{"url": "https://api.example.com/v1"})
+	got := destHostFromArgs("web_fetch", map[string]any{"url": "https://api.example.com/v1"})
 	if got != "api.example.com" {
 		t.Fatalf("P2-2 RED: hostname not extracted; got %q (want api.example.com)", got)
 	}
-	got = destHostFromArgs(map[string]any{"host": "Example.COM"})
+	got = destHostFromArgs("web_fetch", map[string]any{"host": "Example.COM"})
 	if got != "example.com" {
 		t.Fatalf("host not lowercased/stripped; got %q", got)
 	}
@@ -66,7 +66,7 @@ func TestDestHostFromArgsHostname(t *testing.T) {
 // TestDestHostFromArgsIPLiteral (P2-2): an IP literal must NOT be returned as a
 // hostname; the IP path owns it.
 func TestDestHostFromArgsIPLiteral(t *testing.T) {
-	got := destHostFromArgs(map[string]any{"url": "https://10.0.0.1/path"})
+	got := destHostFromArgs("web_fetch", map[string]any{"url": "https://10.0.0.1/path"})
 	if got != "" {
 		t.Fatalf("IP literal leaked into DestHost: %q", got)
 	}
@@ -91,16 +91,31 @@ func TestCapabilityDeclaredAuthorityNoGetwdFallback(t *testing.T) {
 
 // TestDestHostFromArgsEmpty (P2-2): no hostname arg -> empty, no invention.
 func TestDestHostFromArgsEmpty(t *testing.T) {
-	if got := destHostFromArgs(map[string]any{"path": "/tmp/x"}); got != "" {
+	if got := destHostFromArgs("web_fetch", map[string]any{"path": "/tmp/x"}); got != "" {
 		t.Fatalf("invented a target: %q", got)
 	}
 }
 
 // TestDestIPStillWorks ensures the IP path is untouched.
 func TestDestIPStillWorks(t *testing.T) {
-	addr := destIPFromArgs(map[string]any{"url": "https://10.1.2.3:8080/x"})
+	addr := destIPFromArgs("web_fetch", map[string]any{"url": "https://10.1.2.3:8080/x"})
 	if addr != netip.MustParseAddr("10.1.2.3") {
 		t.Fatalf("destIPFromArgs changed: %v", addr)
+	}
+}
+
+// TestDestHostIgnoresPayloadURLOnGenericTool: Rev 15 / Codex P2 — url/host
+// on exec/write_file is payload, not a destination. dest_host remains a
+// schema-confirmed destination on any tool.
+func TestDestHostIgnoresPayloadURLOnGenericTool(t *testing.T) {
+	if got := destHostFromArgs("exec", map[string]any{"url": "https://example.com"}); got != "" {
+		t.Fatalf("exec({url}) must not populate DestHost, got %q", got)
+	}
+	if got := destIPFromArgs("exec", map[string]any{"url": "https://10.1.2.3/x"}); got.IsValid() {
+		t.Fatalf("exec({url}) must not populate DestIP, got %v", got)
+	}
+	if got := destHostFromArgs("exec", map[string]any{"dest_host": "example.com"}); got != "example.com" {
+		t.Fatalf("explicit dest_host must still populate on a generic tool, got %q", got)
 	}
 }
 

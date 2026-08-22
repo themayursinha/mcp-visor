@@ -229,8 +229,8 @@ func (p *Proxy) processToolsCall(
 			Tool:      callReq.Name,
 			Args:      stringArgs(redactedArgs),
 			Path:      pathArgFromRedacted(redactedArgs),
-			DestIP:    destIPFromArgs(redactedArgs),
-			DestHost:  destHostFromArgs(redactedArgs),
+			DestIP:    destIPFromArgs(callReq.Name, redactedArgs),
+			DestHost:  destHostFromArgs(callReq.Name, redactedArgs),
 			Declared:  capabilityDeclaredAuthority(snapshot.policy, serverName),
 		}
 		p.capEvalMu.Lock()
@@ -660,11 +660,16 @@ func pathArgFromRedacted(redactedArgs map[string]any) string {
 }
 
 // destIPFromArgs derives the structured network destination from a
-// redacted IP-literal arg value under the documented destination keys. A
-// hostname is NOT resolved here: it stays in Args where the evaluator's own
-// args surface handles it deterministically.
-func destIPFromArgs(redactedArgs map[string]any) netip.Addr {
-	for _, key := range []string{"dest_ip", "ip", "host", "url"} {
+// redacted IP-literal arg. Explicit dest_ip is always a destination
+// surface. url/host/ip are destinations only on a recognized network tool
+// (Rev 15: those keys are payload on exec/write_file). A hostname is NOT
+// resolved here.
+func destIPFromArgs(tool string, redactedArgs map[string]any) netip.Addr {
+	keys := []string{"dest_ip"}
+	if capability.IsNetworkToolName(tool) {
+		keys = []string{"dest_ip", "ip", "host", "url"}
+	}
+	for _, key := range keys {
 		v, ok := redactedArgs[key].(string)
 		if !ok || v == "" {
 			continue
@@ -686,18 +691,16 @@ func destIPFromArgs(redactedArgs map[string]any) netip.Addr {
 }
 
 // destHostFromArgs derives the structured hostname destination from a
-// redacted host/url arg value, lowercased with a trailing dot stripped, so
-// non-canonical net tools (web_fetch, browse, fetch_url) that carry a
-// hostname in a url/host arg emit a structured egress destination rather
-// than falling through with no signal (P2: fail-open). An IP literal is NOT
-// returned here — destIPFromArgs owns that and the evaluator treats a
-// populated DestHost as a hostname it must canonically validate. Empty or a
-// value that still parses as an IP literal returns "" (the IP path owns it).
-// This also must not invent a target when the hostname is malformed: it is
-// the evaluator's job to reject (fail closed to PAUSE), not the proxy's to
-// guess.
-func destHostFromArgs(redactedArgs map[string]any) string {
-	for _, key := range []string{"host", "url", "dest_host", "uri", "domain"} {
+// redacted arg. Explicit dest_host is always a destination surface.
+// url/host/uri/domain are destinations only on a recognized network tool
+// so web_fetch({"url":...}) still pauses while exec({"url":...}) keeps
+// url as payload (Rev 15). An IP literal is NOT returned here.
+func destHostFromArgs(tool string, redactedArgs map[string]any) string {
+	keys := []string{"dest_host"}
+	if capability.IsNetworkToolName(tool) {
+		keys = []string{"host", "url", "dest_host", "uri", "domain"}
+	}
+	for _, key := range keys {
 		v, ok := redactedArgs[key].(string)
 		if !ok || v == "" {
 			continue

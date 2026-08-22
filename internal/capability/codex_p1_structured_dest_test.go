@@ -10,10 +10,10 @@ import (
 // Codex P1 regression tests (PR #76): a STRUCTURED destination
 // (Step.DestHost valid hostname OR Step.DestIP valid netip.Addr) is
 // authoritative proof of an egress request, independent of the args surface.
-// The proxy (internal/proxy/tools_call.go destHostFromArgs/destIPFromArgs)
-// populates DestHost/DestIP for ANY tool, so a non-canonical net tool
-// (web_fetch/browse/fetch_url) carrying a url/host arg must emit
-// boundary.request_egress and Eval must PAUSE (E5), never ALLOW.
+// The proxy populates DestHost/DestIP for recognized network tools (and
+// explicit dest_host/dest_ip on any tool). web_fetch/browse/fetch_url
+// carrying a url/host arg must emit boundary.request_egress and Eval must
+// PAUSE (E5), never ALLOW.
 //
 // This is ORTHOGONAL to the Rev 15 command-bearing-key discipline: the args
 // surface is never scanned on non-command keys; a STRUCTURED destination is

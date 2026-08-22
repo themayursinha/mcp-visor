@@ -595,3 +595,18 @@ func TestP1AbsoluteExecPathOptedInPauses(t *testing.T) {
 		})
 	}
 }
+
+// TestP2GenericToolUrlArgDoesNotPause: Codex P2 — exec({"url":"https://example.com"})
+// must not route to approval. url is Rev 15 payload on a non-network tool.
+func TestP2GenericToolUrlArgDoesNotPause(t *testing.T) {
+	dir := t.TempDir()
+	p := optedInWorkspaceProxy(t, dir, "sess-exec-url")
+	action := callTool(t, p, 1, "exec", map[string]any{"url": "https://example.com"})
+	if action != "forward" {
+		t.Fatalf("exec({url}) must ALLOW/forward, got %q", action)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "approvals", "req-*.json"))
+	if len(matches) > 0 {
+		t.Fatal("exec({url}) reached approval; url was treated as a structured destination")
+	}
+}
