@@ -214,11 +214,14 @@ func (p *Proxy) processToolsCall(
 	// Capability accounting adapter (opt-in). With the evaluator disabled
 	// (nil = no-op default) this block is skipped entirely: zero behavioral
 	// delta. When opted in, the redacted observation of this call is reduced
-	// to a hash-linked receipt BEFORE the policy switch so a boundary pause
-	// can deny before any allow/approval routing. The evaluator is
+	// to a hash-linked receipt BEFORE the policy switch. The evaluator is
 	// ACCOUNTING, not a second allow gate: an ALLOW receipt falls through to
-	// the existing decision unchanged; PAUSE or an evaluator error denies
-	// here (fail closed, never silent allow, never forward).
+	// the existing decision unchanged; a PAUSE_REQUIRE_NEW_PROOF receipt or
+	// an evaluator error routes to the EXISTING approval gate (pause-to-
+	// approval) so an operator can supply fresh proof, and fails closed
+	// (denies) only when approval is unavailable or rejected. Never a silent
+	// allow and never a hard deny that skips the approval gate.
+	capPauseReason := ""
 	if p.capEval != nil {
 		step := capability.Step{
 			SessionID: p.session.ID,
@@ -236,42 +239,39 @@ func (p *Proxy) processToolsCall(
 			stepID := step.StepID
 			prevHash := p.capLastHash
 			p.capEvalMu.Unlock()
-			release()
-			p.pauseToolsCall(req, respond, serverName, callReq.Name, redactedArgs, risk, chainTriggered, started, snapshot.identity, func() *capability.PauseReceipt {
-				pr, _ := capability.NewPauseReceipt(p.session.ID, stepID, prevHash, err)
-				return pr
-			})
-			return raw, "denied"
-		}
-		p.capLastHash = receipt.Hash
-		p.capEvalMu.Unlock()
-		if receipt.Decision == capability.DecisionPauseRequireProof {
-			reason := "capability boundary: PAUSE_REQUIRE_NEW_PROOF (effect outside declared envelope)"
-			respond(req.ID, reason)
-			p.metrics.IncrementDenied()
-			capPausedEvent := audit.Event{
-				EventType: audit.EventToolDenied,
-				SessionID: p.session.ID,
-				AgentID:   p.cfg.ClientID,
-				Server:    serverName,
-				Tool:      callReq.Name,
-				Arguments: redactedArgs,
-				Decision:  string(policy.ActionDeny),
-				Reason:    reason + ": " + receipt.Reason,
-				RiskLevel: string(risk),
+			// Evaluator error: record the pause receipt for the audit trail,
+			// then route to the approval gate (pause-to-approval, fail closed
+			// on approval unavailable/rejected). Do not deny inline.
+			if pr, err2 := capability.NewPauseReceipt(p.session.ID, stepID, prevHash, err); err2 == nil {
+				if data, err3 := json.Marshal(pr); err3 == nil && len(data) > 0 {
+					p.logger.Warn("capability pause receipt (evaluator error)", "pause_receipt", string(data), "session", p.session.ID)
+				}
 			}
-			p.attachServerIdentity(&capPausedEvent, snapshot.identity)
-			_ = p.audit.Log(capPausedEvent)
-			release()
-			p.forwardAudit(capPausedEvent)
-			p.logger.Warn("capability boundary pause",
-				"tool", callReq.Name,
-				"step_id", receipt.StepID,
-				"reason", receipt.Reason,
-				"session", p.session.ID,
-			)
-			p.observeToolCall("denied", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
-			return raw, "denied"
+			capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (evaluator error)"
+		} else {
+			p.capLastHash = receipt.Hash
+			p.capEvalMu.Unlock()
+			if receipt.Decision == capability.DecisionPauseRequireProof {
+				// Boundary signal not attributable to the declared envelope (E5):
+				// route to the approval gate so an operator can supply fresh proof.
+				// Fail closed when approval is unavailable or rejected. Never deny
+				// inline and never silently allow.
+				capPauseReason = "capability boundary: PAUSE_REQUIRE_NEW_PROOF (effect outside declared envelope)"
+			}
+		}
+		// Route the pause through the existing approval gate: set decision to
+		// ActionRequireApproval and fall through to the switch below. The
+		// approval case owns evidence, the audit event, the blocking operator
+		// wait, fail-closed denial on unavailable/rejected approval, and the
+		// allow/forward path. Do NOT release here — the approval case owns the
+		// barrier release.
+		//
+		// Guard: the capability adapter is ACCOUNTING and may only upgrade a
+		// non-deny decision to pause-to-approval. A terminal policy/chain deny
+		// is the strongest fail-closed signal and must never be downgraded
+		// into an approvable request.
+		if capPauseReason != "" && decision.Action != policy.ActionDeny {
+			decision = policy.Decision{Action: policy.ActionRequireApproval, Reason: capPauseReason}
 		}
 	}
 
@@ -580,51 +580,4 @@ func capabilityDeclaredAuthority(pol *policy.Policy, serverName string) capabili
 		Target:        serverName,
 		WorkspaceRoot: root,
 	}
-}
-
-// pauseToolsCall is the shared fail-closed terminal path for the capability
-// adapter: respond with the pause message, record the denied metric, audit
-// one deny event carrying the stable pause reason, and observe the denial.
-// It NEVER forwards and never silently allows. buildPause supplies the sealed
-// PauseReceipt artifact for the ledger log line.
-func (p *Proxy) pauseToolsCall(
-	req mcp.Request,
-	respond toolsCallResponder,
-	serverName, toolName string,
-	redactedArgs map[string]any,
-	risk policy.RiskLevel,
-	chainTriggered bool,
-	started time.Time,
-	identity serverIdentityEvidence,
-	buildPause func() *capability.PauseReceipt,
-) {
-	reason := "capability boundary: PAUSE_REQUIRE_NEW_PROOF (evaluator error)"
-	pauseReceipt := buildPause()
-	if pauseReceipt != nil {
-		data, err := json.Marshal(pauseReceipt)
-		if err == nil && len(data) > 0 {
-			p.logger.Warn("capability pause receipt emitted", "pause_receipt", string(data), "session", p.session.ID)
-		}
-	}
-	respond(req.ID, reason)
-	p.metrics.IncrementDenied()
-	pausedEvent := audit.Event{
-		EventType: audit.EventToolDenied,
-		SessionID: p.session.ID,
-		AgentID:   p.cfg.ClientID,
-		Server:    serverName,
-		Tool:      toolName,
-		Arguments: redactedArgs,
-		Decision:  string(policy.ActionDeny),
-		Reason:    reason,
-		RiskLevel: string(risk),
-	}
-	p.attachServerIdentity(&pausedEvent, identity)
-	_ = p.audit.Log(pausedEvent)
-	p.forwardAudit(pausedEvent)
-	p.logger.Warn("capability accounting paused tool call",
-		"tool", toolName,
-		"session", p.session.ID,
-	)
-	p.observeToolCall("denied", reason, serverName, toolName, string(risk), chainTriggered, started)
 }
