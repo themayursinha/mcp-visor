@@ -876,10 +876,14 @@ func confirmedDelta(step Step, signals []Signal, attrib bool, held []string) []s
 		if !attrib {
 			break
 		}
+		// The two runtime-marker kinds are independent. ExtractSignals can
+		// emit both from one observation (e.g. Result "SIGSEGV sandbox
+		// escape"); exclusive-or would drop heap_escape/native_exec.
 		if hasSignalLevel(signals, SignalRuntimeMemoryCorruption, EvidenceRuntimeMarker) {
-			add = []string{CapOOBRead, CapOOBWrite}
-		} else if hasSignalLevel(signals, SignalRuntimeSandboxEscape, EvidenceRuntimeMarker) {
-			add = []string{CapHeapEscape, CapNativeExec}
+			add = append(add, CapOOBRead, CapOOBWrite)
+		}
+		if hasSignalLevel(signals, SignalRuntimeSandboxEscape, EvidenceRuntimeMarker) {
+			add = append(add, CapHeapEscape, CapNativeExec)
 		}
 	}
 	return newlyHeld(add, held)
