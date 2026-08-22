@@ -1,11 +1,16 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
+	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
@@ -203,6 +208,70 @@ func (p *Proxy) processToolsCall(
 			chainTriggered = true
 			decision = chainDecision
 			chainContext = previousCalls
+		}
+	}
+
+	// Capability accounting adapter (opt-in). With the evaluator disabled
+	// (nil = no-op default) this block is skipped entirely: zero behavioral
+	// delta. When opted in, the redacted observation of this call is reduced
+	// to a hash-linked receipt BEFORE the policy switch so a boundary pause
+	// can deny before any allow/approval routing. The evaluator is
+	// ACCOUNTING, not a second allow gate: an ALLOW receipt falls through to
+	// the existing decision unchanged; PAUSE or an evaluator error denies
+	// here (fail closed, never silent allow, never forward).
+	if p.capEval != nil {
+		step := capability.Step{
+			SessionID: p.session.ID,
+			Tool:      callReq.Name,
+			Args:      stringArgs(redactedArgs),
+			Path:      pathArgFromRedacted(redactedArgs),
+			DestIP:    destIPFromArgs(redactedArgs),
+			Declared:  capabilityDeclaredAuthority(snapshot.policy, serverName),
+		}
+		p.capEvalMu.Lock()
+		p.capStepID++
+		step.StepID = p.capStepID
+		receipt, err := p.capEval.Eval(context.Background(), step, p.capLastHash)
+		if err != nil {
+			stepID := step.StepID
+			prevHash := p.capLastHash
+			p.capEvalMu.Unlock()
+			release()
+			p.pauseToolsCall(req, respond, serverName, callReq.Name, redactedArgs, risk, chainTriggered, started, snapshot.identity, func() *capability.PauseReceipt {
+				pr, _ := capability.NewPauseReceipt(p.session.ID, stepID, prevHash, err)
+				return pr
+			})
+			return raw, "denied"
+		}
+		p.capLastHash = receipt.Hash
+		p.capEvalMu.Unlock()
+		if receipt.Decision == capability.DecisionPauseRequireProof {
+			reason := "capability boundary: PAUSE_REQUIRE_NEW_PROOF (effect outside declared envelope)"
+			respond(req.ID, reason)
+			p.metrics.IncrementDenied()
+			capPausedEvent := audit.Event{
+				EventType: audit.EventToolDenied,
+				SessionID: p.session.ID,
+				AgentID:   p.cfg.ClientID,
+				Server:    serverName,
+				Tool:      callReq.Name,
+				Arguments: redactedArgs,
+				Decision:  string(policy.ActionDeny),
+				Reason:    reason + ": " + receipt.Reason,
+				RiskLevel: string(risk),
+			}
+			p.attachServerIdentity(&capPausedEvent, snapshot.identity)
+			_ = p.audit.Log(capPausedEvent)
+			release()
+			p.forwardAudit(capPausedEvent)
+			p.logger.Warn("capability boundary pause",
+				"tool", callReq.Name,
+				"step_id", receipt.StepID,
+				"reason", receipt.Reason,
+				"session", p.session.ID,
+			)
+			p.observeToolCall("denied", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+			return raw, "denied"
 		}
 	}
 
@@ -434,4 +503,128 @@ func findServerByName(pol *policy.Policy, name string) *policy.Server {
 		}
 	}
 	return nil
+}
+
+// stringArgs converts the redacted args map into the evaluator's typed
+// observation surface: only plain string values are carried; non-string
+// values (numbers, booleans, nested objects) are skipped. Deterministic —
+// map iteration order does not matter because the result is a map.
+func stringArgs(redactedArgs map[string]any) map[string]string {
+	if len(redactedArgs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(redactedArgs))
+	for k, v := range redactedArgs {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+// pathArgFromRedacted derives the mediated file-tool path from the REDACTED
+// args only (same key set as the proxy's raw extractPath), so a redaction
+// replacement is what the evaluator observes and no raw secret can reach
+// the step or its receipt through Path.
+func pathArgFromRedacted(redactedArgs map[string]any) string {
+	for _, key := range []string{"path", "file", "file_path", "uri"} {
+		if v, ok := redactedArgs[key].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// destIPFromArgs derives the structured network destination from a
+// redacted IP-literal arg value under the documented destination keys. A
+// hostname is NOT resolved here: it stays in Args where the evaluator's own
+// args surface handles it deterministically.
+func destIPFromArgs(redactedArgs map[string]any) netip.Addr {
+	for _, key := range []string{"dest_ip", "ip", "host", "url"} {
+		v, ok := redactedArgs[key].(string)
+		if !ok || v == "" {
+			continue
+		}
+		if i := strings.Index(v, "://"); i >= 0 {
+			v = v[i+3:]
+		}
+		if i := strings.IndexAny(v, "/?#"); i >= 0 {
+			v = v[:i]
+		}
+		if i := strings.LastIndex(v, ":"); i >= 0 && !strings.Contains(v[:i], ":") {
+			v = v[:i]
+		}
+		if addr, err := netip.ParseAddr(strings.Trim(v, "[]")); err == nil {
+			return addr
+		}
+	}
+	return netip.Addr{}
+}
+
+// capabilityDeclaredAuthority builds the declared authority for an opted-in
+// step from the snapshot policy generation: Target is the logical server
+// name, WorkspaceRoot is the server-declared root or the proxy process's
+// working directory. The optional envelope sets (Network, Host,
+// DeclaredExecutables) stay empty on this first wiring: derived host_exec /
+// net_egress boundaries then fail closed to PAUSE_REQUIRE_NEW_PROOF.
+func capabilityDeclaredAuthority(pol *policy.Policy, serverName string) capability.DeclaredAuthority {
+	root := ""
+	if srv := findServerByName(pol, serverName); srv != nil {
+		root = srv.WorkspaceRoot
+	}
+	if root == "" {
+		cwd, _ := os.Getwd()
+		root = cwd
+	}
+	return capability.DeclaredAuthority{
+		Target:        serverName,
+		WorkspaceRoot: root,
+	}
+}
+
+// pauseToolsCall is the shared fail-closed terminal path for the capability
+// adapter: respond with the pause message, record the denied metric, audit
+// one deny event carrying the stable pause reason, and observe the denial.
+// It NEVER forwards and never silently allows. buildPause supplies the sealed
+// PauseReceipt artifact for the ledger log line.
+func (p *Proxy) pauseToolsCall(
+	req mcp.Request,
+	respond toolsCallResponder,
+	serverName, toolName string,
+	redactedArgs map[string]any,
+	risk policy.RiskLevel,
+	chainTriggered bool,
+	started time.Time,
+	identity serverIdentityEvidence,
+	buildPause func() *capability.PauseReceipt,
+) {
+	reason := "capability boundary: PAUSE_REQUIRE_NEW_PROOF (evaluator error)"
+	pauseReceipt := buildPause()
+	if pauseReceipt != nil {
+		data, err := json.Marshal(pauseReceipt)
+		if err == nil && len(data) > 0 {
+			p.logger.Warn("capability pause receipt emitted", "pause_receipt", string(data), "session", p.session.ID)
+		}
+	}
+	respond(req.ID, reason)
+	p.metrics.IncrementDenied()
+	pausedEvent := audit.Event{
+		EventType: audit.EventToolDenied,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    serverName,
+		Tool:      toolName,
+		Arguments: redactedArgs,
+		Decision:  string(policy.ActionDeny),
+		Reason:    reason,
+		RiskLevel: string(risk),
+	}
+	p.attachServerIdentity(&pausedEvent, identity)
+	_ = p.audit.Log(pausedEvent)
+	p.forwardAudit(pausedEvent)
+	p.logger.Warn("capability accounting paused tool call",
+		"tool", toolName,
+		"session", p.session.ID,
+	)
+	p.observeToolCall("denied", reason, serverName, toolName, string(risk), chainTriggered, started)
 }

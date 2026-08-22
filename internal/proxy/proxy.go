@@ -16,6 +16,7 @@ import (
 
 	"github.com/themayursinha/mcp-visor/internal/approval"
 	"github.com/themayursinha/mcp-visor/internal/audit"
+	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/observability"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -44,6 +45,15 @@ type Proxy struct {
 	siem           *siem.Exporter
 	approvalSigner signer.Signer
 	obs            *observability.Runtime
+
+	// capEval is the per-session capability accounting evaluator. With
+	// CapabilityEval disabled it is the no-op evaluator (zero behavioral
+	// delta). capEvalMu serializes Eval and the last-cap-hash / step-counter
+	// updates so one session's receipt chain cannot interleave.
+	capEval     capability.Evaluator
+	capEvalMu   sync.Mutex
+	capLastHash string
+	capStepID   int
 
 	// resolvedIdentity is the immutable stdio executable identity resolved
 	// once per launched proxy process. identityResolved records whether the
@@ -106,6 +116,9 @@ type Config struct {
 	SIEMFormat        string
 	Vault             VaultConfig
 	Observability     observability.Config
+	// CapabilityEval opts into the capability accounting evaluator. The
+	// default (false) constructs a no-op evaluator with zero behavioral delta.
+	CapabilityEval bool
 }
 
 type VaultConfig struct {
@@ -210,6 +223,10 @@ func New(cfg Config) *Proxy {
 		webhook:        wh,
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
+		capEval:        newCapabilityEvaluator(cfg.SessionID, cfg.CapabilityEval),
+	}
+	if proxy.capEval != nil {
+		proxy.capLastHash = capability.GenesisPrevHash
 	}
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
@@ -265,11 +282,30 @@ func NewWithTracing(cfg Config) *Proxy {
 		webhook:        wh,
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
+		capEval:        newCapabilityEvaluator(cfg.SessionID, cfg.CapabilityEval),
+	}
+	if proxy.capEval != nil {
+		proxy.capLastHash = capability.GenesisPrevHash
 	}
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
 	return proxy
+}
+
+// newCapabilityEvaluator builds the per-session capability evaluator. An
+// opted-in session gets a ChainEvaluator bound to its SessionID; the default
+// is the no-op evaluator (zero behavioral delta). A nil return means the
+// whole adapter call site is skipped.
+func newCapabilityEvaluator(sessionID string, enabled bool) capability.Evaluator {
+	if !enabled {
+		return nil
+	}
+	chain, err := capability.NewChainEvaluator(sessionID)
+	if err != nil {
+		return nil
+	}
+	return chain
 }
 
 // resolveLaunchedIdentity captures the immutable stdio executable identity
