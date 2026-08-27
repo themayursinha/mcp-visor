@@ -116,35 +116,45 @@ while the **network effect boundary** has already failed.
 ### What the demo shows
 
 The Visor Trust Plane distinguishes containment dimensions instead of carrying
-one generic "sandbox = trusted" bit. It runs a cyber agent with an all-`VALID`
+one generic "sandbox = trusted" bit. It runs a cyber agent with a fully-attested
 containment vector, then injects attestation events equivalent to the
 disclosures and shows authority **degrading** (not blindly crashing):
 
-* **Stage 0 — nominal:** process, filesystem, network, credential, gateway all
-  `VALID`. Mandate (`process≥strong, network≥isolated, credentials≥brokered,
-  gateway≥attested`) satisfied → mode `FULL`, all capabilities usable.
+* **Stage 0 — nominal:** provisioning, process, filesystem, network, credentials,
+  gateway, runtime all `VALID` with their required strengths. Full mandate
+  (`process≥strong, network≥isolated, credentials≥brokered, gateway≥attested`)
+  satisfied → mode `FULL`, all capabilities usable.
 * **Stage 1 — inject CVE-2026-65092:** `network` containment → `REVOKED`. The
-  Trust Plane revokes `network://lab-target` and `network://package-mirror`,
-  preserves **local-only** exploitation and tool/credential authority, mode
-  `DEGRADED`. A conventional platform would keep running because the process is
-  still alive; Visor knows the network effect boundary is gone.
-* **Stage 2 — inject CVE-2026-65093:** `process` containment → `REVOKED`. Every
-  capability depends on the process boundary, so **all** execution authority is
-  revoked → agent **TERMINATED**, mode `NONE`.
+  full mandate is now **unsatisfied** (it required `network≥isolated`), but the
+  mandate declares an **explicit degraded fallback** (`process≥strong,
+  filesystem≥strong`). Visor revokes every **network-effect** capability —
+  `network://lab-target`, `network://package-mirror`, `tool:burp-suite`, and
+  `cred:api-signed` (a signed API credential is a network path) — and preserves
+  only the truly **local-only** filesystem work, mode `DEGRADED`. Degradation is
+  never auto-derived; it only happens because the mandate pre-approved it.
+  A conventional platform would keep running because the process is still alive;
+  Visor knows the network effect boundary is gone.
+* **Stage 2 — inject CVE-2026-65093:** `process` containment → `REVOKED`. Now
+  both the full mandate **and** the degraded fallback are unsatisfied (both
+  require `process≥strong`). Every capability depends on the process boundary,
+  so **all** execution authority is revoked → agent **TERMINATED**, mode `NONE`.
 
-The receipt across Stage 2:
+The receipt across Stage 2 (dimensions carry their attested strength when VALID):
 
 ```
 Agent mandate: VALID
 Model identity: VALID
 
-Process containment: REVOKED
-Network containment: REVOKED
-Filesystem containment: VALID
-Credential containment: VALID
-Gateway containment: VALID
+provisioning: VALID (strong)
+process: REVOKED
+filesystem: VALID (strong)
+network: REVOKED
+credentials: VALID (brokered)
+gateway: VALID (attested)
+runtime: VALID (strong)
 
-Required containment vector satisfied: NO
+Operating mode: NONE
+Full mandate vector satisfied: NO
 Authority surviving degradation: NONE
 Execution: REVOKED
 ```
