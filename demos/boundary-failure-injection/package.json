@@ -7,7 +7,10 @@
   "scripts": {
     "setup": "node scripts/setup-envs.js",
     "run": "node scripts/run-demo.js",
-    "test": "node scripts/run-demo.js --self-test"
+    "test": "node scripts/run-demo.js --self-test && node scripts/degrade-demo.js --self-test",
+    "test:boundary": "node scripts/run-demo.js --self-test",
+    "run:degrade": "node scripts/degrade-demo.js",
+    "test:degrade": "node scripts/degrade-demo.js --self-test"
   },
   "dependencies": {},
   "devDependencies": {}
