@@ -200,7 +200,11 @@ function decide(mandate, containment, capabilities) {
   const fullRequired = mandate.full || mandate.required;
   const fullDeclared = hasDeclaredVector(fullRequired);
   const full = fullDeclared ? requiredVectorSatisfied(containment, fullRequired) : null;
-  const degraded = mandate.degraded
+  // Same non-empty declaration guard for both modes. An empty/undefined
+  // degraded vector is NOT an approved fallback — otherwise `degraded: {}`
+  // would authorize DEGRADED with zero containment requirements (this was the
+  // same P1 class fixed for `full`, now applied consistently to `degraded`).
+  const degraded = hasDeclaredVector(mandate.degraded)
     ? requiredVectorSatisfied(containment, mandate.degraded)
     : null;
 

@@ -166,6 +166,30 @@ if (process.argv.includes("--self-test")) {
   assert(onlyDegraded.fullVector === null,
     "P1: fullVector is null when no full mode declared (not falsely satisfied)");
 
+  // ---- Regression: P1 (round 3) — an EMPTY degraded vector must NOT authorize
+  // DEGRADED. Same non-empty declaration guard applies to both modes.
+  // Case A: full vector satisfiable -> correct to run FULL (empty degraded is
+  //         null and does NOT downgrade to DEGRADED).
+  const emptyDegraded = decide(
+    { full: { process: "strong" }, degraded: {} },
+    contValid,
+    capsOnly
+  );
+  assert(emptyDegraded.degradedVector === null,
+    "P1: degradedVector is null when degraded not declared (empty)");
+  assert(emptyDegraded.mode === "FULL" && emptyDegraded.execution === "ALLOW",
+    "P1: empty degraded does not force DEGRADED when full is satisfiable (no downgrade)");
+  // Case B: full unmet + empty degraded -> must NOT authorize DEGRADED, fails closed.
+  const degOnlyNominal = nominalContainment();
+  degOnlyNominal.process = { state: "REVOKED", strength: null }; // full needs process
+  const emptyDegradedUnmet = decide(
+    { full: { process: "strong" }, degraded: {} },
+    degOnlyNominal,
+    capsOnly
+  );
+  assert(emptyDegradedUnmet.mode === "NONE" && emptyDegradedUnmet.execution === "REVOKED",
+    "P1: full unmet + empty degraded does NOT authorize DEGRADED/ALLOW (fails closed)");
+
   // ---- Regression: P2 (Codex) — a decision must be a consistent deep snapshot.
   // Mutating containment after decide() must NOT change an earlier decision.
   const contSnap = nominalContainment();
