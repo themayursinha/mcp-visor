@@ -153,6 +153,36 @@ if (process.argv.includes("--self-test")) {
     d2.containment.process.state === "REVOKED" && d2.containment.network.state === "REVOKED",
     "Stage 2: process + network containment both REVOKED in receipt"
   );
+
+  // ---- Regression: P1 (Codex) — a mandate declaring only `degraded` must NOT
+  // be treated as approving FULL. The explicit-mode guarantee must hold.
+  const capsOnly = makeCapabilities([
+    { id: "local:x", requires: { process: "strong", filesystem: "strong" } },
+  ]);
+  const contValid = nominalContainment();
+  const onlyDegraded = decide({ degraded: { process: "strong" } }, contValid, capsOnly);
+  assert(onlyDegraded.mode === "DEGRADED" && onlyDegraded.execution === "ALLOW",
+    "P1: mandate with only `degraded` runs DEGRADED (not FULL) when degraded vector satisfied");
+  assert(onlyDegraded.fullVector === null,
+    "P1: fullVector is null when no full mode declared (not falsely satisfied)");
+
+  // ---- Regression: P2 (Codex) — a decision must be a consistent deep snapshot.
+  // Mutating containment after decide() must NOT change an earlier decision.
+  const contSnap = nominalContainment();
+  const snapshotDecision = decide(
+    { full: { process: "strong" }, degraded: { filesystem: "strong" } },
+    contSnap,
+    makeCapabilities([{ id: "local:y", requires: { process: "strong" } }])
+  );
+  const beforeSnapshot = snapshotDecision.containment.process.state;
+  contSnap.process.state = "REVOKED"; // mutate caller's object after decide()
+  assert(snapshotDecision.containment.process.state === beforeSnapshot,
+    "P2: mutate-after-decide does not change an earlier decision's snapshot");
+  assert(snapshotDecision.containment !== contSnap,
+    "P2: decision holds a deep clone, not a shared reference");
+  assert(snapshotDecision.execution === "ALLOW" && snapshotDecision.mode === "FULL",
+    "P2: decision's cached execution/mode remain consistent with its snapshot");
+
   console.log(failures === 0 ? "\nSELF-TEST PASS" : `\nSELF-TEST FAIL (${failures})`);
   process.exit(failures === 0 ? 0 : 1);
 }

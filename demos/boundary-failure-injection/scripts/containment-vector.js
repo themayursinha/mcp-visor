@@ -116,6 +116,35 @@ function satisfiesDimension(containment, dim, requiredStrength) {
 }
 
 /**
+ * Deep-clone a containment vector so that a decision holds an independent
+ * snapshot of each dimension's {state, strength}. A shallow copy would share
+ * the nested dimension objects with the caller, so a later in-place mutation
+ * (e.g. containment.process.state = "REVOKED") would retroactively change an
+ * earlier decision's receipt while its cached satisfied/execution stayed stale.
+ */
+function cloneContainment(containment) {
+  const out = {};
+  for (const d of DIMENSIONS) {
+    const dim = containment[d];
+    out[d] = dim && typeof dim === "object"
+      ? { state: dim.state, strength: dim.strength }
+      : dim;
+  }
+  return out;
+}
+
+/**
+ * A required vector is only "declared" if the mandate actually provides a
+ * non-empty mapping of dimensions for that mode. An empty/undefined full mode
+ * is NOT a valid approval to run at FULL — otherwise a mandate that declares
+ * only `degraded` would be treated as approving FULL (the explicit-mode
+ * guarantee is bypassed).
+ */
+function hasDeclaredVector(required) {
+  return required != null && Object.keys(required).length > 0;
+}
+
+/**
  * Evaluate a required vector (from a mandate mode) against a containment vector.
  * Returns { satisfied, failed: [{dim, required}] }.
  */
@@ -164,17 +193,22 @@ function decide(mandate, containment, capabilities) {
   const caps = capabilities.map((c) => capabilityState(c, containment));
   const surviving = caps.filter((c) => c.usable).map((c) => c.id);
 
-  const full = requiredVectorSatisfied(containment, mandate.full || mandate.required);
-  // Only fall through to a degraded mode if the mandate explicitly declares one.
+  // The full approved vector: mandate.full, or the legacy `required`. It is
+  // only satisfiable if actually declared — an empty/undefined full mode is
+  // NOT an approval to run, else a mandate declaring only `degraded` would be
+  // treated as approving FULL (P1).
+  const fullRequired = mandate.full || mandate.required;
+  const fullDeclared = hasDeclaredVector(fullRequired);
+  const full = fullDeclared ? requiredVectorSatisfied(containment, fullRequired) : null;
   const degraded = mandate.degraded
     ? requiredVectorSatisfied(containment, mandate.degraded)
     : null;
 
   let mode, execution, activeRequired;
-  if (full.satisfied) {
+  if (full && full.satisfied) {
     mode = "FULL";
     execution = "ALLOW";
-    activeRequired = mandate.full || mandate.required;
+    activeRequired = fullRequired;
   } else if (degraded && degraded.satisfied) {
     mode = "DEGRADED";
     execution = "ALLOW";
@@ -182,12 +216,12 @@ function decide(mandate, containment, capabilities) {
   } else {
     mode = "NONE";
     execution = "REVOKED";
-    activeRequired = mandate.full || mandate.required;
+    activeRequired = fullDeclared ? fullRequired : mandate.degraded;
   }
 
   return {
     mandate: "VALID",
-    containment: Object.assign({}, containment),
+    containment: cloneContainment(containment), // deep snapshot (P2)
     mode,
     fullVector: full,
     degradedVector: degraded,
@@ -216,7 +250,8 @@ function receipt(decision) {
     dims,
     "",
     "Operating mode: " + decision.mode,
-    "Full mandate vector satisfied: " + (decision.fullVector.satisfied ? "YES" : "NO"),
+    "Full mandate vector satisfied: " +
+      (decision.fullVector ? (decision.fullVector.satisfied ? "YES" : "NO") : "N/A (not declared)"),
     "Authority surviving degradation: " +
       (decision.survivingAuthority.length ? decision.survivingAuthority.join(", ") : "NONE"),
     "Execution: " + decision.execution,
@@ -235,6 +270,8 @@ module.exports = {
   satisfiesDimension,
   requiredVectorSatisfied,
   capabilityState,
+  hasDeclaredVector,
+  cloneContainment,
   decide,
   receipt,
 };
