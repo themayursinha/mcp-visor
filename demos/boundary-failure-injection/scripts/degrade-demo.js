@@ -190,6 +190,18 @@ if (process.argv.includes("--self-test")) {
   assert(emptyDegradedUnmet.mode === "NONE" && emptyDegradedUnmet.execution === "REVOKED",
     "P1: full unmet + empty degraded does NOT authorize DEGRADED/ALLOW (fails closed)");
 
+  // ---- Regression: P2 (round 4) — an empty `full: {}` must NOT shadow a valid
+  // legacy `required` vector. firstDeclaredVector() picks the first non-empty one.
+  const legacyShadow = decide(
+    { full: {}, required: { process: "strong" }, degraded: { filesystem: "strong" } },
+    contValid,
+    capsOnly
+  );
+  assert(legacyShadow.mode === "FULL" && legacyShadow.execution === "ALLOW",
+    "P2: empty full does not shadow valid legacy required (runs FULL from required)");
+  assert(legacyShadow.activeRequired && legacyShadow.activeRequired.process === "strong",
+    "P2: activeRequired is the legacy required vector, not the empty full");
+
   // ---- Regression: P2 (Codex) — a decision must be a consistent deep snapshot.
   // Mutating containment after decide() must NOT change an earlier decision.
   const contSnap = nominalContainment();

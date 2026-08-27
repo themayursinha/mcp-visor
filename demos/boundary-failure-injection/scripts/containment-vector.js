@@ -145,6 +145,19 @@ function hasDeclaredVector(required) {
 }
 
 /**
+ * Pick the first non-empty declared vector from a list of candidates.
+ * This avoids the `||` operator-precedence trap where a truthy empty object
+ * (`full: {}`) wins over a later valid legacy `required` vector. Use this to
+ * resolve which mandate mode actually applies, never `a || b`.
+ */
+function firstDeclaredVector(...candidates) {
+  for (const c of candidates) {
+    if (hasDeclaredVector(c)) return c;
+  }
+  return null;
+}
+
+/**
  * Evaluate a required vector (from a mandate mode) against a containment vector.
  * Returns { satisfied, failed: [{dim, required}] }.
  */
@@ -193,19 +206,19 @@ function decide(mandate, containment, capabilities) {
   const caps = capabilities.map((c) => capabilityState(c, containment));
   const surviving = caps.filter((c) => c.usable).map((c) => c.id);
 
-  // The full approved vector: mandate.full, or the legacy `required`. It is
-  // only satisfiable if actually declared — an empty/undefined full mode is
-  // NOT an approval to run, else a mandate declaring only `degraded` would be
-  // treated as approving FULL (P1).
-  const fullRequired = mandate.full || mandate.required;
-  const fullDeclared = hasDeclaredVector(fullRequired);
+  // Resolve the full approved vector with the non-empty-first helper, so a
+  // truthy empty `full: {}` cannot shadow a valid legacy `required` vector.
+  // Only a declared (non-empty) vector is an approval; an empty/undefined full
+  // mode is NOT an approval to run at FULL (explicit-mode guarantee).
+  const fullRequired = firstDeclaredVector(mandate.full, mandate.required);
+  const fullDeclared = fullRequired != null;
   const full = fullDeclared ? requiredVectorSatisfied(containment, fullRequired) : null;
   // Same non-empty declaration guard for both modes. An empty/undefined
   // degraded vector is NOT an approved fallback — otherwise `degraded: {}`
-  // would authorize DEGRADED with zero containment requirements (this was the
-  // same P1 class fixed for `full`, now applied consistently to `degraded`).
-  const degraded = hasDeclaredVector(mandate.degraded)
-    ? requiredVectorSatisfied(containment, mandate.degraded)
+  // would authorize DEGRADED with zero containment requirements.
+  const degradedRequired = firstDeclaredVector(mandate.degraded);
+  const degraded = degradedRequired
+    ? requiredVectorSatisfied(containment, degradedRequired)
     : null;
 
   let mode, execution, activeRequired;
@@ -275,6 +288,7 @@ module.exports = {
   requiredVectorSatisfied,
   capabilityState,
   hasDeclaredVector,
+  firstDeclaredVector,
   cloneContainment,
   decide,
   receipt,
