@@ -51,6 +51,13 @@ func evalTool(eng *policy.Engine, tool string, args map[string]string) policy.De
 	})
 }
 
+func evalAny(eng *policy.Engine, tool string, args map[string]any) policy.Decision {
+	return eng.Evaluate("workspace", mcp.ToolsCallRequest{
+		Name:      tool,
+		Arguments: mustMarshal(args),
+	})
+}
+
 func TestAuthorityNonEscalationInstantiationAllowed(t *testing.T) {
 	eng := loadSARAEngine(t)
 
@@ -77,6 +84,16 @@ func TestAuthorityNonEscalationInstantiationAllowed(t *testing.T) {
 	})
 	if got.Action != policy.ActionAllow {
 		t.Fatalf("mandated recipient on 'to' must be allowed, got %s: %s", got.Action, got.Reason)
+	}
+
+	got = evalAny(eng, "send_email", map[string]any{
+		"recipient":  "finance@example.com",
+		"to":         "Finance@Example.com",
+		"email":      " finance@example.com ",
+		"invoice_id": "123",
+	})
+	if got.Action != policy.ActionAllow {
+		t.Fatalf("identical mandated aliases must be allowed, got %s: %s", got.Action, got.Reason)
 	}
 }
 
@@ -131,6 +148,18 @@ func TestAuthorityNonEscalationExpansionDenied(t *testing.T) {
 			args: map[string]string{"path": "/etc/passwd"},
 			want: "path does not match any allow pattern",
 		},
+		{
+			name: "cc alias expansion",
+			tool: "send_email",
+			args: map[string]string{"recipient": "finance@example.com", "cc": "attacker@example.com"},
+			want: "recipient is not in allowlist",
+		},
+		{
+			name: "bcc alias expansion",
+			tool: "send_email",
+			args: map[string]string{"recipient": "finance@example.com", "bcc": "attacker@evil.example"},
+			want: "recipient is not in allowlist",
+		},
 	}
 
 	for _, tc := range cases {
@@ -141,6 +170,67 @@ func TestAuthorityNonEscalationExpansionDenied(t *testing.T) {
 			}
 			if !strings.Contains(got.Reason, tc.want) {
 				t.Fatalf("expected reason containing %q, got %q", tc.want, got.Reason)
+			}
+		})
+	}
+}
+
+func TestAuthorityNonEscalationEveryPresentAliasIsChecked(t *testing.T) {
+	eng := loadSARAEngine(t)
+	cases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "mandated recipient cannot cover attacker to",
+			args: map[string]any{"recipient": "finance@example.com", "to": "attacker@example.com"},
+			want: "recipient is not in allowlist",
+		},
+		{
+			name: "mandated recipient cannot cover attacker email",
+			args: map[string]any{"recipient": "finance@example.com", "email": "attacker@example.com"},
+			want: "recipient is not in allowlist",
+		},
+		{
+			name: "mandated recipient cannot cover attacker cc",
+			args: map[string]any{"recipient": "finance@example.com", "cc": "attacker@example.com"},
+			want: "recipient is not in allowlist",
+		},
+		{
+			name: "mandated recipient cannot cover attacker bcc",
+			args: map[string]any{"recipient": "finance@example.com", "bcc": "attacker@evil.example"},
+			want: "recipient is not in allowlist",
+		},
+		{
+			name: "non-string recipient cannot fall through to allowed to",
+			args: map[string]any{"recipient": []string{"attacker@example.com"}, "to": "finance@example.com"},
+			want: "recipient is required",
+		},
+		{
+			name: "blank to cannot be skipped because recipient is allowed",
+			args: map[string]any{"recipient": "finance@example.com", "to": "  "},
+			want: "recipient is required",
+		},
+		{
+			name: "numeric recipient fails closed",
+			args: map[string]any{"recipient": 1, "to": "finance@example.com"},
+			want: "recipient is required",
+		},
+		{
+			name: "null recipient cannot fall through to allowed to",
+			args: map[string]any{"recipient": nil, "to": "finance@example.com"},
+			want: "recipient is required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evalAny(eng, "send_email", tc.args)
+			if got.Action != policy.ActionDeny {
+				t.Fatalf("expected deny, got %s: %s", got.Action, got.Reason)
+			}
+			if got.Reason != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got.Reason)
 			}
 		})
 	}

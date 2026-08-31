@@ -196,8 +196,9 @@ Matched against argument keys: `recipient`, `to`, `email`, `domain`. Domain matc
 
 Exact mailbox allowlist for a mandated recipient slot. Untrusted observations may fill this value; they must not enlarge it. Unlike `allow_recipient_domain`, matching is exact (trim + case-insensitive) and fail-closed:
 
-- missing, non-string, or blank `recipient`/`to`/`email` → deny
+- missing, non-string, or blank value in any of `recipient`/`to`/`email`/`cc`/`bcc` → deny
 - empty allowlist → deny
+- **every present alias is checked**; a mandated mailbox in `recipient` does not cover an attacker mailbox in `to`, `email`, `cc`, or `bcc`
 - any value that is not an exact allowlisted mailbox → deny (including `attacker@example.com` when only `finance@example.com` is listed)
 
 ```yaml
@@ -207,7 +208,7 @@ rules:
       - "finance@example.com"
 ```
 
-Matched against argument keys: `recipient`, `to`, `email`. The `domain` key is not consulted. Display-name forms (`Name <addr>`), comma-separated lists, and RFC 5322 parsing are out of scope: those inputs deny.
+Matched against argument keys: `recipient`, `to`, `email`, `cc`, `bcc`. The `domain` key is not consulted. Display-name forms (`Name <addr>`), comma-separated lists, arrays, and RFC 5322 parsing are out of scope: those inputs deny.
 
 Example mandate fixture: [`examples/policies/authority-non-escalation.yaml`](../examples/policies/authority-non-escalation.yaml).
 

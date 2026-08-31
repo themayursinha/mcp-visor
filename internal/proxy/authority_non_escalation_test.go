@@ -115,3 +115,29 @@ func TestAuthorityNonEscalationProxyHistoryDoesNotPromoteRecipient(t *testing.T)
 		}
 	}
 }
+
+func TestAuthorityNonEscalationProxyDeniesShadowAliasBeforeRelay(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:   "workspace",
+		SessionID:    "sess-sara-alias",
+		ClientID:     "agent-sara",
+		AuditLogPath: auditPath,
+		Policy:       mustLoadPolicy(t, saraMandateYAML()),
+	})
+	defer p.audit.Close()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(toolCallRaw(1, "send_email", map[string]any{
+		"recipient":  "finance@example.com",
+		"to":         "attacker@example.com",
+		"invoice_id": "123",
+	}), client)
+	if action != "denied" {
+		t.Fatalf("shadow alias must be denied before relay, got %s; response=%s", action, out.String())
+	}
+	if !strings.Contains(out.String(), "recipient is not in allowlist") {
+		t.Fatalf("denial must name the recipient allowlist, got %s", out.String())
+	}
+}

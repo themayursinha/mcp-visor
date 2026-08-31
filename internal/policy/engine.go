@@ -330,18 +330,20 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 
 	case "allow_recipient":
 		// Exact mandate slot: observations may fill this value, they may not
-		// enlarge it. Missing, non-string, blank, empty allowlist, and any
-		// non-exact match fail closed. Domain substring matching is intentionally
-		// not reused — attacker@example.com must not inherit finance@example.com.
+		// enlarge it. Every present destination alias is checked; a mandated
+		// mailbox in one key cannot cover an attacker mailbox in another.
+		// Domain substring matching is intentionally not reused.
 		if !recipientAllowlistConfigured(rule.Patterns) {
 			return Decision{Action: ActionDeny, Reason: "recipient allowlist is empty"}
 		}
-		recipient, ok := getStringArg(args, "recipient", "to", "email")
-		if !ok || strings.TrimSpace(recipient) == "" {
-			return Decision{Action: ActionDeny, Reason: "recipient is required"}
+		slots, reason := collectRecipientSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
 		}
-		if !recipientInAllowlist(rule.Patterns, recipient) {
-			return Decision{Action: ActionDeny, Reason: "recipient is not in allowlist"}
+		for _, slot := range slots {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: "recipient is not in allowlist"}
+			}
 		}
 
 	case "allowed_repos":
@@ -568,6 +570,34 @@ func extractArgs(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	return args
+}
+
+// recipientSlotKeys are the destination aliases inspected by allow_recipient.
+// First-match is not used: every present key must be an allowlisted string.
+var recipientSlotKeys = []string{"recipient", "to", "email", "cc", "bcc"}
+
+func collectRecipientSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "recipient is required"
+	}
+	found := false
+	values := make([]string, 0, len(recipientSlotKeys))
+	for _, key := range recipientSlotKeys {
+		val, ok := args[key]
+		if !ok {
+			continue
+		}
+		found = true
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "recipient is required"
+		}
+		values = append(values, s)
+	}
+	if !found {
+		return nil, "recipient is required"
+	}
+	return values, ""
 }
 
 func recipientAllowlistConfigured(patterns []string) bool {
