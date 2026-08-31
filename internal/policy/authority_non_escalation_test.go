@@ -1,6 +1,7 @@
 package policy_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -55,6 +56,13 @@ func evalAny(eng *policy.Engine, tool string, args map[string]any) policy.Decisi
 	return eng.Evaluate("workspace", mcp.ToolsCallRequest{
 		Name:      tool,
 		Arguments: mustMarshal(args),
+	})
+}
+
+func evalRaw(eng *policy.Engine, tool string, args json.RawMessage) policy.Decision {
+	return eng.Evaluate("workspace", mcp.ToolsCallRequest{
+		Name:      tool,
+		Arguments: args,
 	})
 }
 
@@ -294,6 +302,43 @@ func TestAuthorityNonEscalationHistoryDoesNotPromoteRecipient(t *testing.T) {
 	third := evalTool(eng, "send_email", attacker)
 	if third.Action != policy.ActionDeny {
 		t.Fatalf("history after an allowed instantiation must not promote attacker recipient, got %s: %s", third.Action, third.Reason)
+	}
+}
+
+func TestAuthorityNonEscalationDuplicateArgumentKeysFailClosed(t *testing.T) {
+	eng := loadSARAEngine(t)
+
+	// encoding/json last-wins would keep finance@example.com; a first-wins
+	// MCP decoder would send to attacker. Deny the ambiguous object.
+	got := evalRaw(eng, "send_email", json.RawMessage(
+		`{"recipient":"attacker@example.com","recipient":"finance@example.com"}`,
+	))
+	if got.Action != policy.ActionDeny {
+		t.Fatalf("duplicate recipient key must deny, got %s: %s", got.Action, got.Reason)
+	}
+	if got.Reason != "duplicate argument key" {
+		t.Fatalf("expected duplicate-key reason, got %q", got.Reason)
+	}
+
+	got = evalRaw(eng, "send_email", json.RawMessage(
+		`{"recipient":"finance@example.com","recipient":"finance@example.com"}`,
+	))
+	if got.Action != policy.ActionDeny || got.Reason != "duplicate argument key" {
+		t.Fatalf("identical duplicate keys must still deny, got %s: %s", got.Action, got.Reason)
+	}
+
+	got = evalRaw(eng, "send_email", json.RawMessage(
+		`{"recipient":"finance@example.com","meta":{"id":"1","id":"2"}}`,
+	))
+	if got.Action != policy.ActionDeny || got.Reason != "duplicate argument key" {
+		t.Fatalf("nested duplicate keys must deny, got %s: %s", got.Action, got.Reason)
+	}
+
+	got = evalRaw(eng, "send_email", json.RawMessage(
+		`{"recipient":"finance@example.com","invoice_id":"123"}`,
+	))
+	if got.Action != policy.ActionAllow {
+		t.Fatalf("unique keys must still allow, got %s: %s", got.Action, got.Reason)
 	}
 }
 

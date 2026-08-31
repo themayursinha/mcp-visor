@@ -199,6 +199,7 @@ Exact mailbox allowlist for a mandated recipient slot. Untrusted observations ma
 - missing, non-string, or blank value in any of `recipient`/`to`/`email`/`cc`/`bcc` → deny
 - empty allowlist → deny
 - **every present alias is checked**; a mandated mailbox in `recipient` does not cover an attacker mailbox in `to`, `email`, `cc`, or `bcc`
+- duplicate JSON keys in `arguments` (including nested objects) → deny; `encoding/json` last-wins must not authorize bytes a first-wins decoder would read differently
 - any value that is not an exact allowlisted mailbox → deny (including `attacker@example.com` when only `finance@example.com` is listed)
 
 ```yaml

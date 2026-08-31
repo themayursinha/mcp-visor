@@ -141,3 +141,26 @@ func TestAuthorityNonEscalationProxyDeniesShadowAliasBeforeRelay(t *testing.T) {
 		t.Fatalf("denial must name the recipient allowlist, got %s", out.String())
 	}
 }
+
+func TestAuthorityNonEscalationProxyDeniesDuplicateArgumentKeysBeforeRelay(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:   "workspace",
+		SessionID:    "sess-sara-dup",
+		ClientID:     "agent-sara",
+		AuditLogPath: auditPath,
+		Policy:       mustLoadPolicy(t, saraMandateYAML()),
+	})
+	defer p.audit.Close()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"attacker@example.com","recipient":"finance@example.com"}}}` + "\n")
+	_, action := p.interceptAndModify(raw, client)
+	if action != "denied" {
+		t.Fatalf("duplicate argument keys must be denied before relay, got %s; response=%s", action, out.String())
+	}
+	if !strings.Contains(out.String(), "duplicate argument key") {
+		t.Fatalf("denial must name the duplicate-key failure, got %s", out.String())
+	}
+}
