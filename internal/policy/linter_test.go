@@ -886,6 +886,39 @@ func TestLintRuleMissingDomains(t *testing.T) {
 	}
 }
 
+func TestLintRuleMissingRecipientPatterns(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "test",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "send_email",
+						Rules: []ArgRule{
+							{Type: "allow_recipient", Patterns: []string{}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	found := false
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no patterns' warning, violations: %+v", res.Violations)
+	}
+}
+
 func TestLintRuleMissingRepos(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",

@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 14 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 15 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -190,7 +190,26 @@ rules:
       - "acme-corp.com"
 ```
 
-Matched against argument keys: `recipient`, `to`, `email`, `domain`.
+Matched against argument keys: `recipient`, `to`, `email`, `domain`. Domain matching is substring-based (`strings.Contains`); it is not an exact mailbox allowlist.
+
+### `allow_recipient`
+
+Exact mailbox allowlist for a mandated recipient slot. Untrusted observations may fill this value; they must not enlarge it. Unlike `allow_recipient_domain`, matching is exact (trim + case-insensitive) and fail-closed:
+
+- missing, non-string, or blank `recipient`/`to`/`email` → deny
+- empty allowlist → deny
+- any value that is not an exact allowlisted mailbox → deny (including `attacker@example.com` when only `finance@example.com` is listed)
+
+```yaml
+rules:
+  - type: allow_recipient
+    patterns:
+      - "finance@example.com"
+```
+
+Matched against argument keys: `recipient`, `to`, `email`. The `domain` key is not consulted. Display-name forms (`Name <addr>`), comma-separated lists, and RFC 5322 parsing are out of scope: those inputs deny.
+
+Example mandate fixture: [`examples/policies/authority-non-escalation.yaml`](../examples/policies/authority-non-escalation.yaml).
 
 ### `max_file_size`
 

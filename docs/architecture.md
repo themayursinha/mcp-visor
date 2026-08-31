@@ -245,7 +245,7 @@ Deterministic, YAML-driven policy evaluation. No LLM involvement.
   - `EvaluateChain(server, call, previousCalls)` → chain detection
   - `GetRiskLevel(server, tool)` → risk classification
 - **Registry** (`registry.go`): In-memory lookup maps built from policy for fast tool/server resolution
-- **14 enforced argument rule types**: `deny_path`, `allow_path`, `deny_command_pattern`, `allow_command_pattern`, `deny_command_keyword`, `deny_query_pattern`, `allow_query_pattern`, `deny_recipient_domain`, `allow_recipient_domain`, `allowed_repos`, `max_file_size`, `max_result_rows`, `max_export_rows`, `require_approval_always`
+- **15 enforced argument rule types**: `deny_path`, `allow_path`, `deny_command_pattern`, `allow_command_pattern`, `deny_command_keyword`, `deny_query_pattern`, `allow_query_pattern`, `deny_recipient_domain`, `allow_recipient_domain`, `allow_recipient`, `allowed_repos`, `max_file_size`, `max_result_rows`, `max_export_rows`, `require_approval_always`
 
 ### 5. Redaction Engine (`internal/redaction/`)
 

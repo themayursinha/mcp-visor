@@ -328,6 +328,22 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_recipient":
+		// Exact mandate slot: observations may fill this value, they may not
+		// enlarge it. Missing, non-string, blank, empty allowlist, and any
+		// non-exact match fail closed. Domain substring matching is intentionally
+		// not reused — attacker@example.com must not inherit finance@example.com.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "recipient allowlist is empty"}
+		}
+		recipient, ok := getStringArg(args, "recipient", "to", "email")
+		if !ok || strings.TrimSpace(recipient) == "" {
+			return Decision{Action: ActionDeny, Reason: "recipient is required"}
+		}
+		if !recipientInAllowlist(rule.Patterns, recipient) {
+			return Decision{Action: ActionDeny, Reason: "recipient is not in allowlist"}
+		}
+
 	case "allowed_repos":
 		if repo, ok := getStringArg(args, "repo", "repository", "owner/repo"); ok {
 			if !MatchesAnyRepo(rule.Repos, repo) {
@@ -552,6 +568,28 @@ func extractArgs(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	return args
+}
+
+func recipientAllowlistConfigured(patterns []string) bool {
+	for _, pattern := range patterns {
+		if strings.TrimSpace(pattern) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func recipientInAllowlist(patterns []string, recipient string) bool {
+	got := strings.TrimSpace(recipient)
+	if got == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if strings.EqualFold(strings.TrimSpace(pattern), got) {
+			return true
+		}
+	}
+	return false
 }
 
 func getStringArg(args map[string]any, keys ...string) (string, bool) {

@@ -1,0 +1,26 @@
+version: "1.0"
+description: >
+  SARA-style mandate encoded as policy: find invoice #123 and email it to
+  finance@example.com. Tool output may instantiate authorized slots (invoice
+  path, mandated recipient). It cannot manufacture a new recipient, domain,
+  operation, or resource scope. Session history does not promote a denied
+  mailbox into authority.
+default_action: deny
+servers:
+  - name: "workspace"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: medium
+        rules:
+          - type: allow_path
+            patterns:
+              - "/workspace/invoices/**"
+      - name: "send_email"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_recipient
+            patterns:
+              - "finance@example.com"
