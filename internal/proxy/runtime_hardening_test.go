@@ -236,6 +236,36 @@ servers:
 	}
 }
 
+func TestRuntimeLimitMaxArgumentSizeCountsDuplicateArgumentsMembers(t *testing.T) {
+	p := New(Config{
+		ServerName: "filesystem",
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+settings:
+  max_argument_size_bytes: 80
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+`),
+	})
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	huge := `{"path":"` + strings.Repeat("a", 80) + `"}`
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_read","arguments":` + huge + `,"arguments":{"path":"/tmp/x"}}}` + "\n")
+	_, action := p.interceptAndModify(raw, client)
+	if action != "denied" {
+		t.Fatalf("oversized first arguments member must deny, got %s", action)
+	}
+	if !strings.Contains(out.String(), "argument size") {
+		t.Fatalf("expected argument-size denial, got %s", out.String())
+	}
+}
+
 func TestRuntimeLimitSessionMaxToolsDenies(t *testing.T) {
 	p := New(Config{
 		ServerName: "filesystem",

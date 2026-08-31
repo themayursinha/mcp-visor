@@ -573,28 +573,35 @@ func extractArgs(raw json.RawMessage) map[string]any {
 }
 
 // recipientSlotKeys are the destination aliases inspected by allow_recipient.
-// First-match is not used: every present key must be an allowlisted string.
+// First-match is not used: every present key that case-insensitively matches
+// an alias must be an allowlisted string (Go json struct tags are case-insensitive).
 var recipientSlotKeys = []string{"recipient", "to", "email", "cc", "bcc"}
+
+func isRecipientSlotKey(key string) bool {
+	for _, alias := range recipientSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
 
 func collectRecipientSlots(args map[string]any) ([]string, string) {
 	if args == nil {
 		return nil, "recipient is required"
 	}
-	found := false
 	values := make([]string, 0, len(recipientSlotKeys))
-	for _, key := range recipientSlotKeys {
-		val, ok := args[key]
-		if !ok {
+	for key, val := range args {
+		if !isRecipientSlotKey(key) {
 			continue
 		}
-		found = true
 		s, isString := val.(string)
 		if !isString || strings.TrimSpace(s) == "" {
 			return nil, "recipient is required"
 		}
 		values = append(values, s)
 	}
-	if !found {
+	if len(values) == 0 {
 		return nil, "recipient is required"
 	}
 	return values, ""

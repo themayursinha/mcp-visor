@@ -196,6 +196,11 @@ func TestAuthorityNonEscalationEveryPresentAliasIsChecked(t *testing.T) {
 			want: "recipient is not in allowlist",
 		},
 		{
+			name: "mandated recipient cannot cover attacker To",
+			args: map[string]any{"recipient": "finance@example.com", "To": "attacker@example.com"},
+			want: "recipient is not in allowlist",
+		},
+		{
 			name: "mandated recipient cannot cover attacker email",
 			args: map[string]any{"recipient": "finance@example.com", "email": "attacker@example.com"},
 			want: "recipient is not in allowlist",

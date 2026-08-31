@@ -108,11 +108,9 @@ func (p *Proxy) relayHandshakeClientMessage(raw json.RawMessage, client *mcp.Par
 }
 
 func originalArgumentBytes(params json.RawMessage) int {
-	var callReq mcp.ToolsCallRequest
-	if err := json.Unmarshal(params, &callReq); err != nil {
-		return len(params)
-	}
-	return len(callReq.Arguments)
+	// Measure the original params object, including duplicate arguments
+	// members and padding. Last-wins extraction is not a size bound.
+	return len(params)
 }
 
 func (p *Proxy) handshakeEnvelopeResponder(client *mcp.Parser) (string, toolsCallResponder) {

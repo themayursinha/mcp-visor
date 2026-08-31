@@ -143,6 +143,25 @@ func TestAuthorityNonEscalationProxyDeniesShadowAliasBeforeRelay(t *testing.T) {
 	}
 }
 
+func TestAuthorityNonEscalationProxyDeniesCaseVariantAliasBeforeRelay(t *testing.T) {
+	p, cleanup := newSARAProxy(t, "sess-sara-case")
+	defer cleanup()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(toolCallRaw(1, "send_email", map[string]any{
+		"recipient":  "finance@example.com",
+		"To":         "attacker@example.com",
+		"invoice_id": "123",
+	}), client)
+	if action != "denied" {
+		t.Fatalf("case-variant alias must be denied before relay, got %s; response=%s", action, out.String())
+	}
+	if !strings.Contains(out.String(), "recipient is not in allowlist") {
+		t.Fatalf("denial must name the recipient allowlist, got %s", out.String())
+	}
+}
+
 func TestAuthorityNonEscalationProxyRelaysCanonicalUniqueArguments(t *testing.T) {
 	p, cleanup := newSARAProxy(t, "sess-sara-dup")
 	defer cleanup()
