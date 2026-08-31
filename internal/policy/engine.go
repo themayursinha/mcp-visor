@@ -172,12 +172,6 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 		return Decision{Action: ActionDeny, Reason: "unknown tool/server; default-deny policy"}
 	}
 
-	if known {
-		if err := rejectDuplicateJSONKeys(req.Arguments); err != nil {
-			return Decision{Action: ActionDeny, Reason: "duplicate argument key"}
-		}
-	}
-
 	if known && len(tool.Rules) > 0 {
 		args := extractArgs(req.Arguments)
 		for _, rule := range tool.Rules {

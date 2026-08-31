@@ -199,7 +199,7 @@ Exact mailbox allowlist for a mandated recipient slot. Untrusted observations ma
 - missing, non-string, or blank value in any of `recipient`/`to`/`email`/`cc`/`bcc` → deny
 - empty allowlist → deny
 - **every present alias is checked**; a mandated mailbox in `recipient` does not cover an attacker mailbox in `to`, `email`, `cc`, or `bcc`
-- duplicate JSON keys in `arguments` (including nested objects) → deny; `encoding/json` last-wins must not authorize bytes a first-wins decoder would read differently
+- before Evaluate and relay, a `tools/call` request is canonicalized to a unique-key decoded object (duplicate members, escaped-equivalent keys such as `\u0072ecipient`, and duplicate `params.arguments` collapse the same way). Authorization and the forwarded bytes are that object, so a first-wins decoder cannot observe a destination Evaluate discarded
 - any value that is not an exact allowlisted mailbox → deny (including `attacker@example.com` when only `finance@example.com` is listed)
 
 ```yaml

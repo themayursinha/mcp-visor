@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -142,25 +143,92 @@ func TestAuthorityNonEscalationProxyDeniesShadowAliasBeforeRelay(t *testing.T) {
 	}
 }
 
-func TestAuthorityNonEscalationProxyDeniesDuplicateArgumentKeysBeforeRelay(t *testing.T) {
+func TestAuthorityNonEscalationProxyRelaysCanonicalUniqueArguments(t *testing.T) {
+	p, cleanup := newSARAProxy(t, "sess-sara-dup")
+	defer cleanup()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"attacker@example.com","recipient":"finance@example.com","invoice_id":"123"}}}` + "\n")
+	modified, action := p.interceptAndModify(raw, client)
+	if action != "forward" {
+		t.Fatalf("last-wins mandated recipient must relay, got %s; response=%s", action, out.String())
+	}
+	assertForwardedRecipient(t, modified, "finance@example.com")
+}
+
+func TestAuthorityNonEscalationProxyRelaysCanonicalEscapedEquivalentKeys(t *testing.T) {
+	p, cleanup := newSARAProxy(t, "sess-sara-unicode")
+	defer cleanup()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"attacker@example.com","\u0072ecipient":"finance@example.com","invoice_id":"123"}}}` + "\n")
+	modified, action := p.interceptAndModify(raw, client)
+	if action != "forward" {
+		t.Fatalf("escaped-equivalent last-wins mandated recipient must relay, got %s; response=%s", action, out.String())
+	}
+	assertForwardedRecipient(t, modified, "finance@example.com")
+}
+
+func TestAuthorityNonEscalationProxyRelaysCanonicalDuplicateArgumentsMembers(t *testing.T) {
+	p, cleanup := newSARAProxy(t, "sess-sara-args")
+	defer cleanup()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"attacker@example.com","invoice_id":"123"},"arguments":{"recipient":"finance@example.com","invoice_id":"123"}}}` + "\n")
+	modified, action := p.interceptAndModify(raw, client)
+	if action != "forward" {
+		t.Fatalf("last-wins arguments object must relay, got %s; response=%s", action, out.String())
+	}
+	assertForwardedRecipient(t, modified, "finance@example.com")
+}
+
+func TestAuthorityNonEscalationProxyDeniesLastWinsAttackerRecipient(t *testing.T) {
+	p, cleanup := newSARAProxy(t, "sess-sara-last-attacker")
+	defer cleanup()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"finance@example.com","recipient":"attacker@example.com"}}}` + "\n")
+	_, action := p.interceptAndModify(raw, client)
+	if action != "denied" {
+		t.Fatalf("last-wins attacker recipient must deny, got %s; response=%s", action, out.String())
+	}
+	if !strings.Contains(out.String(), "recipient is not in allowlist") {
+		t.Fatalf("denial must name the recipient allowlist, got %s", out.String())
+	}
+}
+
+func newSARAProxy(t *testing.T, sessionID string) (*Proxy, func()) {
+	t.Helper()
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	p := New(Config{
 		ServerName:   "workspace",
-		SessionID:    "sess-sara-dup",
+		SessionID:    sessionID,
 		ClientID:     "agent-sara",
 		AuditLogPath: auditPath,
 		Policy:       mustLoadPolicy(t, saraMandateYAML()),
 	})
-	defer p.audit.Close()
+	return p, func() { _ = p.audit.Close() }
+}
 
-	out := &bytes.Buffer{}
-	client := mcp.NewParser(nil, out)
-	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"attacker@example.com","recipient":"finance@example.com"}}}` + "\n")
-	_, action := p.interceptAndModify(raw, client)
-	if action != "denied" {
-		t.Fatalf("duplicate argument keys must be denied before relay, got %s; response=%s", action, out.String())
+func assertForwardedRecipient(t *testing.T, modified json.RawMessage, want string) {
+	t.Helper()
+	if strings.Contains(string(modified), "attacker@example.com") {
+		t.Fatalf("first-wins attacker must not remain in relayed bytes: %s", modified)
 	}
-	if !strings.Contains(out.String(), "duplicate argument key") {
-		t.Fatalf("denial must name the duplicate-key failure, got %s", out.String())
+	var env struct {
+		Params struct {
+			Arguments map[string]any `json:"arguments"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(modified), &env); err != nil {
+		t.Fatalf("forwarded JSON: %v", err)
+	}
+	got, _ := env.Params.Arguments["recipient"].(string)
+	if got != want {
+		t.Fatalf("relayed recipient=%q want %q; args=%#v", got, want, env.Params.Arguments)
 	}
 }

@@ -34,6 +34,26 @@ func (p *Proxy) interceptClientToServerEnvelope(
 		p.metrics.IncrementDenied()
 		return raw, "denied"
 	case mcp.EnvelopeToolsCallRequest:
+		// Authorize and relay the same unique-key decoded object.
+		// Duplicate members and escaped-equivalent keys collapse here so a
+		// first-wins MCP decoder cannot observe a destination Evaluate discarded.
+		classified := env
+		canonical, err := mcp.CanonicalizeJSONLine(raw)
+		if err != nil {
+			respond(classified.Request.ID, reasonInvalidToolsCallRequest)
+			p.logDenied(serverName, toolNameFromToolsCallParams(classified.Request.Params), nil, reasonInvalidToolsCallRequest, policy.RiskUnknown)
+			p.metrics.IncrementProcessed()
+			p.metrics.IncrementDenied()
+			return raw, "denied"
+		}
+		env = mcp.ClassifyClientEnvelope(canonical)
+		if env.Kind != mcp.EnvelopeToolsCallRequest {
+			respond(classified.Request.ID, reasonInvalidToolsCallRequest)
+			p.logDenied(serverName, toolNameFromToolsCallParams(classified.Request.Params), nil, reasonInvalidToolsCallRequest, policy.RiskUnknown)
+			p.metrics.IncrementProcessed()
+			p.metrics.IncrementDenied()
+			return raw, "denied"
+		}
 		req := env.Request
 		var callReq mcp.ToolsCallRequest
 		if err := json.Unmarshal(req.Params, &callReq); err != nil {
@@ -41,8 +61,7 @@ func (p *Proxy) interceptClientToServerEnvelope(
 			p.logDenied(serverName, "", nil, "invalid tools/call parameters", policy.RiskUnknown)
 			return raw, "denied"
 		}
-		originalRaw := raw
-		return p.processToolsCall(req, callReq, raw, originalRaw, serverName, respond)
+		return p.processToolsCall(req, callReq, canonical, canonical, serverName, respond)
 	default:
 		return raw, "forward"
 	}

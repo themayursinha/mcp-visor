@@ -305,33 +305,31 @@ func TestAuthorityNonEscalationHistoryDoesNotPromoteRecipient(t *testing.T) {
 	}
 }
 
-func TestAuthorityNonEscalationDuplicateArgumentKeysFailClosed(t *testing.T) {
+func TestAuthorityNonEscalationEvaluateSeesLastWinsDecodedKeys(t *testing.T) {
 	eng := loadSARAEngine(t)
 
-	// encoding/json last-wins would keep finance@example.com; a first-wins
-	// MCP decoder would send to attacker. Deny the ambiguous object.
+	// Engine last-wins is the authorization view of a unique-key object.
+	// The proxy canonicalizes before Evaluate and relay so first-wins
+	// attacker bytes never leave the intercept.
 	got := evalRaw(eng, "send_email", json.RawMessage(
 		`{"recipient":"attacker@example.com","recipient":"finance@example.com"}`,
 	))
+	if got.Action != policy.ActionAllow {
+		t.Fatalf("last-wins mandated recipient must allow, got %s: %s", got.Action, got.Reason)
+	}
+
+	got = evalRaw(eng, "send_email", json.RawMessage(
+		`{"recipient":"finance@example.com","recipient":"attacker@example.com"}`,
+	))
 	if got.Action != policy.ActionDeny {
-		t.Fatalf("duplicate recipient key must deny, got %s: %s", got.Action, got.Reason)
-	}
-	if got.Reason != "duplicate argument key" {
-		t.Fatalf("expected duplicate-key reason, got %q", got.Reason)
+		t.Fatalf("last-wins attacker recipient must deny, got %s: %s", got.Action, got.Reason)
 	}
 
 	got = evalRaw(eng, "send_email", json.RawMessage(
-		`{"recipient":"finance@example.com","recipient":"finance@example.com"}`,
+		`{"recipient":"attacker@example.com","\u0072ecipient":"finance@example.com"}`,
 	))
-	if got.Action != policy.ActionDeny || got.Reason != "duplicate argument key" {
-		t.Fatalf("identical duplicate keys must still deny, got %s: %s", got.Action, got.Reason)
-	}
-
-	got = evalRaw(eng, "send_email", json.RawMessage(
-		`{"recipient":"finance@example.com","meta":{"id":"1","id":"2"}}`,
-	))
-	if got.Action != policy.ActionDeny || got.Reason != "duplicate argument key" {
-		t.Fatalf("nested duplicate keys must deny, got %s: %s", got.Action, got.Reason)
+	if got.Action != policy.ActionAllow {
+		t.Fatalf("escaped-equivalent last-wins mandated recipient must allow, got %s: %s", got.Action, got.Reason)
 	}
 
 	got = evalRaw(eng, "send_email", json.RawMessage(
