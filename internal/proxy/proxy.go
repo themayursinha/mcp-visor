@@ -709,18 +709,7 @@ func (p *Proxy) runHandshake(client, server *mcp.Parser) error {
 	if err != nil {
 		return fmt.Errorf("read initialized notification: %w", err)
 	}
-	if err := p.enforceHandshakeEnvelope(raw, client); err != nil {
-		return err
-	}
-	notif, err := client.DecodeNotification(raw)
-	if err != nil {
-		p.logger.Warn("decode initialized notification failed, forwarding raw", "error", err)
-		return server.EncodeRaw(raw)
-	}
-	if notif.Method != mcp.MethodInitialized {
-		p.logger.Warn("expected initialized, got", "method", notif.Method)
-	}
-	return server.EncodeRaw(raw)
+	return p.relayHandshakeClientMessage(raw, client, server.EncodeRaw)
 }
 
 func (p *Proxy) relayClientToServer(ctx context.Context, client, server *mcp.Parser) error {
@@ -1054,13 +1043,13 @@ func (p *Proxy) Metrics() *ProxyMetrics {
 	return &p.metrics
 }
 
-func (p *Proxy) evaluateRuntimeLimits(callReq mcp.ToolsCallRequest) policy.Decision {
+func (p *Proxy) evaluateRuntimeLimits(argumentBytes int) policy.Decision {
 	settings := p.engine.Policy().Settings
 
-	if settings.MaxArgumentSizeBytes > 0 && len(callReq.Arguments) > settings.MaxArgumentSizeBytes {
+	if settings.MaxArgumentSizeBytes > 0 && argumentBytes > settings.MaxArgumentSizeBytes {
 		return policy.Decision{
 			Action: policy.ActionDeny,
-			Reason: fmt.Sprintf("argument size %d exceeds max %d bytes", len(callReq.Arguments), settings.MaxArgumentSizeBytes),
+			Reason: fmt.Sprintf("argument size %d exceeds max %d bytes", argumentBytes, settings.MaxArgumentSizeBytes),
 		}
 	}
 

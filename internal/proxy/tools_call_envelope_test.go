@@ -217,7 +217,7 @@ default_action: deny`),
 	client := mcp.NewParser(nil, out)
 
 	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"file_read","arguments":{"path":"/tmp/x"}}}` + "\n")
-	if err := p.enforceHandshakeEnvelope(raw, client); err == nil {
+	if _, err := p.enforceHandshakeEnvelope(raw, client); err == nil {
 		t.Fatal("handshake notification tools/call must terminate the handshake")
 	}
 }
@@ -233,7 +233,7 @@ default_action: deny`),
 	client := mcp.NewParser(nil, out)
 
 	raw := json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
-	if err := p.enforceHandshakeEnvelope(raw, client); err != nil {
+	if _, err := p.enforceHandshakeEnvelope(raw, client); err != nil {
 		t.Fatalf("handshake initialized notification must forward: %v", err)
 	}
 }

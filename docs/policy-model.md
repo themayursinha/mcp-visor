@@ -46,7 +46,7 @@ time_restrictions: # Time-of-day access controls (optional)
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_argument_size_bytes` | int | 1048576 | Max tool call argument size (1 MB). Larger calls rejected. |
+| `max_argument_size_bytes` | int | 1048576 | Max tool call argument size (1 MB). Measured on the client `arguments` bytes before unique-key collapse. Larger calls rejected. |
 | `max_output_size_bytes` | int | 10485760 | Truncation threshold for each textual `Content[].Text`; a marker is appended after truncation, so final text can exceed the threshold. Not an aggregate/structured/error limit. |
 | `session_max_tools` | int | 100 | Max tool calls per session. New calls denied after limit. |
 | `session_timeout_seconds` | int | 3600 | Session timeout (1 hour). |

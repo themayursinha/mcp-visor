@@ -232,3 +232,41 @@ func assertForwardedRecipient(t *testing.T, modified json.RawMessage, want strin
 		t.Fatalf("relayed recipient=%q want %q; args=%#v", got, want, env.Params.Arguments)
 	}
 }
+
+func TestRunHandshakeRelaysCanonicalUniqueArguments(t *testing.T) {
+	p, cleanup := newSARAProxy(t, "sess-sara-handshake")
+	defer cleanup()
+
+	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n"
+	initResp := `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"s","version":"0"}}}` + "\n"
+	toolsCall := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"attacker@example.com","recipient":"finance@example.com","invoice_id":"123"}}}` + "\n"
+
+	client := mcp.NewParser(bytes.NewBufferString(initReq+toolsCall), &bytes.Buffer{})
+	serverOut := &bytes.Buffer{}
+	server := mcp.NewParser(bytes.NewBufferString(initResp), serverOut)
+	if err := p.runHandshake(client, server); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	lines := bytes.Split(bytes.TrimRight(serverOut.Bytes(), "\n"), []byte("\n"))
+	if len(lines) < 2 {
+		t.Fatalf("server saw %d messages, want initialize + tools/call; %s", len(lines), serverOut.Bytes())
+	}
+	assertForwardedRecipient(t, lines[len(lines)-1], "finance@example.com")
+}
+
+func TestRelayHandshakeClientMessageEncodesCanonicalPayload(t *testing.T) {
+	p, cleanup := newSARAProxy(t, "sess-sara-handshake-relay")
+	defer cleanup()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_email","arguments":{"recipient":"attacker@example.com","recipient":"finance@example.com","invoice_id":"123"}}}` + "\n")
+	var forwarded json.RawMessage
+	if err := p.relayHandshakeClientMessage(raw, client, func(msg json.RawMessage) error {
+		forwarded = append([]byte(nil), msg...)
+		return nil
+	}); err != nil {
+		t.Fatalf("relay handshake: %v; response=%s", err, out.String())
+	}
+	assertForwardedRecipient(t, forwarded, "finance@example.com")
+}
