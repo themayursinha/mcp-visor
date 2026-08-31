@@ -23,6 +23,7 @@ func (p *Proxy) processToolsCall(
 	req mcp.Request,
 	callReq mcp.ToolsCallRequest,
 	raw, originalRaw json.RawMessage,
+	argumentBytes int,
 	serverName string,
 	respond toolsCallResponder,
 ) (json.RawMessage, string) {
@@ -94,7 +95,7 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 	}
 
-	if decision := p.evaluateRuntimeLimits(callReq); decision.Action == policy.ActionDeny {
+	if decision := p.evaluateRuntimeLimits(argumentBytes); decision.Action == policy.ActionDeny {
 		respond(req.ID, decision.Reason)
 		p.metrics.IncrementDenied()
 		rtDeniedEvent := audit.Event{

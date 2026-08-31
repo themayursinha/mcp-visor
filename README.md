@@ -83,6 +83,7 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Unknown or newly introduced tools under default-deny policy
 - High-risk actions without human approval
 - Tool sequences that look safe individually but become dangerous together
+- Tool-output-induced recipient expansion: `allow_recipient` is an exact, fail-closed mailbox slot. Session history does not promote a denied recipient into authority.
 
 ## Session-taint egress control
 

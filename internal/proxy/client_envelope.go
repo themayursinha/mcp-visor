@@ -34,6 +34,27 @@ func (p *Proxy) interceptClientToServerEnvelope(
 		p.metrics.IncrementDenied()
 		return raw, "denied"
 	case mcp.EnvelopeToolsCallRequest:
+		// Authorize and relay the same unique-key decoded object.
+		// Duplicate members and escaped-equivalent keys collapse here so a
+		// first-wins MCP decoder cannot observe a destination Evaluate discarded.
+		classified := env
+		canonical, err := mcp.CanonicalizeJSONLine(raw)
+		if err != nil {
+			respond(classified.Request.ID, reasonInvalidToolsCallRequest)
+			p.logDenied(serverName, toolNameFromToolsCallParams(classified.Request.Params), nil, reasonInvalidToolsCallRequest, policy.RiskUnknown)
+			p.metrics.IncrementProcessed()
+			p.metrics.IncrementDenied()
+			return raw, "denied"
+		}
+		env = mcp.ClassifyClientEnvelope(canonical)
+		if env.Kind != mcp.EnvelopeToolsCallRequest {
+			respond(classified.Request.ID, reasonInvalidToolsCallRequest)
+			p.logDenied(serverName, toolNameFromToolsCallParams(classified.Request.Params), nil, reasonInvalidToolsCallRequest, policy.RiskUnknown)
+			p.metrics.IncrementProcessed()
+			p.metrics.IncrementDenied()
+			return raw, "denied"
+		}
+		argumentBytes := originalArgumentBytes(classified.Request.Params)
 		req := env.Request
 		var callReq mcp.ToolsCallRequest
 		if err := json.Unmarshal(req.Params, &callReq); err != nil {
@@ -41,8 +62,7 @@ func (p *Proxy) interceptClientToServerEnvelope(
 			p.logDenied(serverName, "", nil, "invalid tools/call parameters", policy.RiskUnknown)
 			return raw, "denied"
 		}
-		originalRaw := raw
-		return p.processToolsCall(req, callReq, raw, originalRaw, serverName, respond)
+		return p.processToolsCall(req, callReq, canonical, canonical, argumentBytes, serverName, respond)
 	default:
 		return raw, "forward"
 	}
@@ -61,13 +81,36 @@ func (p *Proxy) denyToolsCallEnvelope(serverName, toolName, reason string, args 
 
 // enforceHandshakeEnvelope applies the shared envelope gate to the client's
 // post-initialize message. A denied message terminates the handshake.
-func (p *Proxy) enforceHandshakeEnvelope(raw json.RawMessage, client *mcp.Parser) error {
+// The returned payload is the only legal relay artifact (canonical for
+// tools/call); callers must not forward the original raw after a pass.
+func (p *Proxy) enforceHandshakeEnvelope(raw json.RawMessage, client *mcp.Parser) (json.RawMessage, error) {
 	serverName, respond := p.handshakeEnvelopeResponder(client)
-	_, action := p.interceptClientToServerEnvelope(raw, serverName, respond)
+	modified, action := p.interceptClientToServerEnvelope(raw, serverName, respond)
 	if action == "denied" {
-		return fmt.Errorf("post-initialize message denied")
+		return nil, fmt.Errorf("post-initialize message denied")
 	}
-	return nil
+	return modified, nil
+}
+
+// relayHandshakeClientMessage is the only handshake encode path: intercept
+// return value goes to the server. Stdio and remote cannot EncodeRaw(raw).
+func (p *Proxy) relayHandshakeClientMessage(raw json.RawMessage, client *mcp.Parser, encode func(json.RawMessage) error) error {
+	forward, err := p.enforceHandshakeEnvelope(raw, client)
+	if err != nil {
+		return err
+	}
+	if notif, err := client.DecodeNotification(raw); err != nil {
+		p.logger.Warn("decode initialized notification failed, forwarding handshake payload", "error", err)
+	} else if notif.Method != mcp.MethodInitialized {
+		p.logger.Warn("expected initialized, got", "method", notif.Method)
+	}
+	return encode(forward)
+}
+
+func originalArgumentBytes(params json.RawMessage) int {
+	// Measure the original params object, including duplicate arguments
+	// members and padding. Last-wins extraction is not a size bound.
+	return len(params)
 }
 
 func (p *Proxy) handshakeEnvelopeResponder(client *mcp.Parser) (string, toolsCallResponder) {

@@ -328,6 +328,24 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_recipient":
+		// Exact mandate slot: observations may fill this value, they may not
+		// enlarge it. Every present destination alias is checked; a mandated
+		// mailbox in one key cannot cover an attacker mailbox in another.
+		// Domain substring matching is intentionally not reused.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "recipient allowlist is empty"}
+		}
+		slots, reason := collectRecipientSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: "recipient is not in allowlist"}
+			}
+		}
+
 	case "allowed_repos":
 		if repo, ok := getStringArg(args, "repo", "repository", "owner/repo"); ok {
 			if !MatchesAnyRepo(rule.Repos, repo) {
@@ -552,6 +570,63 @@ func extractArgs(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	return args
+}
+
+// recipientSlotKeys are the destination aliases inspected by allow_recipient.
+// First-match is not used: every present key that case-insensitively matches
+// an alias must be an allowlisted string (Go json struct tags are case-insensitive).
+var recipientSlotKeys = []string{"recipient", "to", "email", "cc", "bcc"}
+
+func isRecipientSlotKey(key string) bool {
+	for _, alias := range recipientSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectRecipientSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "recipient is required"
+	}
+	values := make([]string, 0, len(recipientSlotKeys))
+	for key, val := range args {
+		if !isRecipientSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "recipient is required"
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, "recipient is required"
+	}
+	return values, ""
+}
+
+func recipientAllowlistConfigured(patterns []string) bool {
+	for _, pattern := range patterns {
+		if strings.TrimSpace(pattern) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func recipientInAllowlist(patterns []string, recipient string) bool {
+	got := strings.TrimSpace(recipient)
+	if got == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if strings.EqualFold(strings.TrimSpace(pattern), got) {
+			return true
+		}
+	}
+	return false
 }
 
 func getStringArg(args map[string]any, keys ...string) (string, bool) {

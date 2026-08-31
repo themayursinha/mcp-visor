@@ -156,18 +156,7 @@ func (p *Proxy) runRemoteHandshake(ctx context.Context, client *mcp.Parser, remo
 	if err != nil {
 		return fmt.Errorf("read initialized notification: %w", err)
 	}
-	if err := p.enforceHandshakeEnvelope(raw, client); err != nil {
-		return err
-	}
-	notif, err := client.DecodeNotification(raw)
-	if err != nil {
-		p.logger.Warn("decode initialized notification failed, forwarding raw", "error", err)
-		return remote.EncodeRaw(raw)
-	}
-	if notif.Method != mcp.MethodInitialized {
-		p.logger.Warn("expected initialized, got", "method", notif.Method)
-	}
-	return remote.EncodeRaw(raw)
+	return p.relayHandshakeClientMessage(raw, client, remote.EncodeRaw)
 }
 
 func (p *Proxy) relayClientToRemoteServer(ctx context.Context, client *mcp.Parser, remote transport.Transport) error {
