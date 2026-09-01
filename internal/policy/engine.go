@@ -310,6 +310,23 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_path_slot":
+		// Fail-closed mandate path: a tool allowed to clean /tmp/agent-123
+		// must not delete $HOME. Declared PATH/TARGET fields are the effect
+		// target; Visor does not expand shell variables inside the MCP server.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "path slot allowlist is empty"}
+		}
+		slots, reason := collectEffectPathSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !matchesAnyPattern(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonDestructivePathOutsideMandate}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -661,6 +678,14 @@ const reasonPathToShellAmplification = "path-to-shell amplification: argument cl
 // EqualFold-matches absolutepath; absolute_path is a distinct alias.
 var pathSlotKeys = []string{"path", "file", "file_path", "filepath", "absolute_path", "absolutepath"}
 
+// reasonDestructivePathOutsideMandate is the deny evidence for allow_path_slot.
+const reasonDestructivePathOutsideMandate = "destructive path outside mandate: argument class PATH, effect class DESTRUCTIVE, authority transition MANDATE->COLLATERAL"
+
+// effectPathSlotKeys are PATH/TARGET-class aliases inspected by allow_path_slot.
+// First-match is not used. target (Fable cleanup) is a distinct alias from path.
+// directory EqualFold-matches Directory; dir is distinct.
+var effectPathSlotKeys = []string{"path", "file", "file_path", "filepath", "absolute_path", "absolutepath", "target", "dir", "directory"}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -704,6 +729,36 @@ func isRecipientSlotKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func isEffectPathSlotKey(key string) bool {
+	for _, alias := range effectPathSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectEffectPathSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "effect path is required"
+	}
+	values := make([]string, 0, len(effectPathSlotKeys))
+	for key, val := range args {
+		if !isEffectPathSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "effect path is required"
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, "effect path is required"
+	}
+	return values, ""
 }
 
 func isPathSlotKey(key string) bool {

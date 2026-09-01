@@ -271,6 +271,8 @@ Policy `deny_path` / `allow_path` rules do not inspect `uri`. Built-in sensitive
 
 A schema-valid, tool-authorized `create_reservation` / `cancel_reservation` call is not an ownership proof. Attach `allow_resource_owner` when PRINCIPAL-class arguments must be the mandate principal. Visor does not look up a booking API or world model. Without that rule, an allowed mutation tool can still act for another principal.
 
+A schema-valid, tool-authorized `cleanup_sandbox` call is not an effect-path proof. `allow_path` does not inspect `target` and skips when `path`/`file`/`file_path` are absent. Attach `allow_path_slot` when PATH/TARGET-class arguments must stay under the mandate glob. Visor does not expand shell variables, canonicalize `..`, or bind inodes. Without that rule, an allowed cleanup tool can still name `$HOME`.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.

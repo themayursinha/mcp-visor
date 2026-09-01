@@ -1,0 +1,21 @@
+version: "1.0"
+description: >
+  Local Fable / 700GB home-deletion fixture. cleanup_sandbox is a
+  schema-valid, tool-authorized MCP tool. A mandate to delete expired files
+  under /tmp/agent-123 does not authorize deleting $HOME. Declared PATH/TARGET
+  fields are the effect target; Visor does not expand shell variables inside
+  the MCP server or look up inodes. Attaching allow_path_slot is the effect
+  bound: every present path alias must match the mandate glob.
+default_action: deny
+servers:
+  - name: "sandbox"
+    allowed: true
+    tools:
+      - name: "cleanup_sandbox"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_path_slot
+            patterns:
+              - "/tmp/agent-123"
+              - "/tmp/agent-123/**"

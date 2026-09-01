@@ -252,6 +252,35 @@ func TestLintAllowResourceOwnerIsKnown(t *testing.T) {
 	}
 }
 
+func TestLintAllowPathSlotIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "sandbox",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "cleanup_sandbox",
+						Rules: []ArgRule{
+							{Type: "allow_path_slot", Patterns: []string{"/tmp/agent-123/**"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("allow_path_slot must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintUnknownRuleType(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",
@@ -991,6 +1020,39 @@ func TestLintRuleMissingResourceOwnerPatterns(t *testing.T) {
 						Name: "cancel_reservation",
 						Rules: []ArgRule{
 							{Type: "allow_resource_owner", Patterns: []string{}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	found := false
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no patterns' warning, violations: %+v", res.Violations)
+	}
+}
+
+func TestLintRuleMissingPathSlotPatterns(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "test",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "cleanup_sandbox",
+						Rules: []ArgRule{
+							{Type: "allow_path_slot", Patterns: []string{}},
 						},
 					},
 				},

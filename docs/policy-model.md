@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 17 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 18 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -127,6 +127,27 @@ rules:
 Matched against argument keys: `path`, `file`, `file_path`, `filepath`, `absolute_path`, `absolutepath`, matched case-insensitively (so `absolutePath` and `AbsolutePath` are the same slot as `absolutepath`). The `uri` key is not consulted (URL class). `allow_path` / `deny_path` still use first-match `path` / `file` / `file_path` only.
 
 Example fixture: [`examples/policies/path-shell-amplification.yaml`](../examples/policies/path-shell-amplification.yaml).
+
+### `allow_path_slot`
+
+Fail-closed PATH/TARGET-class glob allowlist for a mandated effect path. A tool that is allowed to clean `/tmp/agent-123` must not delete `$HOME`. Declared path fields are the effect target; Visor does not expand shell variables inside the MCP server, look up inodes, or distinguish ephemeral vs persistent storage. Attaching this rule is the effect bound. Matching uses the same globs as `allow_path` and is fail-closed:
+
+- missing, non-string, or blank value in any PATH/TARGET-class alias → deny
+- empty allowlist → deny
+- **every present alias is checked**; a mandated path in `path` does not cover `$HOME` in `target`
+- any value that does not match a mandate glob → deny with evidence `argument class PATH`, `effect class DESTRUCTIVE`, `authority transition MANDATE->COLLATERAL`
+
+```yaml
+rules:
+  - type: allow_path_slot
+    patterns:
+      - "/tmp/agent-123"
+      - "/tmp/agent-123/**"
+```
+
+Matched against argument keys: `path`, `file`, `file_path`, `filepath`, `absolute_path`, `absolutepath`, `target`, `dir`, `directory`, matched case-insensitively (so `Target` is the same slot as `target`). `allow_path` / `deny_path` still use first-match `path` / `file` / `file_path` only and skip the rule when those keys are absent. Command strings (`command` / `cmd` / `exec`) are not parsed. Path canonicalization, `..` traversal, and symlink identity are out of scope.
+
+Example fixture: [`examples/policies/destructive-path-slot.yaml`](../examples/policies/destructive-path-slot.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -656,6 +677,7 @@ The repository includes example policies demonstrating different postures:
 | Demo Policy | `examples/policies/demo-policy.yaml` | deny | Permissive demo configuration. |
 | Session Taint Egress | `examples/policies/session-taint-egress.yaml` | deny | Sensitive read marks session; later egress is blocked. |
 | Third-Party Effect | `examples/policies/third-party-effect.yaml` | deny | Book/cancel only for the mandate principal. |
+| Destructive Path Slot | `examples/policies/destructive-path-slot.yaml` | deny | Clean only under the mandate path glob. |
 
 ## Error Handling
 
