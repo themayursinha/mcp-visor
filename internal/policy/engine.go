@@ -345,6 +345,24 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_working_directory":
+		// Fail-closed mandate cwd: a tool allowed to run a decoder under
+		// /workspace/safe must not execute with cwd in an attacker extract
+		// dir. Declared CWD fields are the execution environment; Visor
+		// does not parse imports or PYTHONPATH. Every present alias is checked.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "working directory allowlist is empty"}
+		}
+		slots, reason := collectWorkingDirectorySlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !matchesAnyPattern(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonUntrustedExecutionEnvironment}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -711,6 +729,13 @@ const reasonAuthorityExpandingDestination = "authority-expanding destination: ar
 // First-match is not used. dest_host EqualFold-matches DestHost; dest is distinct.
 var destinationSlotKeys = []string{"url", "uri", "host", "hostname", "endpoint", "dest", "dest_host", "destination", "domain"}
 
+// reasonUntrustedExecutionEnvironment is the deny evidence for allow_working_directory.
+const reasonUntrustedExecutionEnvironment = "untrusted execution environment: argument class PATH, effect class EXECUTION, authority transition MANDATE->ENVIRONMENT"
+
+// workingDirectorySlotKeys are CWD-class aliases inspected by allow_working_directory.
+// First-match is not used. working_dir EqualFold-matches Working_Dir; workingdir is distinct.
+var workingDirectorySlotKeys = []string{"cwd", "working_directory", "working_dir", "workingdir", "workdir", "chdir"}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -834,6 +859,36 @@ func collectDestinationSlots(args map[string]any) ([]string, string) {
 	}
 	if len(values) == 0 {
 		return nil, "destination is required"
+	}
+	return values, ""
+}
+
+func isWorkingDirectorySlotKey(key string) bool {
+	for _, alias := range workingDirectorySlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectWorkingDirectorySlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "working directory is required"
+	}
+	values := make([]string, 0, len(workingDirectorySlotKeys))
+	for key, val := range args {
+		if !isWorkingDirectorySlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "working directory is required"
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, "working directory is required"
 	}
 	return values, ""
 }

@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 19 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 20 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -168,6 +168,27 @@ rules:
 Matched against argument keys: `url`, `uri`, `host`, `hostname`, `endpoint`, `dest`, `dest_host`, `destination`, `domain`, matched case-insensitively (so `URL` is the same slot as `url`). `to` is not a destination alias (mailbox). The value is a boring host, or a leading `scheme://` followed by boring `host` or `host:port` (letters, digits, dots, hyphens). `://` in the middle of the string is unparseable. Userinfo (`@`), backslash, percent-encoding, brackets, and whitespace make the host unparseable and deny. Visor does not adopt WHATWG or `net/url` semantics for a downstream tool. Server-level `allowed_destinations` / `denied_destinations` remain inert. Nested maps are out of model.
 
 Example fixture: [`examples/policies/reward-seeker-destination.yaml`](../examples/policies/reward-seeker-destination.yaml).
+
+### `allow_working_directory`
+
+Fail-closed CWD-class glob allowlist for a mandated execution directory. A tool that is allowed to run a decoder under `/workspace/safe` must not execute with `cwd` in an attacker extract directory (stdlib shadowing). Declared working-directory fields are the execution environment; Visor does not parse imports, `PYTHONPATH`, or module graphs. Attaching this rule is the effect bound. Matching uses the same globs as `allow_path` and is fail-closed:
+
+- missing, non-string, or blank value in any CWD-class alias → deny
+- empty allowlist → deny
+- **every present alias is checked**; a mandated directory in `cwd` does not cover `/tmp/attacker-extract` in `working_directory`
+- any value that does not match a mandate glob → deny with evidence `argument class PATH`, `effect class EXECUTION`, `authority transition MANDATE->ENVIRONMENT`
+
+```yaml
+rules:
+  - type: allow_working_directory
+    patterns:
+      - "/workspace/safe"
+      - "/workspace/safe/**"
+```
+
+Matched against argument keys: `cwd`, `working_directory`, `working_dir`, `workingdir`, `workdir`, `chdir`, matched case-insensitively (so `Cwd` is the same slot as `cwd`). `path` / `dir` are not CWD aliases (`allow_path_slot` owns those). Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model.
+
+Example fixture: [`examples/policies/environment-laundering-cwd.yaml`](../examples/policies/environment-laundering-cwd.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -699,6 +720,7 @@ The repository includes example policies demonstrating different postures:
 | Third-Party Effect | `examples/policies/third-party-effect.yaml` | deny | Book/cancel only for the mandate principal. |
 | Destructive Path Slot | `examples/policies/destructive-path-slot.yaml` | deny | Clean only under the mandate path glob. |
 | Reward-Seeker Destination | `examples/policies/reward-seeker-destination.yaml` | deny | Local file_read allowed; egress only to the mandate host. |
+| Environment-Laundering CWD | `examples/policies/environment-laundering-cwd.yaml` | deny | Run Python only under the mandate working directory. |
 
 ## Error Handling
 

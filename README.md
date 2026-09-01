@@ -88,6 +88,7 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Cross-principal writes: `allow_resource_owner` is an exact, fail-closed principal slot. A mandate to act for alice does not authorize cancelling bob's reservation. Session history does not promote a denied owner into authority.
 - Destructive path outside mandate: `allow_path_slot` denies PATH/TARGET-class arguments that are not under the mandate glob. A schema-valid cleanup of `/tmp` that names `$HOME` is denied before relay.
 - Authority-expanding destination: `allow_destination` is an exact, fail-closed host slot. A mandate to reach `docs.internal` does not authorize `http_post` or `web_fetch` to `evil.example`. Session history does not promote a denied host into authority.
+- Untrusted execution environment: `allow_working_directory` denies CWD-class arguments that are not under the mandate glob. A schema-valid decoder run whose `cwd` is an attacker extract directory is denied before relay.
 
 ## Session-taint egress control
 
