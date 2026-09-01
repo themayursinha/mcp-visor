@@ -165,7 +165,7 @@ rules:
       - "docs.internal"
 ```
 
-Matched against argument keys: `url`, `uri`, `host`, `hostname`, `endpoint`, `dest`, `dest_host`, `destination`, `domain`, matched case-insensitively (so `URL` is the same slot as `url`). `to` is not a destination alias (mailbox). Server-level `allowed_destinations` / `denied_destinations` remain inert. Nested maps are out of model.
+Matched against argument keys: `url`, `uri`, `host`, `hostname`, `endpoint`, `dest`, `dest_host`, `destination`, `domain`, matched case-insensitively (so `URL` is the same slot as `url`). `to` is not a destination alias (mailbox). The authority must be a boring `host` or `host:port` (letters, digits, dots, hyphens). Userinfo (`@`), backslash, percent-encoding, brackets, and whitespace make the host unparseable and deny. Visor does not adopt WHATWG or `net/url` semantics for a downstream tool. Server-level `allowed_destinations` / `denied_destinations` remain inert. Nested maps are out of model.
 
 Example fixture: [`examples/policies/reward-seeker-destination.yaml`](../examples/policies/reward-seeker-destination.yaml).
 

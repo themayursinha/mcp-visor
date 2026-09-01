@@ -80,6 +80,11 @@ func TestDestinationMandateInstantiationAllowed(t *testing.T) {
 		t.Fatalf("mandated host via url must allow, got %s: %s", got.Action, got.Reason)
 	}
 
+	got = evalWorkspace(eng, "http_post", map[string]any{"url": "https://docs.internal:443/api"})
+	if got.Action != policy.ActionAllow {
+		t.Fatalf("mandated host with port must allow, got %s: %s", got.Action, got.Reason)
+	}
+
 	got = evalWorkspace(eng, "web_fetch", map[string]any{"host": "Docs.Internal"})
 	if got.Action != policy.ActionAllow {
 		t.Fatalf("mandated host via host alias must allow, got %s: %s", got.Action, got.Reason)
@@ -194,6 +199,30 @@ servers:
 	got := evalWorkspace(eng, "http_post", map[string]any{"url": "https://evil.example/exfil"})
 	if got.Action != policy.ActionAllow {
 		t.Fatalf("parent gap: server destination fields must not bind, got %s: %s", got.Action, got.Reason)
+	}
+}
+
+func TestDestinationAmbiguousAuthorityFailsClosed(t *testing.T) {
+	eng := loadDestinationEngine(t)
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{name: "backslash-at", url: "https://evil.example\\@docs.internal/x"},
+		{name: "userinfo", url: "https://evil.example@docs.internal/x"},
+		{name: "percent-in-authority", url: "https://evil.example%2f@docs.internal/x"},
+		{name: "backslash-path", url: "https://evil.example\\docs.internal/x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evalWorkspace(eng, "http_post", map[string]any{"url": tc.url})
+			if got.Action != policy.ActionDeny {
+				t.Fatalf("ambiguous authority must deny, got %s: %s", got.Action, got.Reason)
+			}
+			if !strings.Contains(got.Reason, "destination is required") {
+				t.Fatalf("want unparseable destination, got %s", got.Reason)
+			}
+		})
 	}
 }
 

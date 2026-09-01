@@ -737,18 +737,55 @@ func destinationHostname(raw string) (string, bool) {
 	if i := strings.IndexAny(v, "/?#"); i >= 0 {
 		v = v[:i]
 	}
-	if at := strings.LastIndex(v, "@"); at >= 0 {
-		v = v[at+1:]
+	// Authority must be a boring host[:port]. Userinfo, backslash,
+	// percent-encoding, brackets, and whitespace are unparseable: those
+	// are the characters that split WHATWG / net/url / string-surgery
+	// hosts. Visor is not a URL parser for a downstream tool.
+	if v == "" || strings.ContainsAny(v, "@\\% \t\r\n\x00[]<>\"'`") {
+		return "", false
 	}
-	if i := strings.LastIndex(v, ":"); i >= 0 && !strings.Contains(v[:i], ":") {
+	if i := strings.LastIndex(v, ":"); i >= 0 {
+		if strings.Contains(v[:i], ":") {
+			return "", false
+		}
+		port := v[i+1:]
+		if !destinationPortDigits(port) {
+			return "", false
+		}
 		v = v[:i]
 	}
-	v = strings.Trim(v, "[]")
 	v = strings.TrimSuffix(v, ".")
-	if strings.TrimSpace(v) == "" {
+	if !destinationBoringHost(v) {
 		return "", false
 	}
 	return v, true
+}
+
+func destinationPortDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func destinationBoringHost(s string) bool {
+	if s == "" || s[0] == '.' || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '.':
+		default:
+			return false
+		}
+	}
+	return !strings.Contains(s, "..")
 }
 
 func collectDestinationSlots(args map[string]any) ([]string, string) {

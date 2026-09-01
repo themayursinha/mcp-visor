@@ -119,6 +119,27 @@ func TestDestinationProxyDeniesShadowAliasBeforeRelay(t *testing.T) {
 	}
 }
 
+func TestDestinationProxyDeniesAmbiguousAuthorityBeforeRelay(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:   "workspace",
+		SessionID:    "sess-reward-backslash",
+		ClientID:     "agent-reward",
+		AuditLogPath: auditPath,
+		Policy:       mustLoadPolicy(t, rewardSeekerYAML()),
+	})
+	defer p.audit.Close()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(toolCallRaw(1, "http_post", map[string]any{
+		"url": "https://evil.example\\@docs.internal/x",
+	}), client)
+	if action != "denied" {
+		t.Fatalf("backslash-at authority must deny before relay, got %s; response=%s", action, out.String())
+	}
+}
+
 func TestDestinationProxyHistoryDoesNotAuthorizeHost(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	p := New(Config{
