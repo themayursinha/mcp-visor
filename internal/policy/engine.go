@@ -363,6 +363,20 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "deny_secret":
+		// Fail-closed secret slot: a tool allowed to configure a gateway
+		// must not carry a replacement credential on the wire. Declared
+		// SECRET fields are the custody signal; Visor does not attest the
+		// provisioning runtime. Any present alias is denied. Credential
+		// validity is not custody.
+		slots, reason := collectPresentSecretSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		if len(slots) > 0 {
+			return Decision{Action: ActionDeny, Reason: reasonUntrustedCredentialCustody}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -736,6 +750,13 @@ const reasonUntrustedExecutionEnvironment = "untrusted execution environment: ar
 // First-match is not used. working_dir EqualFold-matches Working_Dir; workingdir is distinct.
 var workingDirectorySlotKeys = []string{"cwd", "working_directory", "working_dir", "workingdir", "workdir", "chdir"}
 
+// reasonUntrustedCredentialCustody is the deny evidence for deny_secret.
+const reasonUntrustedCredentialCustody = "untrusted credential custody: argument class SECRET, effect class CREDENTIAL, authority transition MANDATE->CUSTODY"
+
+// secretSlotKeys are SECRET-class aliases inspected by deny_secret.
+// First-match is not used. api_key EqualFold-matches Api_Key; apikey is distinct.
+var secretSlotKeys = []string{"api_key", "apikey", "access_key", "secret", "password", "credential", "private_key", "token", "new_key"}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -889,6 +910,33 @@ func collectWorkingDirectorySlots(args map[string]any) ([]string, string) {
 	}
 	if len(values) == 0 {
 		return nil, "working directory is required"
+	}
+	return values, ""
+}
+
+func isSecretSlotKey(key string) bool {
+	for _, alias := range secretSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPresentSecretSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, ""
+	}
+	values := make([]string, 0, len(secretSlotKeys))
+	for key, val := range args {
+		if !isSecretSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "credential is required"
+		}
+		values = append(values, s)
 	}
 	return values, ""
 }

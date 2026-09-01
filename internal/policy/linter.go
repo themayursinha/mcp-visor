@@ -27,6 +27,7 @@ func Lint(p *Policy) LintResult {
 		"allow_path_slot":         true,
 		"allow_destination":       true,
 		"allow_working_directory": true,
+		"deny_secret":             true,
 		"allowed_repos":           true,
 		"max_file_size":           true,
 		"max_result_rows":         true, "max_export_rows": true,

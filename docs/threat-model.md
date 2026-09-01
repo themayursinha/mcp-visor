@@ -275,6 +275,8 @@ A schema-valid, tool-authorized `cleanup_sandbox` call is not an effect-path pro
 
 A schema-valid, tool-authorized `run_python` call is not an execution-environment proof. `allow_path_slot` does not inspect `cwd`. Attach `allow_working_directory` when CWD-class arguments must stay under the mandate glob. Visor does not parse imports, `PYTHONPATH`, or module graphs. Without that rule, an allowed decoder can still run in an attacker extract directory.
 
+A schema-valid, tool-authorized `configure_secret` call is not a custody proof. Argument redaction and `allow_path` do not inspect SECRET-class keys. Attach `deny_secret` when a replacement credential must not travel on the MCP wire. Visor does not attest the provisioning runtime or allowlist key material. Without that rule, an allowed configuration tool can still forward `KEY_B`.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
