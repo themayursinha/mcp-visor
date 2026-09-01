@@ -22,6 +22,7 @@ func Lint(p *Policy) LintResult {
 		"deny_query_pattern":   true, "allow_query_pattern": true,
 		"deny_recipient_domain": true, "allow_recipient_domain": true,
 		"allow_recipient":      true,
+		"allow_resource_owner": true,
 		"require_path_literal": true,
 		"allowed_repos":        true,
 		"max_file_size":        true,
@@ -364,6 +365,16 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 				Path: path, Type: ViolationTypeWarning, Field: "patterns",
 				Severity: SeverityWarning,
 				Message:  "rule type 'allow_recipient' has no patterns",
+			})
+		}
+	}
+
+	if rule.Type == "allow_resource_owner" {
+		if len(rule.Patterns) == 0 {
+			res.Violations = append(res.Violations, LintViolation{
+				Path: path, Type: ViolationTypeWarning, Field: "patterns",
+				Severity: SeverityWarning,
+				Message:  "rule type 'allow_resource_owner' has no patterns",
 			})
 		}
 	}

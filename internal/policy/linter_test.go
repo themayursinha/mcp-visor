@@ -223,6 +223,35 @@ func TestLintRequirePathLiteralIsKnown(t *testing.T) {
 	}
 }
 
+func TestLintAllowResourceOwnerIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "booking",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "cancel_reservation",
+						Rules: []ArgRule{
+							{Type: "allow_resource_owner", Patterns: []string{"alice"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("allow_resource_owner must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintUnknownRuleType(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",
@@ -929,6 +958,39 @@ func TestLintRuleMissingRecipientPatterns(t *testing.T) {
 						Name: "send_email",
 						Rules: []ArgRule{
 							{Type: "allow_recipient", Patterns: []string{}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	found := false
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no patterns' warning, violations: %+v", res.Violations)
+	}
+}
+
+func TestLintRuleMissingResourceOwnerPatterns(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "test",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "cancel_reservation",
+						Rules: []ArgRule{
+							{Type: "allow_resource_owner", Patterns: []string{}},
 						},
 					},
 				},

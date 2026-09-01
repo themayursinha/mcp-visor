@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 16 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 17 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -235,6 +235,26 @@ rules:
 Matched against argument keys: `recipient`, `to`, `email`, `cc`, `bcc`, matched case-insensitively. The `domain` key is not consulted. Display-name forms (`Name <addr>`), comma-separated lists, arrays, and RFC 5322 parsing are out of scope: those inputs deny.
 
 Example mandate fixture: [`examples/policies/authority-non-escalation.yaml`](../examples/policies/authority-non-escalation.yaml).
+
+### `allow_resource_owner`
+
+Exact principal allowlist for a mandated owner slot. A tool that is allowed to act for alice must not cancel bob. Declared owner fields are the ownership signal; Visor does not look up a world model or call a live booking API. Attaching this rule is the effect bound. Matching is exact (trim + case-insensitive) and fail-closed:
+
+- missing, non-string, or blank value in any PRINCIPAL-class alias → deny
+- empty allowlist → deny
+- **every present alias is checked**; a mandated principal in `owner` does not cover another principal in `user_id` or `userId`
+- any value that is not an exact allowlisted principal → deny with evidence `argument class PRINCIPAL`, `effect class THIRD_PARTY`, `authority transition USER->OTHER`
+
+```yaml
+rules:
+  - type: allow_resource_owner
+    patterns:
+      - "alice"
+```
+
+Matched against argument keys: `owner`, `user_id`, `userid`, `resource_owner`, `account_id`, `principal`, matched case-insensitively (so `userId` is the same slot as `userid`; `user_id` is a distinct alias). This is not `allowed_repos` `owner/repo`. Reservation IDs, class IDs, and other identifiers are not consulted. Arrays, objects, and non-string owners deny.
+
+Example fixture: [`examples/policies/third-party-effect.yaml`](../examples/policies/third-party-effect.yaml).
 
 ### `max_file_size`
 
@@ -635,6 +655,7 @@ The repository includes example policies demonstrating different postures:
 | Developer Medium | `examples/policies/developer-medium.yaml` | deny | Allow reads, deny writes, approve network. |
 | Demo Policy | `examples/policies/demo-policy.yaml` | deny | Permissive demo configuration. |
 | Session Taint Egress | `examples/policies/session-taint-egress.yaml` | deny | Sensitive read marks session; later egress is blocked. |
+| Third-Party Effect | `examples/policies/third-party-effect.yaml` | deny | Book/cancel only for the mandate principal. |
 
 ## Error Handling
 

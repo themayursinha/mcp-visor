@@ -395,6 +395,24 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_resource_owner":
+		// Exact mandate principal: a tool that is allowed to act for alice
+		// must not cancel bob. Declared owner fields are the ownership
+		// signal; Visor does not look up a world model. Every present
+		// PRINCIPAL-class alias is checked.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "resource owner allowlist is empty"}
+		}
+		slots, reason := collectOwnerSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonCrossPrincipalEffect}
+			}
+		}
+
 	case "allowed_repos":
 		if repo, ok := getStringArg(args, "repo", "repository", "owner/repo"); ok {
 			if !MatchesAnyRepo(rule.Repos, repo) {
@@ -626,6 +644,13 @@ func extractArgs(raw json.RawMessage) map[string]any {
 // an alias must be an allowlisted string (Go json struct tags are case-insensitive).
 var recipientSlotKeys = []string{"recipient", "to", "email", "cc", "bcc"}
 
+// reasonCrossPrincipalEffect is the deny evidence for allow_resource_owner.
+const reasonCrossPrincipalEffect = "cross-principal effect: argument class PRINCIPAL, effect class THIRD_PARTY, authority transition USER->OTHER"
+
+// ownerSlotKeys are PRINCIPAL-class aliases inspected by allow_resource_owner.
+// First-match is not used. userId EqualFold-matches userid; user_id is distinct.
+var ownerSlotKeys = []string{"owner", "user_id", "userid", "resource_owner", "account_id", "principal"}
+
 // reasonPathToShellAmplification is the deny evidence for require_path_literal.
 // Tests assert these field tokens: argument class, effect class, transition.
 const reasonPathToShellAmplification = "path-to-shell amplification: argument class PATH, effect class SHELL, authority transition PATH->SHELL"
@@ -641,6 +666,36 @@ var pathSlotKeys = []string{"path", "file", "file_path", "filepath", "absolute_p
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
 // characters are out of scope.
 const pathShellMetacharacters = ";|&`$()<>\n\r\x00'\"#"
+
+func isOwnerSlotKey(key string) bool {
+	for _, alias := range ownerSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectOwnerSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "resource owner is required"
+	}
+	values := make([]string, 0, len(ownerSlotKeys))
+	for key, val := range args {
+		if !isOwnerSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "resource owner is required"
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, "resource owner is required"
+	}
+	return values, ""
+}
 
 func isRecipientSlotKey(key string) bool {
 	for _, alias := range recipientSlotKeys {
