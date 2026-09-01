@@ -208,3 +208,76 @@ servers:
 		t.Fatalf("command rules do not inspect PATH slots: parent gap, got %s: %s", got.Action, got.Reason)
 	}
 }
+
+func approvalBeforePathLiteralPolicy() string {
+	return `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "neo"
+    allowed: true
+    tools:
+      - name: "check_syntax"
+        allowed: true
+        risk: high
+        rules:
+          - type: require_approval_always
+          - type: allow_path
+            patterns:
+              - "/workspace/**"
+          - type: require_path_literal
+`
+}
+
+func TestRequireApprovalAlwaysDoesNotSkipPathShellDeny(t *testing.T) {
+	p, err := policy.Load([]byte(approvalBeforePathLiteralPolicy()))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	eng := policy.NewEngine(p)
+
+	got := evalNeo(eng, "check_syntax", map[string]any{
+		"absolutePath": "/workspace/src/app.mjs; id",
+	})
+	if got.Action != policy.ActionDeny {
+		t.Fatalf("approval listed first must not skip PATH→SHELL deny, got %s: %s", got.Action, got.Reason)
+	}
+	assertPathToShellEvidence(t, got.Reason)
+
+	got = evalNeo(eng, "check_syntax", map[string]any{
+		"absolutePath": "/workspace/src/app.mjs",
+	})
+	if got.Action != policy.ActionRequireApproval {
+		t.Fatalf("literal path with require_approval_always must still require approval, got %s: %s", got.Action, got.Reason)
+	}
+}
+
+func TestRequireApprovalAlwaysDoesNotSkipDenyPath(t *testing.T) {
+	yaml := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "neo"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        rules:
+          - type: require_approval_always
+          - type: deny_path
+            patterns:
+              - "/etc/**"
+`
+	p, err := policy.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	eng := policy.NewEngine(p)
+	got := eng.Evaluate("neo", mcp.ToolsCallRequest{
+		Name:      "file_read",
+		Arguments: mustMarshal(map[string]any{"path": "/etc/passwd"}),
+	})
+	if got.Action != policy.ActionDeny {
+		t.Fatalf("approval listed first must not skip deny_path, got %s: %s", got.Action, got.Reason)
+	}
+}

@@ -271,6 +271,8 @@ rules:
   - type: require_approval_always
 ```
 
+This rule does not skip later deny rules. `Evaluate` remembers the approval requirement and still walks the remaining argument rules; any deny terminates before approval. YAML order cannot turn a would-be deny into an approvable relay. The tool-level `approval_required: true` flag already runs after all argument rules and is unaffected.
+
 ## Risk Classification
 
 Tools are classified into risk tiers. If not explicitly set, risk is inferred from the tool name.
@@ -523,7 +525,7 @@ The proxy applies checks in this order:
 2. Runtime limits — argument size, session call count, and session timeout
 3. Argument redaction — secrets are removed from the payload prepared for relay
 4. Built-in sensitive-path block
-5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload.
+5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. Among argument rules, deny terminates immediately; `require_approval_always` is remembered and does not skip later deny rules. Approval is returned only if no argument rule denied.
 6. Existing session taints checked against egress controls
 7. Chain detection against recent calls authorized for relay
 8. Approval check

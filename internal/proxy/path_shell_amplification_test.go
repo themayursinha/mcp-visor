@@ -142,3 +142,44 @@ func TestPathShellProxyHistoryDoesNotAuthorizeInjection(t *testing.T) {
 		t.Fatalf("literal path must still forward after denials, got %s; response=%s", action, out.String())
 	}
 }
+
+func TestPathShellProxyDeniesInjectionWhenApprovalRuleIsListedFirst(t *testing.T) {
+	yaml := `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "neo"
+    allowed: true
+    tools:
+      - name: "check_syntax"
+        allowed: true
+        risk: high
+        rules:
+          - type: require_approval_always
+          - type: allow_path
+            patterns:
+              - "/workspace/**"
+          - type: require_path_literal
+`
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:   "neo",
+		SessionID:    "sess-path-shell-approval-order",
+		ClientID:     "agent-path-shell",
+		AuditLogPath: auditPath,
+		Policy:       mustLoadPolicy(t, yaml),
+	})
+	defer p.audit.Close()
+
+	out := &bytes.Buffer{}
+	client := mcp.NewParser(nil, out)
+	_, action := p.interceptAndModify(toolCallRaw(1, "check_syntax", map[string]any{
+		"absolutePath": "/workspace/src/app.mjs; id",
+	}), client)
+	if action != "denied" {
+		t.Fatalf("PATH→SHELL must deny before approval wait/relay, got %s; response=%s", action, out.String())
+	}
+	if !strings.Contains(out.String(), "path-to-shell amplification") {
+		t.Fatalf("denial must name PATH→SHELL amplification, got %s", out.String())
+	}
+}

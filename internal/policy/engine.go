@@ -172,11 +172,26 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 		return Decision{Action: ActionDeny, Reason: "unknown tool/server; default-deny policy"}
 	}
 
+	// Deny from any argument rule terminates immediately. RequireApproval is
+	// remembered so YAML order cannot skip a later deny (approval is not a
+	// terminal allow). Unknown non-allow actions fail closed.
+	var pendingApproval Decision
+	needApproval := false
 	if known && len(tool.Rules) > 0 {
 		args := extractArgs(req.Arguments)
 		for _, rule := range tool.Rules {
 			decision := e.evaluateRule(rule, args, req.Name)
-			if decision.Action != ActionAllow {
+			switch decision.Action {
+			case ActionAllow:
+				continue
+			case ActionDeny:
+				return decision
+			case ActionRequireApproval:
+				if !needApproval {
+					pendingApproval = decision
+					needApproval = true
+				}
+			default:
 				return decision
 			}
 		}
@@ -198,6 +213,10 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 
 	if known && tool.ApprovalRequired {
 		return Decision{Action: ActionRequireApproval, Reason: fmt.Sprintf("tool '%s' requires approval", req.Name)}
+	}
+
+	if needApproval {
+		return pendingApproval
 	}
 
 	return Decision{Action: ActionAllow, Reason: "allowed by policy"}
