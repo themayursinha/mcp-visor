@@ -1,0 +1,27 @@
+version: "1.0"
+description: >
+  Local Melbourne OpenClaw / ABC News class fixture. create_reservation and
+  cancel_reservation are schema-valid, tool-authorized MCP tools. A mandate
+  to book a class for alice does not authorize cancelling bob's reservation.
+  Declared owner fields are the ownership signal; Visor does not look up a
+  world model or call a live booking API. Attaching allow_resource_owner is
+  the effect bound: PRINCIPAL-class arguments must be the mandate principal.
+default_action: deny
+servers:
+  - name: "booking"
+    allowed: true
+    tools:
+      - name: "create_reservation"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_resource_owner
+            patterns:
+              - "alice"
+      - name: "cancel_reservation"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_resource_owner
+            patterns:
+              - "alice"

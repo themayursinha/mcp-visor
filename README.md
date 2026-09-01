@@ -85,6 +85,7 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Tool sequences that look safe individually but become dangerous together
 - Tool-output-induced recipient expansion: `allow_recipient` is an exact, fail-closed mailbox slot. Session history does not promote a denied recipient into authority.
 - PATH→SHELL amplification: `require_path_literal` denies path-class arguments that contain shell grammar before relay. Schema-valid, tool-authorized calls still fail closed when a path would interpolate as a command fragment.
+- Cross-principal writes: `allow_resource_owner` is an exact, fail-closed principal slot. A mandate to act for alice does not authorize cancelling bob's reservation. Session history does not promote a denied owner into authority.
 
 ## Session-taint egress control
 

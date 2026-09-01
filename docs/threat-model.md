@@ -269,6 +269,8 @@ Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter re
 
 Policy `deny_path` / `allow_path` rules do not inspect `uri`. Built-in sensitive-file matching does inspect `uri`, but patterns such as `**/.env` do not match a basename-only `.env` under the current glob conversion. Use absolute/qualified paths and explicit tests for protected resources. Those path rules also do not treat shell grammar as a different semantic class: a schema-valid string such as `/workspace/app.mjs; id` can still match `/workspace/**`. Attach `require_path_literal` when a tool's PATH-class arguments must remain path literals (CVE-2026-18482). `allow_path` still inspects only `path` / `file` / `file_path`; `require_path_literal` inspects the PATH-class alias list including `absolutePath`.
 
+A schema-valid, tool-authorized `create_reservation` / `cancel_reservation` call is not an ownership proof. Attach `allow_resource_owner` when PRINCIPAL-class arguments must be the mandate principal. Visor does not look up a booking API or world model. Without that rule, an allowed mutation tool can still act for another principal.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
