@@ -87,6 +87,7 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - PATH→SHELL amplification: `require_path_literal` denies path-class arguments that contain shell grammar before relay. Schema-valid, tool-authorized calls still fail closed when a path would interpolate as a command fragment.
 - Cross-principal writes: `allow_resource_owner` is an exact, fail-closed principal slot. A mandate to act for alice does not authorize cancelling bob's reservation. Session history does not promote a denied owner into authority.
 - Destructive path outside mandate: `allow_path_slot` denies PATH/TARGET-class arguments that are not under the mandate glob. A schema-valid cleanup of `/tmp` that names `$HOME` is denied before relay.
+- Authority-expanding destination: `allow_destination` is an exact, fail-closed host slot. A mandate to reach `docs.internal` does not authorize `http_post` or `web_fetch` to `evil.example`. Session history does not promote a denied host into authority.
 
 ## Session-taint egress control
 

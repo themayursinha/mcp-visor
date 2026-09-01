@@ -327,6 +327,24 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_destination":
+		// Fail-closed mandate host: a tool allowed to reach docs.internal
+		// must not post to evil.example. Declared URL/HOST fields are the
+		// effect destination; Visor does not follow redirects or resolve
+		// DNS. Every present alias is checked.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "destination allowlist is empty"}
+		}
+		slots, reason := collectDestinationSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonAuthorityExpandingDestination}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -686,11 +704,77 @@ const reasonDestructivePathOutsideMandate = "destructive path outside mandate: a
 // directory EqualFold-matches Directory; dir is distinct.
 var effectPathSlotKeys = []string{"path", "file", "file_path", "filepath", "absolute_path", "absolutepath", "target", "dir", "directory"}
 
+// reasonAuthorityExpandingDestination is the deny evidence for allow_destination.
+const reasonAuthorityExpandingDestination = "authority-expanding destination: argument class URL, effect class NETWORK, authority transition MANDATE->EGRESS"
+
+// destinationSlotKeys are URL/HOST-class aliases inspected by allow_destination.
+// First-match is not used. dest_host EqualFold-matches DestHost; dest is distinct.
+var destinationSlotKeys = []string{"url", "uri", "host", "hostname", "endpoint", "dest", "dest_host", "destination", "domain"}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
 // characters are out of scope.
 const pathShellMetacharacters = ";|&`$()<>\n\r\x00'\"#"
+
+func isDestinationSlotKey(key string) bool {
+	for _, alias := range destinationSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func destinationHostname(raw string) (string, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", false
+	}
+	if i := strings.Index(v, "://"); i >= 0 {
+		v = v[i+3:]
+	}
+	if i := strings.IndexAny(v, "/?#"); i >= 0 {
+		v = v[:i]
+	}
+	if at := strings.LastIndex(v, "@"); at >= 0 {
+		v = v[at+1:]
+	}
+	if i := strings.LastIndex(v, ":"); i >= 0 && !strings.Contains(v[:i], ":") {
+		v = v[:i]
+	}
+	v = strings.Trim(v, "[]")
+	v = strings.TrimSuffix(v, ".")
+	if strings.TrimSpace(v) == "" {
+		return "", false
+	}
+	return v, true
+}
+
+func collectDestinationSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "destination is required"
+	}
+	values := make([]string, 0, len(destinationSlotKeys))
+	for key, val := range args {
+		if !isDestinationSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString {
+			return nil, "destination is required"
+		}
+		host, ok := destinationHostname(s)
+		if !ok {
+			return nil, "destination is required"
+		}
+		values = append(values, host)
+	}
+	if len(values) == 0 {
+		return nil, "destination is required"
+	}
+	return values, ""
+}
 
 func isOwnerSlotKey(key string) bool {
 	for _, alias := range ownerSlotKeys {
