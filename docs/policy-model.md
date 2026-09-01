@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 18 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 19 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -148,6 +148,26 @@ rules:
 Matched against argument keys: `path`, `file`, `file_path`, `filepath`, `absolute_path`, `absolutepath`, `target`, `dir`, `directory`, matched case-insensitively (so `Target` is the same slot as `target`). `allow_path` / `deny_path` still use first-match `path` / `file` / `file_path` only and skip the rule when those keys are absent. Command strings (`command` / `cmd` / `exec`) are not parsed. Path canonicalization, `..` traversal, and symlink identity are out of scope.
 
 Example fixture: [`examples/policies/destructive-path-slot.yaml`](../examples/policies/destructive-path-slot.yaml).
+
+### `allow_destination`
+
+Fail-closed URL/HOST-class exact-host allowlist for a mandated egress host. A tool that is allowed to reach `docs.internal` must not post to `evil.example`. Declared destination fields are the effect host; Visor does not follow redirects, resolve DNS, or parse destinations out of `command` / `cmd` / `exec`. Attaching this rule is the effect bound. Matching is exact host (trim + case-insensitive), not substring:
+
+- missing, non-string, blank, or unparseable host in any URL/HOST-class alias → deny
+- empty allowlist → deny
+- **every present alias is checked**; a mandated host in `url` does not cover `evil.example` in `host`
+- any host that is not an exact allowlisted name (including suffix spoofs) → deny with evidence `argument class URL`, `effect class NETWORK`, `authority transition MANDATE->EGRESS`
+
+```yaml
+rules:
+  - type: allow_destination
+    patterns:
+      - "docs.internal"
+```
+
+Matched against argument keys: `url`, `uri`, `host`, `hostname`, `endpoint`, `dest`, `dest_host`, `destination`, `domain`, matched case-insensitively (so `URL` is the same slot as `url`). `to` is not a destination alias (mailbox). The value is a boring host, or a leading `scheme://` followed by boring `host` or `host:port` (letters, digits, dots, hyphens). `://` in the middle of the string is unparseable. Userinfo (`@`), backslash, percent-encoding, brackets, and whitespace make the host unparseable and deny. Visor does not adopt WHATWG or `net/url` semantics for a downstream tool. Server-level `allowed_destinations` / `denied_destinations` remain inert. Nested maps are out of model.
+
+Example fixture: [`examples/policies/reward-seeker-destination.yaml`](../examples/policies/reward-seeker-destination.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -678,6 +698,7 @@ The repository includes example policies demonstrating different postures:
 | Session Taint Egress | `examples/policies/session-taint-egress.yaml` | deny | Sensitive read marks session; later egress is blocked. |
 | Third-Party Effect | `examples/policies/third-party-effect.yaml` | deny | Book/cancel only for the mandate principal. |
 | Destructive Path Slot | `examples/policies/destructive-path-slot.yaml` | deny | Clean only under the mandate path glob. |
+| Reward-Seeker Destination | `examples/policies/reward-seeker-destination.yaml` | deny | Local file_read allowed; egress only to the mandate host. |
 
 ## Error Handling
 

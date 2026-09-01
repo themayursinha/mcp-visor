@@ -327,6 +327,24 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_destination":
+		// Fail-closed mandate host: a tool allowed to reach docs.internal
+		// must not post to evil.example. Declared URL/HOST fields are the
+		// effect destination; Visor does not follow redirects or resolve
+		// DNS. Every present alias is checked.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "destination allowlist is empty"}
+		}
+		slots, reason := collectDestinationSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonAuthorityExpandingDestination}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -686,11 +704,139 @@ const reasonDestructivePathOutsideMandate = "destructive path outside mandate: a
 // directory EqualFold-matches Directory; dir is distinct.
 var effectPathSlotKeys = []string{"path", "file", "file_path", "filepath", "absolute_path", "absolutepath", "target", "dir", "directory"}
 
+// reasonAuthorityExpandingDestination is the deny evidence for allow_destination.
+const reasonAuthorityExpandingDestination = "authority-expanding destination: argument class URL, effect class NETWORK, authority transition MANDATE->EGRESS"
+
+// destinationSlotKeys are URL/HOST-class aliases inspected by allow_destination.
+// First-match is not used. dest_host EqualFold-matches DestHost; dest is distinct.
+var destinationSlotKeys = []string{"url", "uri", "host", "hostname", "endpoint", "dest", "dest_host", "destination", "domain"}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
 // characters are out of scope.
 const pathShellMetacharacters = ";|&`$()<>\n\r\x00'\"#"
+
+func isDestinationSlotKey(key string) bool {
+	for _, alias := range destinationSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func destinationHostname(raw string) (string, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", false
+	}
+	// Scheme is only a leading `scheme://` prefix. Indexing for `://`
+	// anywhere lets `https:evil.example://docs.internal/x` bind the
+	// allowlisted host while WHATWG uses evil.example.
+	if i := strings.Index(v, "://"); i >= 0 {
+		if i == 0 || !destinationBoringScheme(v[:i]) {
+			return "", false
+		}
+		v = v[i+3:]
+	}
+	if i := strings.IndexAny(v, "/?#"); i >= 0 {
+		v = v[:i]
+	}
+	// Authority must be a boring host[:port]. Userinfo, backslash,
+	// percent-encoding, brackets, and whitespace are unparseable: those
+	// are the characters that split WHATWG / net/url / string-surgery
+	// hosts. Visor is not a URL parser for a downstream tool.
+	if v == "" || strings.ContainsAny(v, "@\\% \t\r\n\x00[]<>\"'`") {
+		return "", false
+	}
+	if i := strings.LastIndex(v, ":"); i >= 0 {
+		if strings.Contains(v[:i], ":") {
+			return "", false
+		}
+		port := v[i+1:]
+		if !destinationPortDigits(port) {
+			return "", false
+		}
+		v = v[:i]
+	}
+	v = strings.TrimSuffix(v, ".")
+	if !destinationBoringHost(v) {
+		return "", false
+	}
+	return v, true
+}
+
+func destinationBoringScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '+', c == '-', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func destinationPortDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func destinationBoringHost(s string) bool {
+	if s == "" || s[0] == '.' || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '.':
+		default:
+			return false
+		}
+	}
+	return !strings.Contains(s, "..")
+}
+
+func collectDestinationSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "destination is required"
+	}
+	values := make([]string, 0, len(destinationSlotKeys))
+	for key, val := range args {
+		if !isDestinationSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString {
+			return nil, "destination is required"
+		}
+		host, ok := destinationHostname(s)
+		if !ok {
+			return nil, "destination is required"
+		}
+		values = append(values, host)
+	}
+	if len(values) == 0 {
+		return nil, "destination is required"
+	}
+	return values, ""
+}
 
 func isOwnerSlotKey(key string) bool {
 	for _, alias := range ownerSlotKeys {
