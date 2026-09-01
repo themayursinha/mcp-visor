@@ -1,0 +1,23 @@
+version: "1.0"
+description: >
+  Local Rehberger environment-laundering fixture. A schema-valid run_python
+  of an agent-written decoder is not an execution-environment proof. Running
+  it with cwd in an attacker extract directory can shadow stdlib (struct.py).
+  Attaching allow_working_directory is the effect bound: CWD-class arguments
+  must match the mandate glob. Visor does not parse imports or PYTHONPATH.
+default_action: deny
+servers:
+  - name: "workspace"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: low
+      - name: "run_python"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_working_directory
+            patterns:
+              - "/workspace/safe"
+              - "/workspace/safe/**"

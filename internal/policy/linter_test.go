@@ -310,6 +310,35 @@ func TestLintAllowDestinationIsKnown(t *testing.T) {
 	}
 }
 
+func TestLintAllowWorkingDirectoryIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "workspace",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "run_python",
+						Rules: []ArgRule{
+							{Type: "allow_working_directory", Patterns: []string{"/workspace/safe/**"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("allow_working_directory must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintUnknownRuleType(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",
@@ -1115,6 +1144,39 @@ func TestLintRuleMissingDestinationPatterns(t *testing.T) {
 						Name: "http_post",
 						Rules: []ArgRule{
 							{Type: "allow_destination", Patterns: []string{}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	found := false
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no patterns' warning, violations: %+v", res.Violations)
+	}
+}
+
+func TestLintRuleMissingWorkingDirectoryPatterns(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "test",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "run_python",
+						Rules: []ArgRule{
+							{Type: "allow_working_directory", Patterns: []string{}},
 						},
 					},
 				},

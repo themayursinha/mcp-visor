@@ -273,6 +273,8 @@ A schema-valid, tool-authorized `create_reservation` / `cancel_reservation` call
 
 A schema-valid, tool-authorized `cleanup_sandbox` call is not an effect-path proof. `allow_path` does not inspect `target` and skips when `path`/`file`/`file_path` are absent. Attach `allow_path_slot` when PATH/TARGET-class arguments must stay under the mandate glob. Visor does not expand shell variables, canonicalize `..`, or bind inodes. Without that rule, an allowed cleanup tool can still name `$HOME`.
 
+A schema-valid, tool-authorized `run_python` call is not an execution-environment proof. `allow_path_slot` does not inspect `cwd`. Attach `allow_working_directory` when CWD-class arguments must stay under the mandate glob. Visor does not parse imports, `PYTHONPATH`, or module graphs. Without that rule, an allowed decoder can still run in an attacker extract directory.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
