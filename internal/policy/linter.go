@@ -21,10 +21,11 @@ func Lint(p *Policy) LintResult {
 		"deny_command_keyword": true,
 		"deny_query_pattern":   true, "allow_query_pattern": true,
 		"deny_recipient_domain": true, "allow_recipient_domain": true,
-		"allow_recipient": true,
-		"allowed_repos":   true,
-		"max_file_size":   true,
-		"max_result_rows": true, "max_export_rows": true,
+		"allow_recipient":      true,
+		"require_path_literal": true,
+		"allowed_repos":        true,
+		"max_file_size":        true,
+		"max_result_rows":      true, "max_export_rows": true,
 		"require_approval_always": true,
 	}
 

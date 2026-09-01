@@ -84,6 +84,7 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - High-risk actions without human approval
 - Tool sequences that look safe individually but become dangerous together
 - Tool-output-induced recipient expansion: `allow_recipient` is an exact, fail-closed mailbox slot. Session history does not promote a denied recipient into authority.
+- PATH→SHELL amplification: `require_path_literal` denies path-class arguments that contain shell grammar before relay. Schema-valid, tool-authorized calls still fail closed when a path would interpolate as a command fragment.
 
 ## Session-taint egress control
 

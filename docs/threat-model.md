@@ -267,7 +267,7 @@ Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter re
 
 ### 14. Path-Matching Gaps
 
-Policy `deny_path` / `allow_path` rules do not inspect `uri`. Built-in sensitive-file matching does inspect `uri`, but patterns such as `**/.env` do not match a basename-only `.env` under the current glob conversion. Use absolute/qualified paths and explicit tests for protected resources.
+Policy `deny_path` / `allow_path` rules do not inspect `uri`. Built-in sensitive-file matching does inspect `uri`, but patterns such as `**/.env` do not match a basename-only `.env` under the current glob conversion. Use absolute/qualified paths and explicit tests for protected resources. Those path rules also do not treat shell grammar as a different semantic class: a schema-valid string such as `/workspace/app.mjs; id` can still match `/workspace/**`. Attach `require_path_literal` when a tool's PATH-class arguments must remain path literals (CVE-2026-18482). `allow_path` still inspects only `path` / `file` / `file_path`; `require_path_literal` inspects the PATH-class alias list including `absolutePath`.
 
 ### 15. OTLP Reason Leakage
 

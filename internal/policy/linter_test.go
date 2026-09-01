@@ -194,6 +194,35 @@ func TestLintInvalidRegex(t *testing.T) {
 	}
 }
 
+func TestLintRequirePathLiteralIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "neo",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "check_syntax",
+						Rules: []ArgRule{
+							{Type: "require_path_literal"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("require_path_literal must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintUnknownRuleType(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",

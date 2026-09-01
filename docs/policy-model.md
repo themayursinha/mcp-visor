@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 15 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 16 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -103,7 +103,30 @@ rules:
       - "/tmp/mcp-safe/**"
 ```
 
-Policy path rules match argument keys `path`, `file`, and `file_path`. The separate built-in sensitive-file check also inspects `uri`.
+Policy path rules match argument keys `path`, `file`, and `file_path`. The separate built-in sensitive-file check also inspects `uri`. They treat the value as a glob match only: a schema-valid string containing shell grammar can still match `/workspace/**`. That is not PATH→SHELL amplification detection. Use `require_path_literal` when the tool implementation interpolates a path into a command.
+
+### `require_path_literal`
+
+Fail-closed PATH-class slot: the argument must remain a path literal. Attaching this rule is the implementation attestation that the tool's path inputs must not be interpreted as shell. Visor does not inspect the MCP server binary.
+
+This is the bounded CVE-2026-18482 slice. Semantic classes PATH, URL, IDENTIFIER, QUERY, TEMPLATE, COMMAND, CREDENTIAL, and POLICY are vocabulary for argument-to-effect reasoning. Only PATH→SHELL is enforced here. URL→network, STRING→SQL, STRING→template, IDENTIFIER→IAM, and MODEL_DATA→HOST_CODE (including CVE-2026-61539 eval injection) are out of scope.
+
+Fail-closed:
+
+- missing, non-string, or blank value in any PATH-class alias → deny
+- **every present alias is checked**; a literal `path` does not cover shell grammar in `absolutePath` or `AbsolutePath`
+- any value containing ASCII shell grammar (separators, substitution, redirection, quotes, `#`, NUL, CR/LF) → deny with evidence `argument class PATH`, `effect class SHELL`, `authority transition PATH->SHELL`
+
+This is not a shell parser. Unicode homoglyphs, percent-encoding, and glob-only characters (`*`, `?`) are out of scope. Parentheses in otherwise-literal filenames deny.
+
+```yaml
+rules:
+  - type: require_path_literal
+```
+
+Matched against argument keys: `path`, `file`, `file_path`, `filepath`, `absolute_path`, `absolutepath`, matched case-insensitively (so `absolutePath` and `AbsolutePath` are the same slot as `absolutepath`). The `uri` key is not consulted (URL class). `allow_path` / `deny_path` still use first-match `path` / `file` / `file_path` only.
+
+Example fixture: [`examples/policies/path-shell-amplification.yaml`](../examples/policies/path-shell-amplification.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -247,6 +270,8 @@ Force human approval for every call to this tool. No additional configuration ne
 rules:
   - type: require_approval_always
 ```
+
+This rule does not skip later deny rules. `Evaluate` folds every stage the same way: deny stops; require_approval is remembered; allow continues; an empty or unsupported action (including omitted `outside_action` on a matching time restriction, or `redact_then_allow`) is a fail-closed deny. YAML order and later stages cannot turn a would-be deny into an approvable relay, or turn pending approval into a proxy default-allow. The tool-level `approval_required: true` flag is folded the same way.
 
 ## Risk Classification
 
@@ -403,7 +428,7 @@ time_restrictions:
 | `tools` | array | Yes | Tool names affected. |
 | `allowed_hours` | array | No | Time windows when access is permitted. |
 | `denied_days` | array | No | Days when access is denied (e.g., `["saturday", "sunday"]`). |
-| `outside_action` | string | Yes | `"deny"` or `"require_approval"` when outside allowed hours. |
+| `outside_action` | string | Yes | `"deny"` or `"require_approval"` when the restriction matches. Loader still accepts an omitted value; if a matching restriction then fires, `Evaluate` fail-closes with deny rather than returning an empty action the proxy would default-allow. `redact_then_allow` is not an Evaluate action and also denies. |
 
 Time window fields:
 
@@ -500,7 +525,7 @@ The proxy applies checks in this order:
 2. Runtime limits — argument size, session call count, and session timeout
 3. Argument redaction — secrets are removed from the payload prepared for relay
 4. Built-in sensitive-path block
-5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload.
+5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. `Evaluate` folds argument rules, identity, time restrictions, and `approval_required` the same way: deny stops; require_approval is remembered; allow continues; any other action is a fail-closed deny. Approval is returned only if no stage denied.
 6. Existing session taints checked against egress controls
 7. Chain detection against recent calls authorized for relay
 8. Approval check
