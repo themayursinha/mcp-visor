@@ -261,6 +261,21 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "require_path_literal":
+		// PATH-class arguments must remain path literals. Shell grammar in a
+		// path slot is PATH→SHELL authority amplification (CVE-2026-18482).
+		// Attaching this rule is the implementation attestation; Visor does
+		// not inspect the MCP server binary.
+		slots, reason := collectPathSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if pathContainsShellGrammar(slot) {
+				return Decision{Action: ActionDeny, Reason: reasonPathToShellAmplification}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -577,6 +592,22 @@ func extractArgs(raw json.RawMessage) map[string]any {
 // an alias must be an allowlisted string (Go json struct tags are case-insensitive).
 var recipientSlotKeys = []string{"recipient", "to", "email", "cc", "bcc"}
 
+// reasonPathToShellAmplification is the deny evidence for require_path_literal.
+// Tests assert these field tokens: argument class, effect class, transition.
+const reasonPathToShellAmplification = "path-to-shell amplification: argument class PATH, effect class SHELL, authority transition PATH->SHELL"
+
+// pathSlotKeys are PATH-class aliases inspected by require_path_literal.
+// First-match is not used: every present key that case-insensitively matches
+// an alias must be a path literal. absolutePath (Neo.mjs / CVE-2026-18482)
+// EqualFold-matches absolutepath; absolute_path is a distinct alias.
+var pathSlotKeys = []string{"path", "file", "file_path", "filepath", "absolute_path", "absolutepath"}
+
+// pathShellMetacharacters are ASCII runes that turn a PATH-class argument
+// into a SHELL fragment when interpolated into a command. This is not a
+// shell parser. Unicode homoglyphs, percent-encoding, and glob-only
+// characters are out of scope.
+const pathShellMetacharacters = ";|&`$()<>\n\r\x00'\"#"
+
 func isRecipientSlotKey(key string) bool {
 	for _, alias := range recipientSlotKeys {
 		if strings.EqualFold(key, alias) {
@@ -584,6 +615,40 @@ func isRecipientSlotKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func isPathSlotKey(key string) bool {
+	for _, alias := range pathSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPathSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "path is required"
+	}
+	values := make([]string, 0, len(pathSlotKeys))
+	for key, val := range args {
+		if !isPathSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "path is required"
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, "path is required"
+	}
+	return values, ""
+}
+
+func pathContainsShellGrammar(path string) bool {
+	return strings.ContainsAny(path, pathShellMetacharacters)
 }
 
 func collectRecipientSlots(args map[string]any) ([]string, string) {

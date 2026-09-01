@@ -1,0 +1,31 @@
+version: "1.0"
+description: >
+  Local CVE-2026-18482 fixture. check_syntax and run_playwright_test are
+  schema-valid, tool-authorized MCP tools whose implementations interpolate
+  absolutePath into a shell command (exec("eslint " + absolutePath)). That
+  interpolation is not executed here. Attaching require_path_literal is the
+  implementation attestation: PATH-class arguments must remain path literals.
+  A path containing shell grammar is PATH→SHELL authority amplification and
+  is denied. Other semantic-class transitions (URL, QUERY, TEMPLATE, eval)
+  are out of scope.
+default_action: deny
+servers:
+  - name: "neo"
+    allowed: true
+    tools:
+      - name: "check_syntax"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_path
+            patterns:
+              - "/workspace/**"
+          - type: require_path_literal
+      - name: "run_playwright_test"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_path
+            patterns:
+              - "/workspace/**"
+          - type: require_path_literal
