@@ -172,54 +172,69 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 		return Decision{Action: ActionDeny, Reason: "unknown tool/server; default-deny policy"}
 	}
 
-	// Deny from any argument rule terminates immediately. RequireApproval is
-	// remembered so YAML order cannot skip a later deny (approval is not a
-	// terminal allow). Unknown non-allow actions fail closed.
+	// Fold every Evaluate stage the same way: deny stops; require_approval is
+	// remembered; allow continues; any other action (empty, redact_then_allow)
+	// is a fail-closed deny. YAML order and later stages cannot skip a deny
+	// or turn an unsupported action into a proxy default-allow.
 	var pendingApproval Decision
-	needApproval := false
 	if known && len(tool.Rules) > 0 {
 		args := extractArgs(req.Arguments)
 		for _, rule := range tool.Rules {
-			decision := e.evaluateRule(rule, args, req.Name)
-			switch decision.Action {
-			case ActionAllow:
-				continue
-			case ActionDeny:
-				return decision
-			case ActionRequireApproval:
-				if !needApproval {
-					pendingApproval = decision
-					needApproval = true
-				}
-			default:
-				return decision
+			if d, stop := mergeEvalDecision(&pendingApproval, e.evaluateRule(rule, args, req.Name)); stop {
+				return d
 			}
 		}
 	}
 
 	if len(pol.Identities) > 0 && e.clientID != "" {
-		decision := e.evaluateIdentity(serverName, req.Name, pol)
-		if decision.Action != ActionAllow {
-			return decision
+		if d, stop := mergeEvalDecision(&pendingApproval, e.evaluateIdentity(serverName, req.Name, pol)); stop {
+			return d
 		}
 	}
 
 	if len(pol.TimeRestrictions) > 0 {
-		decision := e.evaluateTimeRestriction(serverName, req.Name, pol)
-		if decision.Action != ActionAllow {
-			return decision
+		if d, stop := mergeEvalDecision(&pendingApproval, e.evaluateTimeRestriction(serverName, req.Name, pol)); stop {
+			return d
 		}
 	}
 
 	if known && tool.ApprovalRequired {
-		return Decision{Action: ActionRequireApproval, Reason: fmt.Sprintf("tool '%s' requires approval", req.Name)}
+		reqApproval := Decision{Action: ActionRequireApproval, Reason: fmt.Sprintf("tool '%s' requires approval", req.Name)}
+		if d, stop := mergeEvalDecision(&pendingApproval, reqApproval); stop {
+			return d
+		}
 	}
 
-	if needApproval {
+	if pendingApproval.Action == ActionRequireApproval {
 		return pendingApproval
 	}
 
 	return Decision{Action: ActionAllow, Reason: "allowed by policy"}
+}
+
+// mergeEvalDecision folds one Evaluate stage into the running result.
+// stop is true when the caller must return d immediately.
+func mergeEvalDecision(pending *Decision, next Decision) (d Decision, stop bool) {
+	switch next.Action {
+	case ActionAllow:
+		return Decision{}, false
+	case ActionDeny:
+		return next, true
+	case ActionRequireApproval:
+		if pending.Action != ActionRequireApproval {
+			*pending = next
+		}
+		return Decision{}, false
+	default:
+		reason := strings.TrimSpace(next.Reason)
+		if reason == "" {
+			reason = "policy decision is not allow, deny, or require_approval"
+		}
+		return Decision{
+			Action: ActionDeny,
+			Reason: fmt.Sprintf("unsupported policy action %q (%s)", next.Action, reason),
+		}, true
+	}
 }
 
 func (e *Engine) EvaluateChain(serverName string, req mcp.ToolsCallRequest, previousCalls []string) Decision {

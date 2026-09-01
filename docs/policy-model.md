@@ -271,7 +271,7 @@ rules:
   - type: require_approval_always
 ```
 
-This rule does not skip later deny rules. `Evaluate` remembers the approval requirement and still walks the remaining argument rules; any deny terminates before approval. YAML order cannot turn a would-be deny into an approvable relay. The tool-level `approval_required: true` flag already runs after all argument rules and is unaffected.
+This rule does not skip later deny rules. `Evaluate` folds every stage the same way: deny stops; require_approval is remembered; allow continues; an empty or unsupported action (including omitted `outside_action` on a matching time restriction, or `redact_then_allow`) is a fail-closed deny. YAML order and later stages cannot turn a would-be deny into an approvable relay, or turn pending approval into a proxy default-allow. The tool-level `approval_required: true` flag is folded the same way.
 
 ## Risk Classification
 
@@ -428,7 +428,7 @@ time_restrictions:
 | `tools` | array | Yes | Tool names affected. |
 | `allowed_hours` | array | No | Time windows when access is permitted. |
 | `denied_days` | array | No | Days when access is denied (e.g., `["saturday", "sunday"]`). |
-| `outside_action` | string | Yes | `"deny"` or `"require_approval"` when outside allowed hours. |
+| `outside_action` | string | Yes | `"deny"` or `"require_approval"` when the restriction matches. Loader still accepts an omitted value; if a matching restriction then fires, `Evaluate` fail-closes with deny rather than returning an empty action the proxy would default-allow. `redact_then_allow` is not an Evaluate action and also denies. |
 
 Time window fields:
 
@@ -525,7 +525,7 @@ The proxy applies checks in this order:
 2. Runtime limits — argument size, session call count, and session timeout
 3. Argument redaction — secrets are removed from the payload prepared for relay
 4. Built-in sensitive-path block
-5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. Among argument rules, deny terminates immediately; `require_approval_always` is remembered and does not skip later deny rules. Approval is returned only if no argument rule denied.
+5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. `Evaluate` folds argument rules, identity, time restrictions, and `approval_required` the same way: deny stops; require_approval is remembered; allow continues; any other action is a fail-closed deny. Approval is returned only if no stage denied.
 6. Existing session taints checked against egress controls
 7. Chain detection against recent calls authorized for relay
 8. Approval check
