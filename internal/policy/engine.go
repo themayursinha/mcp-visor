@@ -731,7 +731,13 @@ func destinationHostname(raw string) (string, bool) {
 	if v == "" {
 		return "", false
 	}
+	// Scheme is only a leading `scheme://` prefix. Indexing for `://`
+	// anywhere lets `https:evil.example://docs.internal/x` bind the
+	// allowlisted host while WHATWG uses evil.example.
 	if i := strings.Index(v, "://"); i >= 0 {
+		if i == 0 || !destinationBoringScheme(v[:i]) {
+			return "", false
+		}
 		v = v[i+3:]
 	}
 	if i := strings.IndexAny(v, "/?#"); i >= 0 {
@@ -759,6 +765,25 @@ func destinationHostname(raw string) (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+func destinationBoringScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '+', c == '-', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func destinationPortDigits(s string) bool {

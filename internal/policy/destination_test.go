@@ -212,6 +212,7 @@ func TestDestinationAmbiguousAuthorityFailsClosed(t *testing.T) {
 		{name: "userinfo", url: "https://evil.example@docs.internal/x"},
 		{name: "percent-in-authority", url: "https://evil.example%2f@docs.internal/x"},
 		{name: "backslash-path", url: "https://evil.example\\docs.internal/x"},
+		{name: "embedded-scheme", url: "https:evil.example://docs.internal/x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
