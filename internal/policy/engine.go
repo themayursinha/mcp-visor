@@ -434,11 +434,12 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 	case "allow_activation":
 		// Fail-closed dual-mode registration: a tool allowed to register
 		// /usr/bin/node or mcp.internal must not activate /bin/sh or
-		// 169.254.169.254. Declared EXECUTABLE and URL fields are the
-		// instantiation target; Visor does not spawn processes or fetch
-		// URLs. Every present alias in each family is checked. Missing
-		// both families denies. Args arrays are out of model.
-		if !recipientAllowlistConfigured(rule.Patterns) {
+		// 169.254.169.254. patterns are EXECUTABLE allowlist (exact,
+		// case-sensitive). domains are URL host allowlist (exact,
+		// case-insensitive). A host mandate cannot authorize spawn.
+		// Every present alias in each family is checked. Missing both
+		// argument families denies. Args arrays are out of model.
+		if !recipientAllowlistConfigured(rule.Patterns) && !recipientAllowlistConfigured(rule.Domains) {
 			return Decision{Action: ActionDeny, Reason: "activation allowlist is empty"}
 		}
 		execs, reason := collectOptionalExecutableSlots(args)
@@ -453,12 +454,12 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			return Decision{Action: ActionDeny, Reason: "activation target is required"}
 		}
 		for _, slot := range execs {
-			if !recipientInAllowlist(rule.Patterns, slot) {
+			if !executableInAllowlist(rule.Patterns, slot) {
 				return Decision{Action: ActionDeny, Reason: reasonConfigActivationSpawn}
 			}
 		}
 		for _, slot := range dests {
-			if !recipientInAllowlist(rule.Patterns, slot) {
+			if !recipientInAllowlist(rule.Domains, slot) {
 				return Decision{Action: ActionDeny, Reason: reasonConfigActivationNetwork}
 			}
 		}
@@ -1386,6 +1387,19 @@ func recipientInAllowlist(patterns []string, recipient string) bool {
 	}
 	for _, pattern := range patterns {
 		if strings.EqualFold(strings.TrimSpace(pattern), got) {
+			return true
+		}
+	}
+	return false
+}
+
+func executableInAllowlist(patterns []string, executable string) bool {
+	got := strings.TrimSpace(executable)
+	if got == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if strings.TrimSpace(pattern) == got {
 			return true
 		}
 	}

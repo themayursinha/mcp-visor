@@ -438,11 +438,11 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 	}
 
 	if rule.Type == "allow_activation" {
-		if len(rule.Patterns) == 0 {
+		if len(rule.Patterns) == 0 && len(rule.Domains) == 0 {
 			res.Violations = append(res.Violations, LintViolation{
 				Path: path, Type: ViolationTypeWarning, Field: "patterns",
 				Severity: SeverityWarning,
-				Message:  "rule type 'allow_activation' has no patterns",
+				Message:  "rule type 'allow_activation' has no patterns or domains",
 			})
 		}
 	}

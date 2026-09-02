@@ -323,7 +323,7 @@ func TestLintAllowActivationIsKnown(t *testing.T) {
 					{
 						Name: "register_mcp",
 						Rules: []ArgRule{
-							{Type: "allow_activation", Patterns: []string{"/usr/bin/node", "mcp.internal"}},
+							{Type: "allow_activation", Patterns: []string{"/usr/bin/node"}, Domains: []string{"mcp.internal"}},
 						},
 					},
 				},
@@ -1431,12 +1431,12 @@ func TestLintRuleMissingActivationPatterns(t *testing.T) {
 	res := Lint(p)
 	found := false
 	for _, v := range res.Violations {
-		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns") {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns or domains") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected 'no patterns' warning, violations: %+v", res.Violations)
+		t.Errorf("expected 'no patterns or domains' warning, violations: %+v", res.Violations)
 	}
 }
 

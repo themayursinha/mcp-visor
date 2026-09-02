@@ -29,6 +29,7 @@ servers:
           - type: allow_activation
             patterns:
               - "/usr/bin/node"
+            domains:
               - "mcp.internal"
 `
 }

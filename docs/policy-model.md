@@ -271,14 +271,14 @@ Example fixture: [`examples/policies/spawn-permission-bypass.yaml`](../examples/
 
 ### `allow_activation`
 
-Fail-closed dual-mode activation allowlist for MCP server registration (MCPHub CVE-2026-79748 / CVE-2026-79747). A tool that is allowed to register `/usr/bin/node` or `mcp.internal` must not instantiate `/bin/sh` or `169.254.169.254`. Declared EXECUTABLE and URL fields are the instantiation target; Visor does not spawn processes, fetch URLs, or separate storage from activation. Attaching this rule is the effect bound. Matching is exact name (trim + case-insensitive), not substring:
+Fail-closed dual-mode activation allowlist for MCP server registration (MCPHub CVE-2026-79748 / CVE-2026-79747). A tool that is allowed to register `/usr/bin/node` or `mcp.internal` must not instantiate `/bin/sh` or `169.254.169.254`. Declared EXECUTABLE and URL fields are the instantiation target; Visor does not spawn processes, fetch URLs, or separate storage from activation. Attaching this rule is the effect bound. `patterns` is the executable allowlist (exact after trim, **case-sensitive**). `domains` is the host allowlist (exact after trim, case-insensitive). A host mandate cannot authorize CONFIG→SPAWN:
 
-- missing both families → deny
-- empty allowlist → deny
+- missing both argument families → deny
+- empty `patterns` and empty `domains` → deny
 - non-string or blank EXECUTABLE alias → deny
 - unparseable URL alias → deny
-- **every present alias is checked**; a mandate binary in `command` does not cover `169.254.169.254` in `url`, and a mandate host does not cover `/bin/sh` in `stdio_command`
-- non-exact executable (including suffix spoofs) → deny with evidence `argument class EXECUTABLE`, `effect class PROCESS`, `authority transition CONFIG->SPAWN`
+- **every present alias is checked**; a mandate binary in `command` does not cover `169.254.169.254` in `url`, and a mandate host in `domains` does not cover `command: mcp.internal`
+- non-exact or case-folded executable (including suffix spoofs) → deny with evidence `argument class EXECUTABLE`, `effect class PROCESS`, `authority transition CONFIG->SPAWN`
 - non-exact host → deny with evidence `argument class URL`, `effect class NETWORK`, `authority transition CONFIG->EGRESS`
 
 ```yaml
@@ -286,10 +286,11 @@ rules:
   - type: allow_activation
     patterns:
       - "/usr/bin/node"
+    domains:
       - "mcp.internal"
 ```
 
-Matched against EXECUTABLE keys: `command`, `cmd`, `exec`, `binary`, `executable`, `stdio_command`, `stdiocommand`, `server_command`, `servercommand`, matched case-insensitively (so `Stdio_Command` is the same slot as `stdio_command`). `stdiocommand` is distinct from `stdio_command`. Matched against URL/HOST keys: the `allow_destination` aliases. `args` / `argv` / `path` / `transport` are not aliases. Nested maps are out of model. `allow_command_pattern` remains first-match on `command`/`cmd`/`exec` and skips `stdio_command`. `allow_destination` fail-closes when no URL is present, so it cannot cover stdio registration.
+Matched against EXECUTABLE keys: `command`, `cmd`, `exec`, `binary`, `executable`, `stdio_command`, `stdiocommand`, `server_command`, `servercommand`, matched case-insensitively (so `Stdio_Command` is the same slot as `stdio_command`). `stdiocommand` is distinct from `stdio_command`. Executable *values* are compared case-sensitively after trim (`/USR/BIN/NODE` is not `/usr/bin/node`). Matched against URL/HOST keys: the `allow_destination` aliases; host *values* stay case-insensitive. `args` / `argv` / `path` / `transport` are not aliases. Nested maps are out of model. `allow_command_pattern` remains first-match on `command`/`cmd`/`exec` and skips `stdio_command`. `allow_destination` fail-closes when no URL is present, so it cannot cover stdio registration.
 
 Example fixture: [`examples/policies/mcp-registration-activation.yaml`](../examples/policies/mcp-registration-activation.yaml).
 

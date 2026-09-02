@@ -26,6 +26,7 @@ servers:
           - type: allow_activation
             patterns:
               - "/usr/bin/node"
+            domains:
               - "mcp.internal"
 `
 
@@ -94,6 +95,13 @@ func TestActivationMandateInstantiationAllowed(t *testing.T) {
 	if got.Action != policy.ActionAllow {
 		t.Fatalf("mandated host must allow, got %s: %s", got.Action, got.Reason)
 	}
+
+	got = evalRegisterTool(eng, "register_mcp", map[string]any{
+		"url": "https://MCP.INTERNAL/sse",
+	})
+	if got.Action != policy.ActionAllow {
+		t.Fatalf("host matching is case-insensitive, got %s: %s", got.Action, got.Reason)
+	}
 }
 
 func TestActivationSpawnDenied(t *testing.T) {
@@ -111,6 +119,22 @@ func TestActivationSpawnDenied(t *testing.T) {
 	})
 	if got.Action != policy.ActionDeny {
 		t.Fatalf("suffix spoof must deny, got %s: %s", got.Action, got.Reason)
+	}
+	assertActivationSpawnEvidence(t, got.Reason)
+
+	got = evalRegisterTool(eng, "register_mcp", map[string]any{
+		"command": "mcp.internal",
+	})
+	if got.Action != policy.ActionDeny {
+		t.Fatalf("host mandate must not authorize spawn, got %s: %s", got.Action, got.Reason)
+	}
+	assertActivationSpawnEvidence(t, got.Reason)
+
+	got = evalRegisterTool(eng, "register_mcp", map[string]any{
+		"command": "/USR/BIN/NODE",
+	})
+	if got.Action != policy.ActionDeny {
+		t.Fatalf("case-folded executable must deny, got %s: %s", got.Action, got.Reason)
 	}
 	assertActivationSpawnEvidence(t, got.Reason)
 }
