@@ -89,6 +89,7 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Destructive path outside mandate: `allow_path_slot` denies PATH/TARGET-class arguments that are not under the mandate glob. A schema-valid cleanup of `/tmp` that names `$HOME` is denied before relay.
 - Authority-expanding destination: `allow_destination` is an exact, fail-closed host slot. A mandate to reach `docs.internal` does not authorize `http_post` or `web_fetch` to `evil.example`. Session history does not promote a denied host into authority.
 - Untrusted execution environment: `allow_working_directory` denies CWD-class arguments that are not under the mandate glob. A schema-valid decoder run whose `cwd` is an attacker extract directory is denied before relay.
+- Untrusted credential custody: `deny_secret` denies SECRET-class arguments before relay. A schema-valid `configure_secret` whose `api_key` is a valid replacement key is still denied. Credential validity is not custody.
 
 ## Session-taint egress control
 

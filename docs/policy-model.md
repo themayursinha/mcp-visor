@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 20 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 21 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -189,6 +189,25 @@ rules:
 Matched against argument keys: `cwd`, `working_directory`, `working_dir`, `workingdir`, `workdir`, `chdir`, matched case-insensitively (so `Cwd` is the same slot as `cwd`). `path` / `dir` are not CWD aliases (`allow_path_slot` owns those). Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model.
 
 Example fixture: [`examples/policies/environment-laundering-cwd.yaml`](../examples/policies/environment-laundering-cwd.yaml).
+
+### `deny_secret`
+
+Fail-closed SECRET-class deny for a credential-provisioning slot. A tool that is allowed to configure a gateway must not carry a replacement credential on the wire (RAGFlow issuance interception). Declared secret fields are the custody signal; Visor does not attest the provisioning runtime or allowlist key material in policy. Attaching this rule is the effect bound. Presence denies:
+
+- any present non-blank SECRET-class alias → deny with evidence `argument class SECRET`, `effect class CREDENTIAL`, `authority transition MANDATE->CUSTODY`
+- non-string or blank value in any SECRET-class alias → deny
+- **every present alias is checked**; a benign `name` does not cover `KEY_B` in `api_key`
+- missing SECRET-class aliases → the rule does not fire (no credential on the wire)
+- credential validity is irrelevant; a well-formed replacement key is still denied
+
+```yaml
+rules:
+  - type: deny_secret
+```
+
+Matched against argument keys: `api_key`, `apikey`, `access_key`, `secret`, `password`, `credential`, `private_key`, `token`, `new_key`, matched case-insensitively (so `Api_Key` is the same slot as `api_key`). `apikey` is distinct from `api_key`. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model. Patterns are ignored; do not put secrets in policy YAML. Redaction is not this gate: a matching secret still denies before relay.
+
+Example fixture: [`examples/policies/credential-rotation-secret.yaml`](../examples/policies/credential-rotation-secret.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -721,6 +740,7 @@ The repository includes example policies demonstrating different postures:
 | Destructive Path Slot | `examples/policies/destructive-path-slot.yaml` | deny | Clean only under the mandate path glob. |
 | Reward-Seeker Destination | `examples/policies/reward-seeker-destination.yaml` | deny | Local file_read allowed; egress only to the mandate host. |
 | Environment-Laundering CWD | `examples/policies/environment-laundering-cwd.yaml` | deny | Run Python only under the mandate working directory. |
+| Credential Rotation Secret | `examples/policies/credential-rotation-secret.yaml` | deny | Local file_read allowed; configure_secret with a SECRET-class arg denied. |
 
 ## Error Handling
 

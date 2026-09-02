@@ -310,6 +310,35 @@ func TestLintAllowDestinationIsKnown(t *testing.T) {
 	}
 }
 
+func TestLintDenySecretIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "gateway",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "configure_secret",
+						Rules: []ArgRule{
+							{Type: "deny_secret"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("deny_secret must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintAllowWorkingDirectoryIsKnown(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",
