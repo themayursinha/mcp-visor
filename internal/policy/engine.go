@@ -431,6 +431,38 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			return Decision{Action: ActionDeny, Reason: reasonPermissionBypassDelegation}
 		}
 
+	case "allow_activation":
+		// Fail-closed dual-mode registration: a tool allowed to register
+		// /usr/bin/node or mcp.internal must not activate /bin/sh or
+		// 169.254.169.254. Declared EXECUTABLE and URL fields are the
+		// instantiation target; Visor does not spawn processes or fetch
+		// URLs. Every present alias in each family is checked. Missing
+		// both families denies. Args arrays are out of model.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "activation allowlist is empty"}
+		}
+		execs, reason := collectOptionalExecutableSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		dests, reason := collectOptionalActivationDestinationSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		if len(execs) == 0 && len(dests) == 0 {
+			return Decision{Action: ActionDeny, Reason: "activation target is required"}
+		}
+		for _, slot := range execs {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonConfigActivationSpawn}
+			}
+		}
+		for _, slot := range dests {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonConfigActivationNetwork}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -839,6 +871,22 @@ var permissionBypassSlotKeys = []string{
 	"bypass_permissions", "bypasspermissions",
 }
 
+// reasonConfigActivationSpawn is the deny evidence for allow_activation
+// when an EXECUTABLE-class slot is not the mandate binary.
+const reasonConfigActivationSpawn = "unauthorized configuration activation: argument class EXECUTABLE, effect class PROCESS, authority transition CONFIG->SPAWN"
+
+// reasonConfigActivationNetwork is the deny evidence for allow_activation
+// when a URL-class slot is not the mandate host.
+const reasonConfigActivationNetwork = "unauthorized configuration activation: argument class URL, effect class NETWORK, authority transition CONFIG->EGRESS"
+
+// executableSlotKeys are EXECUTABLE-class aliases inspected by allow_activation.
+// First-match is not used. stdio_command EqualFold-matches Stdio_Command;
+// stdiocommand is distinct. args / argv / path / transport are not aliases.
+var executableSlotKeys = []string{
+	"command", "cmd", "exec", "binary", "executable",
+	"stdio_command", "stdiocommand", "server_command", "servercommand",
+}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -1137,6 +1185,65 @@ func permissionBypassExplicitlyOff(s string) bool {
 	default:
 		return false
 	}
+}
+
+func isExecutableSlotKey(key string) bool {
+	for _, alias := range executableSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectOptionalExecutableSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, ""
+	}
+	values := make([]string, 0, len(executableSlotKeys))
+	found := false
+	for key, val := range args {
+		if !isExecutableSlotKey(key) {
+			continue
+		}
+		found = true
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "executable is required"
+		}
+		values = append(values, s)
+	}
+	if !found {
+		return nil, ""
+	}
+	return values, ""
+}
+
+func collectOptionalActivationDestinationSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, ""
+	}
+	values := make([]string, 0, len(destinationSlotKeys))
+	found := false
+	for key, val := range args {
+		if !isDestinationSlotKey(key) {
+			continue
+		}
+		found = true
+		s, isString := val.(string)
+		if !isString {
+			return nil, "destination is required"
+		}
+		host, ok := destinationHostname(s)
+		if !ok {
+			return nil, "destination is required"
+		}
+		values = append(values, host)
+	}
+	if !found {
+		return nil, ""
+	}
+	return values, ""
 }
 
 func isOwnerSlotKey(key string) bool {
