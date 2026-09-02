@@ -245,7 +245,7 @@ Deterministic, YAML-driven policy evaluation. No LLM involvement.
   - `EvaluateChain(server, call, previousCalls)` → chain detection
   - `GetRiskLevel(server, tool)` → risk classification
 - **Registry** (`registry.go`): In-memory lookup maps built from policy for fast tool/server resolution
-- **22 enforced argument rule types**: `deny_path`, `allow_path`, `require_path_literal`, `allow_path_slot`, `allow_destination`, `allow_working_directory`, `deny_secret`, `allow_application`, `deny_command_pattern`, `allow_command_pattern`, `deny_command_keyword`, `deny_query_pattern`, `allow_query_pattern`, `deny_recipient_domain`, `allow_recipient_domain`, `allow_recipient`, `allow_resource_owner`, `allowed_repos`, `max_file_size`, `max_result_rows`, `max_export_rows`, `require_approval_always`
+- **23 enforced argument rule types**: `deny_path`, `allow_path`, `require_path_literal`, `allow_path_slot`, `allow_destination`, `allow_working_directory`, `deny_secret`, `allow_application`, `allow_skill`, `deny_command_pattern`, `allow_command_pattern`, `deny_command_keyword`, `deny_query_pattern`, `allow_query_pattern`, `deny_recipient_domain`, `allow_recipient_domain`, `allow_recipient`, `allow_resource_owner`, `allowed_repos`, `max_file_size`, `max_result_rows`, `max_export_rows`, `require_approval_always`
 
 ### 5. Redaction Engine (`internal/redaction/`)
 

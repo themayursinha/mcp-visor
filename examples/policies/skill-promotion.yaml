@@ -1,0 +1,22 @@
+version: "1.0"
+description: >
+  Local skill-promotion fixture. A schema-valid install_skill of a skill
+  name is not a promotion proof. Experience can name attacker-registry;
+  the caller mandate cannot. Attaching allow_skill is the effect bound:
+  SKILL-class identity arguments must be the exact mandate skill. Visor
+  does not parse skill bodies, trajectories, or provenance oracles.
+default_action: deny
+servers:
+  - name: "workspace"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: low
+      - name: "install_skill"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_skill
+            patterns:
+              - "workspace-lint"

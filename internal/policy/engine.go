@@ -396,6 +396,26 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "allow_skill":
+		// Fail-closed mandate skill: a tool allowed to install
+		// workspace-lint must not promote attacker-registry. Declared
+		// SKILL identity fields are the promotion target; Visor does
+		// not parse skill bodies or trajectory provenance. Every
+		// present alias is checked. Experience cannot manufacture a
+		// new skill name.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "skill allowlist is empty"}
+		}
+		slots, reason := collectSkillSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonUnauthorizedSkillPromotion}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -784,6 +804,14 @@ const reasonAuthorityExpandingApplication = "authority-expanding application: ar
 // name is the Argo MCP application identifier when this rule is attached.
 var applicationSlotKeys = []string{"application", "app", "application_name", "app_name", "applicationname", "appname", "name"}
 
+// reasonUnauthorizedSkillPromotion is the deny evidence for allow_skill.
+const reasonUnauthorizedSkillPromotion = "unauthorized skill promotion: argument class SKILL, effect class AUTHORITY, authority transition EXPERIENCE->SKILL"
+
+// skillSlotKeys are SKILL-class identity aliases inspected by allow_skill.
+// First-match is not used. skill_name EqualFold-matches Skill_Name; skillname is distinct.
+// skill_content / body are not identity aliases; Visor does not parse skill text.
+var skillSlotKeys = []string{"skill", "skill_id", "skill_name", "skillname", "skill_key", "skill_slug"}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -994,6 +1022,36 @@ func collectApplicationSlots(args map[string]any) ([]string, string) {
 	}
 	if len(values) == 0 {
 		return nil, "application is required"
+	}
+	return values, ""
+}
+
+func isSkillSlotKey(key string) bool {
+	for _, alias := range skillSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectSkillSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "skill is required"
+	}
+	values := make([]string, 0, len(skillSlotKeys))
+	for key, val := range args {
+		if !isSkillSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "skill is required"
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, "skill is required"
 	}
 	return values, ""
 }
