@@ -46,6 +46,7 @@ tests/
 examples/
   demo-mcp-server/     Mock MCP server for testing and demos
   demo-runner/         Interactive security demo
+  monitor-vs-proof/    Unmediated observe vs Visor deny-before-relay
   policies/            Example policy files
   malicious-prompts/   Documented prompt injection scenarios
 ```

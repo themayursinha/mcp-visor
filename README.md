@@ -69,6 +69,8 @@ mcp-visor serve -server <your-mcp-server> -policy policy.yaml -audit-log ./audit
 
 Two-minute action-boundary demo: `go run ./examples/demo-runner`
 
+Monitor vs delayed detection (same `http_post` to `evil.example`; unmediated server observes it, Visor denies before relay): `go run ./examples/monitor-vs-proof`
+
 Local Proof Console (not a product dashboard): `go run ./examples/demo-runner -ui` then open the printed URL. Default bind is loopback. To reach it from another machine on a tailnet, bind a CGNAT address in `100.64.0.0/10` (not `0.0.0.0`):
 
 ```bash

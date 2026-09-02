@@ -263,7 +263,7 @@ Built-in TCP/UDP SIEM targets are plaintext and unauthenticated. The exporter re
 
 ### 13. Declared Destination Controls Are Inert
 
-`allowed_destinations` and `denied_destinations` exist in the policy schema but are not evaluated by the engine. Attach `allow_destination` when URL/HOST-class arguments must be the mandate host. The extracted authority must be a boring `host[:port]`; userinfo, backslash, and percent-encoding are unparseable and deny. Visor does not follow redirects, resolve DNS, parse destinations out of shell commands, or adopt WHATWG parsing for a downstream tool. Without that rule, an allowed `http_post` can still name an unlisted host. Server-level destination fields remain inert.
+`allowed_destinations` and `denied_destinations` exist in the policy schema but are not evaluated by the engine. Attach `allow_destination` when URL/HOST-class arguments must be the mandate host. The extracted authority must be a boring `host[:port]`; userinfo, backslash, and percent-encoding are unparseable and deny. Visor does not follow redirects, resolve DNS, parse destinations out of shell commands, or adopt WHATWG parsing for a downstream tool. Without that rule, an allowed `http_post` can still name an unlisted host. Server-level destination fields remain inert. Detection after connect cannot un-send: the local `examples/monitor-vs-proof` fixture shows the same `http_post` to `evil.example` observed by an unmediated server and denied at intercept when Visor is attached.
 
 ### 14. Path-Matching Gaps
 
