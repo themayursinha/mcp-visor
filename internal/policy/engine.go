@@ -434,11 +434,12 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 	case "allow_activation":
 		// Fail-closed dual-mode registration: a tool allowed to register
 		// /usr/bin/node or mcp.internal must not activate /bin/sh or
-		// 169.254.169.254. patterns are EXECUTABLE allowlist (exact,
-		// case-sensitive). domains are URL host allowlist (exact,
-		// case-insensitive). A host mandate cannot authorize spawn.
-		// Every present alias in each family is checked. Missing both
-		// argument families denies. Args arrays are out of model.
+		// 169.254.169.254. patterns are EXECUTABLE allowlist (byte
+		// identity with the relayed value; no trim, no fold). domains
+		// are URL host allowlist (trim, case-insensitive). A host
+		// mandate cannot authorize spawn. Every present alias in each
+		// family is checked. Missing both argument families denies.
+		// Args arrays are out of model.
 		if !recipientAllowlistConfigured(rule.Patterns) && !recipientAllowlistConfigured(rule.Domains) {
 			return Decision{Action: ActionDeny, Reason: "activation allowlist is empty"}
 		}
@@ -1209,7 +1210,7 @@ func collectOptionalExecutableSlots(args map[string]any) ([]string, string) {
 		}
 		found = true
 		s, isString := val.(string)
-		if !isString || strings.TrimSpace(s) == "" {
+		if !isString || s == "" {
 			return nil, "executable is required"
 		}
 		values = append(values, s)
@@ -1394,12 +1395,14 @@ func recipientInAllowlist(patterns []string, recipient string) bool {
 }
 
 func executableInAllowlist(patterns []string, executable string) bool {
-	got := strings.TrimSpace(executable)
-	if got == "" {
+	// Compare the bytes that will be relayed. Trim or fold would authorize
+	// " /usr/bin/node" or /USR/BIN/NODE as /usr/bin/node while spawn uses
+	// the original value. Path canonicalization is out of model.
+	if executable == "" {
 		return false
 	}
 	for _, pattern := range patterns {
-		if strings.TrimSpace(pattern) == got {
+		if pattern == executable {
 			return true
 		}
 	}

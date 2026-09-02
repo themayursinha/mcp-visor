@@ -65,6 +65,14 @@ func TestActivationProxyDeniesSpawnBeforeRelay(t *testing.T) {
 
 	out.Reset()
 	_, action = p.interceptAndModify(toolCallRaw(3, "register_mcp", map[string]any{
+		"command": " /usr/bin/node",
+	}), client)
+	if action != "denied" {
+		t.Fatalf("padded executable must deny before relay, got %s; response=%s", action, out.String())
+	}
+
+	out.Reset()
+	_, action = p.interceptAndModify(toolCallRaw(4, "register_mcp", map[string]any{
 		"command": "/bin/sh",
 	}), client)
 	if action != "denied" {

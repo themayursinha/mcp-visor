@@ -137,6 +137,22 @@ func TestActivationSpawnDenied(t *testing.T) {
 		t.Fatalf("case-folded executable must deny, got %s: %s", got.Action, got.Reason)
 	}
 	assertActivationSpawnEvidence(t, got.Reason)
+
+	got = evalRegisterTool(eng, "register_mcp", map[string]any{
+		"command": " /usr/bin/node",
+	})
+	if got.Action != policy.ActionDeny {
+		t.Fatalf("padded executable must deny, got %s: %s", got.Action, got.Reason)
+	}
+	assertActivationSpawnEvidence(t, got.Reason)
+
+	got = evalRegisterTool(eng, "register_mcp", map[string]any{
+		"command": "   ",
+	})
+	if got.Action != policy.ActionDeny {
+		t.Fatalf("whitespace-only executable must deny as spawn, got %s: %s", got.Action, got.Reason)
+	}
+	assertActivationSpawnEvidence(t, got.Reason)
 }
 
 func TestActivationNetworkDenied(t *testing.T) {
@@ -178,7 +194,7 @@ func TestActivationMissingFailsClosed(t *testing.T) {
 		reason string
 	}{
 		{name: "missing", args: map[string]any{"name": "helper"}, reason: "activation target is required"},
-		{name: "blank", args: map[string]any{"command": "   "}, reason: "executable is required"},
+		{name: "blank", args: map[string]any{"command": ""}, reason: "executable is required"},
 		{name: "non-string", args: map[string]any{"command": 123}, reason: "executable is required"},
 	}
 	for _, tc := range cases {
