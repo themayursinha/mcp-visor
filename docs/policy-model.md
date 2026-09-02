@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 21 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 22 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -208,6 +208,26 @@ rules:
 Matched against argument keys: `api_key`, `apikey`, `access_key`, `secret`, `password`, `credential`, `private_key`, `token`, `new_key`, matched case-insensitively (so `Api_Key` is the same slot as `api_key`). `apikey` is distinct from `api_key`. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model. Patterns are ignored; do not put secrets in policy YAML. Redaction is not this gate: a matching secret still denies before relay.
 
 Example fixture: [`examples/policies/credential-rotation-secret.yaml`](../examples/policies/credential-rotation-secret.yaml).
+
+### `allow_application`
+
+Fail-closed APPLICATION-class exact-name allowlist for a mandated Argo CD (or similar) application. A tool that is allowed to sync `staging-orders` must not sync `production-payments`. Declared application fields are the control-plane target; Visor does not walk Kubernetes, ServiceAccount, or cloud graphs, and does not treat a tool-provider token as caller authority. Attaching this rule is the effect bound. Matching is exact name (trim + case-insensitive), not substring:
+
+- missing, non-string, or blank value in any APPLICATION-class alias → deny
+- empty allowlist → deny
+- **every present alias is checked**; a mandated app in `application` does not cover `production-payments` in `app` or `name`
+- any name that is not an exact allowlisted string (including suffix spoofs) → deny with evidence `argument class APPLICATION`, `effect class CONTROL_PLANE`, `authority transition MANDATE->CLUSTER`
+
+```yaml
+rules:
+  - type: allow_application
+    patterns:
+      - "staging-orders"
+```
+
+Matched against argument keys: `application`, `app`, `application_name`, `app_name`, `applicationname`, `appname`, `name`, matched case-insensitively (so `App_Name` is the same slot as `app_name`). `appname` is distinct from `app_name`. `name` is the Argo MCP application identifier when this rule is attached. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps and cluster/destination fields are out of model. `allowed_repos` remains inert for application names.
+
+Example fixture: [`examples/policies/argocd-application.yaml`](../examples/policies/argocd-application.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -741,6 +761,7 @@ The repository includes example policies demonstrating different postures:
 | Reward-Seeker Destination | `examples/policies/reward-seeker-destination.yaml` | deny | Local file_read allowed; egress only to the mandate host. |
 | Environment-Laundering CWD | `examples/policies/environment-laundering-cwd.yaml` | deny | Run Python only under the mandate working directory. |
 | Credential Rotation Secret | `examples/policies/credential-rotation-secret.yaml` | deny | Local file_read allowed; configure_secret with a SECRET-class arg denied. |
+| Argo CD Application | `examples/policies/argocd-application.yaml` | deny | Local file_read allowed; sync only the mandate application. |
 
 ## Error Handling
 

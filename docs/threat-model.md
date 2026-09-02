@@ -277,6 +277,8 @@ A schema-valid, tool-authorized `run_python` call is not an execution-environmen
 
 A schema-valid, tool-authorized `configure_secret` call is not a custody proof. Argument redaction and `allow_path` do not inspect SECRET-class keys. Attach `deny_secret` when a replacement credential must not travel on the MCP wire. Visor does not attest the provisioning runtime or allowlist key material. Without that rule, an allowed configuration tool can still forward `KEY_B`.
 
+A schema-valid, tool-authorized `argocd_sync` call is not a transitive-authority proof. `allowed_repos` does not inspect `application`. Attach `allow_application` when APPLICATION-class arguments must be the mandate app. Visor does not walk Kubernetes or ServiceAccount graphs, and a tool-provider token is not caller authority. Without that rule, an allowed sync tool can still name `production-payments`.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.

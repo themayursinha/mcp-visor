@@ -1,0 +1,22 @@
+version: "1.0"
+description: >
+  Local Argo CD application fixture. A schema-valid argocd_sync of an
+  application is not a transitive-authority proof. The tool-provider token
+  can reach production; the caller mandate cannot. Attaching
+  allow_application is the effect bound: APPLICATION-class arguments must
+  be the exact mandate app. Visor does not walk Kubernetes graphs.
+default_action: deny
+servers:
+  - name: "argocd"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: low
+      - name: "argocd_sync"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_application
+            patterns:
+              - "staging-orders"

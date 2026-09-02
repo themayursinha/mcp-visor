@@ -28,6 +28,7 @@ func Lint(p *Policy) LintResult {
 		"allow_destination":       true,
 		"allow_working_directory": true,
 		"deny_secret":             true,
+		"allow_application":       true,
 		"allowed_repos":           true,
 		"max_file_size":           true,
 		"max_result_rows":         true, "max_export_rows": true,
@@ -409,6 +410,16 @@ func (res *LintResult) checkRule(path string, rule ArgRule, knownTypes map[strin
 				Path: path, Type: ViolationTypeWarning, Field: "patterns",
 				Severity: SeverityWarning,
 				Message:  "rule type 'allow_working_directory' has no patterns",
+			})
+		}
+	}
+
+	if rule.Type == "allow_application" {
+		if len(rule.Patterns) == 0 {
+			res.Violations = append(res.Violations, LintViolation{
+				Path: path, Type: ViolationTypeWarning, Field: "patterns",
+				Severity: SeverityWarning,
+				Message:  "rule type 'allow_application' has no patterns",
 			})
 		}
 	}
