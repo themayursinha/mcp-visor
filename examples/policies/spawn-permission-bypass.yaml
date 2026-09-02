@@ -1,0 +1,20 @@
+version: "1.0"
+description: >
+  Local spawn permission-bypass fixture. A schema-valid spawn_agent of a
+  worker is not a delegation-closure proof. --dangerously-skip-permissions
+  sheds mediation on the child; the caller mandate cannot. Attaching
+  deny_permission_bypass is the effect bound: PERMISSION-bypass arguments
+  deny before relay. Visor does not compare parent/child obligation graphs.
+default_action: deny
+servers:
+  - name: "orchestrator"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: low
+      - name: "spawn_agent"
+        allowed: true
+        risk: high
+        rules:
+          - type: deny_permission_bypass

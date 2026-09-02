@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 23 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 24 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -249,6 +249,25 @@ rules:
 Matched against argument keys: `skill`, `skill_id`, `skill_name`, `skillname`, `skill_key`, `skill_slug`, matched case-insensitively (so `Skill_Name` is the same slot as `skill_name`). `skillname` is distinct from `skill_name`. `skill_content` / `body` / `prompt` are not identity aliases. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model. `allow_command_pattern` remains inert for skill identity.
 
 Example fixture: [`examples/policies/skill-promotion.yaml`](../examples/policies/skill-promotion.yaml).
+
+### `deny_permission_bypass`
+
+Fail-closed PERMISSION-bypass deny for a spawn/delegation slot. A tool that is allowed to create a worker must not disable permission mediation on the child (`--dangerously-skip-permissions`). Declared bypass fields are the weakening signal; Visor does not compare parent/child obligation graphs, nested principals, or monitoring lineage. Attaching this rule is the effect bound. Presence of a weakening value denies:
+
+- any present PERMISSION-bypass alias whose value is not explicitly off → deny with evidence `argument class PERMISSION`, `effect class DELEGATION`, `authority transition PARENT->CHILD`
+- non-string/non-bool or blank value in any bypass alias → deny
+- **every present alias is checked**; an explicit `false` in `skip_permissions` does not cover `true` in `dangerously_skip_permissions`
+- missing bypass aliases → the rule does not fire (legitimate spawn)
+- boolean `false` and strings `false` / `0` / `no` / `off` are not a bypass
+
+```yaml
+rules:
+  - type: deny_permission_bypass
+```
+
+Matched against argument keys: `skip_permissions`, `skip_permission`, `skippermissions`, `dangerously_skip_permissions`, `dangerouslyskippermissions`, `bypass_permissions`, `bypasspermissions`, matched case-insensitively (so `Skip_Permissions` is the same slot as `skip_permissions`). `skippermissions` is distinct from `skip_permissions`. `permission_mode` / `flags` / `args` / `command` are not aliases. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model. Patterns are ignored. `allow_command_pattern` remains inert for structured bypass flags.
+
+Example fixture: [`examples/policies/spawn-permission-bypass.yaml`](../examples/policies/spawn-permission-bypass.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -784,6 +803,7 @@ The repository includes example policies demonstrating different postures:
 | Credential Rotation Secret | `examples/policies/credential-rotation-secret.yaml` | deny | Local file_read allowed; configure_secret with a SECRET-class arg denied. |
 | Argo CD Application | `examples/policies/argocd-application.yaml` | deny | Local file_read allowed; sync only the mandate application. |
 | Skill Promotion | `examples/policies/skill-promotion.yaml` | deny | Local file_read allowed; install only the mandate skill name. |
+| Spawn Permission Bypass | `examples/policies/spawn-permission-bypass.yaml` | deny | Local file_read allowed; spawn_agent without a bypass flag allowed. |
 
 ## Error Handling
 

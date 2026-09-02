@@ -281,6 +281,8 @@ A schema-valid, tool-authorized `argocd_sync` call is not a transitive-authority
 
 A schema-valid, tool-authorized `install_skill` call is not a skill-promotion proof. `allow_command_pattern` does not inspect `skill_name`. Attach `allow_skill` when SKILL-class identity arguments must be the mandate skill. Visor does not parse skill bodies, trajectories, or provenance oracles. Without that rule, an allowed installer can still promote `attacker-registry`.
 
+A schema-valid, tool-authorized `spawn_agent` call is not a delegation-closure proof. `allow_command_pattern` does not inspect `skip_permissions`. Attach `deny_permission_bypass` when PERMISSION-bypass arguments must not weaken child mediation. Visor does not compare parent/child obligation graphs or nested principal state. Without that rule, an allowed spawner can still set `--dangerously-skip-permissions`.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
