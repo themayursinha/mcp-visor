@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 22 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 23 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -228,6 +228,27 @@ rules:
 Matched against argument keys: `application`, `app`, `application_name`, `app_name`, `applicationname`, `appname`, `name`, matched case-insensitively (so `App_Name` is the same slot as `app_name`). `appname` is distinct from `app_name`. `name` is the Argo MCP application identifier when this rule is attached. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps and cluster/destination fields are out of model. `allowed_repos` remains inert for application names.
 
 Example fixture: [`examples/policies/argocd-application.yaml`](../examples/policies/argocd-application.yaml).
+
+### `allow_skill`
+
+Fail-closed SKILL-class exact-name allowlist for a mandated skill identity. A tool that is allowed to install `workspace-lint` must not promote `attacker-registry` (PoisonedEvolution / SkillJack). Declared skill identity fields are the promotion target; Visor does not parse skill bodies, trajectories, or provenance oracles. Attaching this rule is the effect bound. Matching is exact name (trim + case-insensitive), not substring:
+
+- missing, non-string, or blank value in any SKILL-class identity alias → deny
+- empty allowlist → deny
+- **every present alias is checked**; a mandated skill in `skill_name` does not cover `attacker-registry` in `skill`
+- any name that is not an exact allowlisted string (including suffix spoofs) → deny with evidence `argument class SKILL`, `effect class AUTHORITY`, `authority transition EXPERIENCE->SKILL`
+- mandated skill names still allow (legitimate in-scope learning)
+
+```yaml
+rules:
+  - type: allow_skill
+    patterns:
+      - "workspace-lint"
+```
+
+Matched against argument keys: `skill`, `skill_id`, `skill_name`, `skillname`, `skill_key`, `skill_slug`, matched case-insensitively (so `Skill_Name` is the same slot as `skill_name`). `skillname` is distinct from `skill_name`. `skill_content` / `body` / `prompt` are not identity aliases. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model. `allow_command_pattern` remains inert for skill identity.
+
+Example fixture: [`examples/policies/skill-promotion.yaml`](../examples/policies/skill-promotion.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -762,6 +783,7 @@ The repository includes example policies demonstrating different postures:
 | Environment-Laundering CWD | `examples/policies/environment-laundering-cwd.yaml` | deny | Run Python only under the mandate working directory. |
 | Credential Rotation Secret | `examples/policies/credential-rotation-secret.yaml` | deny | Local file_read allowed; configure_secret with a SECRET-class arg denied. |
 | Argo CD Application | `examples/policies/argocd-application.yaml` | deny | Local file_read allowed; sync only the mandate application. |
+| Skill Promotion | `examples/policies/skill-promotion.yaml` | deny | Local file_read allowed; install only the mandate skill name. |
 
 ## Error Handling
 

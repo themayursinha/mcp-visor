@@ -279,6 +279,8 @@ A schema-valid, tool-authorized `configure_secret` call is not a custody proof. 
 
 A schema-valid, tool-authorized `argocd_sync` call is not a transitive-authority proof. `allowed_repos` does not inspect `application`. Attach `allow_application` when APPLICATION-class arguments must be the mandate app. Visor does not walk Kubernetes or ServiceAccount graphs, and a tool-provider token is not caller authority. Without that rule, an allowed sync tool can still name `production-payments`.
 
+A schema-valid, tool-authorized `install_skill` call is not a skill-promotion proof. `allow_command_pattern` does not inspect `skill_name`. Attach `allow_skill` when SKILL-class identity arguments must be the mandate skill. Visor does not parse skill bodies, trajectories, or provenance oracles. Without that rule, an allowed installer can still promote `attacker-registry`.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.
