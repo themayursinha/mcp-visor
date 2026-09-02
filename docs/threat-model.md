@@ -283,6 +283,8 @@ A schema-valid, tool-authorized `install_skill` call is not a skill-promotion pr
 
 A schema-valid, tool-authorized `spawn_agent` call is not a delegation-closure proof. `allow_command_pattern` does not inspect `skip_permissions`. Attach `deny_permission_bypass` when PERMISSION-bypass arguments must not weaken child mediation. Visor does not compare parent/child obligation graphs or nested principal state. Without that rule, an allowed spawner can still set `--dangerously-skip-permissions`.
 
+A schema-valid, tool-authorized `register_mcp` call is not a configuration-activation proof. `allow_command_pattern` does not inspect `stdio_command`, and `allow_destination` fail-closes when no URL is present. Attach `allow_activation` when EXECUTABLE or URL arguments instantiate a registered server. Executable matching is the relayed bytes (no trim, no fold); host matching remains case-insensitive. Visor does not spawn processes or fetch URLs. Without that rule, an allowed registrar can still name `/bin/sh` or `169.254.169.254`.
+
 ### 15. OTLP Reason Leakage
 
 OTLP omits the raw argument map, but `policy.reason` is exported without redaction and can include argument-derived values such as a denied sensitive path.

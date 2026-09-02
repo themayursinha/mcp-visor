@@ -431,6 +431,40 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			return Decision{Action: ActionDeny, Reason: reasonPermissionBypassDelegation}
 		}
 
+	case "allow_activation":
+		// Fail-closed dual-mode registration: a tool allowed to register
+		// /usr/bin/node or mcp.internal must not activate /bin/sh or
+		// 169.254.169.254. patterns are EXECUTABLE allowlist (byte
+		// identity with the relayed value; no trim, no fold). domains
+		// are URL host allowlist (trim, case-insensitive). A host
+		// mandate cannot authorize spawn. Every present alias in each
+		// family is checked. Missing both argument families denies.
+		// Args arrays are out of model.
+		if !recipientAllowlistConfigured(rule.Patterns) && !recipientAllowlistConfigured(rule.Domains) {
+			return Decision{Action: ActionDeny, Reason: "activation allowlist is empty"}
+		}
+		execs, reason := collectOptionalExecutableSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		dests, reason := collectOptionalActivationDestinationSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		if len(execs) == 0 && len(dests) == 0 {
+			return Decision{Action: ActionDeny, Reason: "activation target is required"}
+		}
+		for _, slot := range execs {
+			if !executableInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonConfigActivationSpawn}
+			}
+		}
+		for _, slot := range dests {
+			if !recipientInAllowlist(rule.Domains, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonConfigActivationNetwork}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -839,6 +873,22 @@ var permissionBypassSlotKeys = []string{
 	"bypass_permissions", "bypasspermissions",
 }
 
+// reasonConfigActivationSpawn is the deny evidence for allow_activation
+// when an EXECUTABLE-class slot is not the mandate binary.
+const reasonConfigActivationSpawn = "unauthorized configuration activation: argument class EXECUTABLE, effect class PROCESS, authority transition CONFIG->SPAWN"
+
+// reasonConfigActivationNetwork is the deny evidence for allow_activation
+// when a URL-class slot is not the mandate host.
+const reasonConfigActivationNetwork = "unauthorized configuration activation: argument class URL, effect class NETWORK, authority transition CONFIG->EGRESS"
+
+// executableSlotKeys are EXECUTABLE-class aliases inspected by allow_activation.
+// First-match is not used. stdio_command EqualFold-matches Stdio_Command;
+// stdiocommand is distinct. args / argv / path / transport are not aliases.
+var executableSlotKeys = []string{
+	"command", "cmd", "exec", "binary", "executable",
+	"stdio_command", "stdiocommand", "server_command", "servercommand",
+}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -1139,6 +1189,65 @@ func permissionBypassExplicitlyOff(s string) bool {
 	}
 }
 
+func isExecutableSlotKey(key string) bool {
+	for _, alias := range executableSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectOptionalExecutableSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, ""
+	}
+	values := make([]string, 0, len(executableSlotKeys))
+	found := false
+	for key, val := range args {
+		if !isExecutableSlotKey(key) {
+			continue
+		}
+		found = true
+		s, isString := val.(string)
+		if !isString || s == "" {
+			return nil, "executable is required"
+		}
+		values = append(values, s)
+	}
+	if !found {
+		return nil, ""
+	}
+	return values, ""
+}
+
+func collectOptionalActivationDestinationSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, ""
+	}
+	values := make([]string, 0, len(destinationSlotKeys))
+	found := false
+	for key, val := range args {
+		if !isDestinationSlotKey(key) {
+			continue
+		}
+		found = true
+		s, isString := val.(string)
+		if !isString {
+			return nil, "destination is required"
+		}
+		host, ok := destinationHostname(s)
+		if !ok {
+			return nil, "destination is required"
+		}
+		values = append(values, host)
+	}
+	if !found {
+		return nil, ""
+	}
+	return values, ""
+}
+
 func isOwnerSlotKey(key string) bool {
 	for _, alias := range ownerSlotKeys {
 		if strings.EqualFold(key, alias) {
@@ -1279,6 +1388,21 @@ func recipientInAllowlist(patterns []string, recipient string) bool {
 	}
 	for _, pattern := range patterns {
 		if strings.EqualFold(strings.TrimSpace(pattern), got) {
+			return true
+		}
+	}
+	return false
+}
+
+func executableInAllowlist(patterns []string, executable string) bool {
+	// Compare the bytes that will be relayed. Trim or fold would authorize
+	// " /usr/bin/node" or /USR/BIN/NODE as /usr/bin/node while spawn uses
+	// the original value. Path canonicalization is out of model.
+	if executable == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if pattern == executable {
 			return true
 		}
 	}

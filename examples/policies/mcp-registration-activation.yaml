@@ -1,0 +1,24 @@
+version: "1.0"
+description: >
+  Local MCP registration fixture. A schema-valid register_mcp of a command
+  or URL is not a configuration-activation proof. Describing /bin/sh or
+  169.254.169.254 is not authority to instantiate them. Attaching
+  allow_activation is the effect bound: EXECUTABLE and URL arguments must
+  be an exact mandate binary or host. Visor does not spawn or fetch.
+default_action: deny
+servers:
+  - name: "mcphub"
+    allowed: true
+    tools:
+      - name: "file_read"
+        allowed: true
+        risk: low
+      - name: "register_mcp"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_activation
+            patterns:
+              - "/usr/bin/node"
+            domains:
+              - "mcp.internal"

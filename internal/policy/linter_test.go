@@ -310,6 +310,35 @@ func TestLintAllowDestinationIsKnown(t *testing.T) {
 	}
 }
 
+func TestLintAllowActivationIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "mcphub",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "register_mcp",
+						Rules: []ArgRule{
+							{Type: "allow_activation", Patterns: []string{"/usr/bin/node"}, Domains: []string{"mcp.internal"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("allow_activation must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintAllowSkillIsKnown(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",
@@ -1375,6 +1404,39 @@ func TestLintRuleMissingSkillPatterns(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected 'no patterns' warning, violations: %+v", res.Violations)
+	}
+}
+
+func TestLintRuleMissingActivationPatterns(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "test",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "register_mcp",
+						Rules: []ArgRule{
+							{Type: "allow_activation", Patterns: []string{}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	found := false
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns or domains") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no patterns or domains' warning, violations: %+v", res.Violations)
 	}
 }
 

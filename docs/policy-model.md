@@ -81,7 +81,7 @@ Each tool in a server's `tools` list:
 
 ## Argument Rule Types
 
-The engine enforces 24 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
+The engine enforces 25 rule types. The linter currently recognizes one additional name, `deny_command_pattern_composite`, that has no enforcement case; do not use it until that mismatch is fixed.
 
 ### `deny_path` / `allow_path`
 
@@ -268,6 +268,31 @@ rules:
 Matched against argument keys: `skip_permissions`, `skip_permission`, `skippermissions`, `dangerously_skip_permissions`, `dangerouslyskippermissions`, `bypass_permissions`, `bypasspermissions`, matched case-insensitively (so `Skip_Permissions` is the same slot as `skip_permissions`). `skippermissions` is distinct from `skip_permissions`. `permission_mode` / `flags` / `args` / `command` are not aliases. Command strings (`command` / `cmd` / `exec`) are not parsed. Nested maps are out of model. Patterns are ignored. `allow_command_pattern` remains inert for structured bypass flags.
 
 Example fixture: [`examples/policies/spawn-permission-bypass.yaml`](../examples/policies/spawn-permission-bypass.yaml).
+
+### `allow_activation`
+
+Fail-closed dual-mode activation allowlist for MCP server registration (MCPHub CVE-2026-79748 / CVE-2026-79747). A tool that is allowed to register `/usr/bin/node` or `mcp.internal` must not instantiate `/bin/sh` or `169.254.169.254`. Declared EXECUTABLE and URL fields are the instantiation target; Visor does not spawn processes, fetch URLs, or separate storage from activation. Attaching this rule is the effect bound. `patterns` is the executable allowlist (byte-identical to the relayed value; no trim, no fold). `domains` is the host allowlist (exact after trim, case-insensitive). A host mandate cannot authorize CONFIG→SPAWN:
+
+- missing both argument families → deny
+- empty `patterns` and empty `domains` → deny
+- empty-string or non-string EXECUTABLE alias → deny
+- unparseable URL alias → deny
+- **every present alias is checked**; a mandate binary in `command` does not cover `169.254.169.254` in `url`, and a mandate host in `domains` does not cover `command: mcp.internal`
+- non-exact executable (including surrounding whitespace, case-fold, and suffix spoofs) → deny with evidence `argument class EXECUTABLE`, `effect class PROCESS`, `authority transition CONFIG->SPAWN`
+- non-exact host → deny with evidence `argument class URL`, `effect class NETWORK`, `authority transition CONFIG->EGRESS`
+
+```yaml
+rules:
+  - type: allow_activation
+    patterns:
+      - "/usr/bin/node"
+    domains:
+      - "mcp.internal"
+```
+
+Matched against EXECUTABLE keys: `command`, `cmd`, `exec`, `binary`, `executable`, `stdio_command`, `stdiocommand`, `server_command`, `servercommand`, matched case-insensitively (so `Stdio_Command` is the same slot as `stdio_command`). `stdiocommand` is distinct from `stdio_command`. Executable *values* are compared byte-identically (`" /usr/bin/node"` and `/USR/BIN/NODE` are not `/usr/bin/node`). Matched against URL/HOST keys: the `allow_destination` aliases; host *values* stay case-insensitive. `args` / `argv` / `path` / `transport` are not aliases. Nested maps are out of model. `allow_command_pattern` remains first-match on `command`/`cmd`/`exec` and skips `stdio_command`. `allow_destination` fail-closes when no URL is present, so it cannot cover stdio registration.
+
+Example fixture: [`examples/policies/mcp-registration-activation.yaml`](../examples/policies/mcp-registration-activation.yaml).
 
 ### `deny_command_pattern` / `allow_command_pattern`
 
@@ -804,6 +829,7 @@ The repository includes example policies demonstrating different postures:
 | Argo CD Application | `examples/policies/argocd-application.yaml` | deny | Local file_read allowed; sync only the mandate application. |
 | Skill Promotion | `examples/policies/skill-promotion.yaml` | deny | Local file_read allowed; install only the mandate skill name. |
 | Spawn Permission Bypass | `examples/policies/spawn-permission-bypass.yaml` | deny | Local file_read allowed; spawn_agent without a bypass flag allowed. |
+| MCP Registration Activation | `examples/policies/mcp-registration-activation.yaml` | deny | Local file_read allowed; register only the mandate binary or host. |
 
 ## Error Handling
 
