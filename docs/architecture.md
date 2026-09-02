@@ -325,6 +325,8 @@ See [examples/demo-runner/](../examples/demo-runner/) for the two-minute statefu
 3. **Deny**: later `http_post` is blocked by `block_sensitive_egress` before it reaches the MCP server.
 4. **Audit**: JSONL evidence records source action, taint, policy rule, sink action, and decision.
 
+See [examples/monitor-vs-proof/](../examples/monitor-vs-proof/) for the delayed-detection contrast on the same `http_post` to `evil.example`: the unmediated mock server observes the call; Visor with `allow_destination` denies at intercept (`MANDATE->EGRESS`) and the server never sees it. Mandated `docs.internal` still forwards. Enforcement is universal; capability determines scrutiny, never whether enforcement exists. This is H25, not a Pre-Effect Authority Proof.
+
 ## Transport
 
 ### stdio (Local)
