@@ -377,6 +377,25 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			return Decision{Action: ActionDeny, Reason: reasonUntrustedCredentialCustody}
 		}
 
+	case "allow_application":
+		// Fail-closed mandate application: a tool allowed to sync
+		// staging-orders must not sync production-payments. Declared
+		// APPLICATION fields are the control-plane target; Visor does
+		// not walk k8s/ServiceAccount graphs. Every present alias is
+		// checked. Tool-provider credentials are not caller authority.
+		if !recipientAllowlistConfigured(rule.Patterns) {
+			return Decision{Action: ActionDeny, Reason: "application allowlist is empty"}
+		}
+		slots, reason := collectApplicationSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		for _, slot := range slots {
+			if !recipientInAllowlist(rule.Patterns, slot) {
+				return Decision{Action: ActionDeny, Reason: reasonAuthorityExpandingApplication}
+			}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -757,6 +776,14 @@ const reasonUntrustedCredentialCustody = "untrusted credential custody: argument
 // First-match is not used. api_key EqualFold-matches Api_Key; apikey is distinct.
 var secretSlotKeys = []string{"api_key", "apikey", "access_key", "secret", "password", "credential", "private_key", "token", "new_key"}
 
+// reasonAuthorityExpandingApplication is the deny evidence for allow_application.
+const reasonAuthorityExpandingApplication = "authority-expanding application: argument class APPLICATION, effect class CONTROL_PLANE, authority transition MANDATE->CLUSTER"
+
+// applicationSlotKeys are APPLICATION-class aliases inspected by allow_application.
+// First-match is not used. app_name EqualFold-matches App_Name; appname is distinct.
+// name is the Argo MCP application identifier when this rule is attached.
+var applicationSlotKeys = []string{"application", "app", "application_name", "app_name", "applicationname", "appname", "name"}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -937,6 +964,36 @@ func collectPresentSecretSlots(args map[string]any) ([]string, string) {
 			return nil, "credential is required"
 		}
 		values = append(values, s)
+	}
+	return values, ""
+}
+
+func isApplicationSlotKey(key string) bool {
+	for _, alias := range applicationSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectApplicationSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, "application is required"
+	}
+	values := make([]string, 0, len(applicationSlotKeys))
+	for key, val := range args {
+		if !isApplicationSlotKey(key) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, "application is required"
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, "application is required"
 	}
 	return values, ""
 }

@@ -310,6 +310,35 @@ func TestLintAllowDestinationIsKnown(t *testing.T) {
 	}
 }
 
+func TestLintAllowApplicationIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "argocd",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "argocd_sync",
+						Rules: []ArgRule{
+							{Type: "allow_application", Patterns: []string{"staging-orders"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("allow_application must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintDenySecretIsKnown(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",
@@ -1206,6 +1235,39 @@ func TestLintRuleMissingWorkingDirectoryPatterns(t *testing.T) {
 						Name: "run_python",
 						Rules: []ArgRule{
 							{Type: "allow_working_directory", Patterns: []string{}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	found := false
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "has no patterns") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no patterns' warning, violations: %+v", res.Violations)
+	}
+}
+
+func TestLintRuleMissingApplicationPatterns(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "test",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "argocd_sync",
+						Rules: []ArgRule{
+							{Type: "allow_application", Patterns: []string{}},
 						},
 					},
 				},
