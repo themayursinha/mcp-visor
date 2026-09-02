@@ -92,6 +92,7 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Untrusted credential custody: `deny_secret` denies SECRET-class arguments before relay. A schema-valid `configure_secret` whose `api_key` is a valid replacement key is still denied. Credential validity is not custody.
 - Authority-expanding application: `allow_application` is an exact, fail-closed application slot. A mandate to sync `staging-orders` does not authorize `argocd_sync` of `production-payments`. A tool-provider token is not caller authority.
 - Unauthorized skill promotion: `allow_skill` is an exact, fail-closed skill-identity slot. A mandate to install `workspace-lint` does not authorize `install_skill` of `attacker-registry`. Experience cannot manufacture a new skill name.
+- Permission-bypass delegation: `deny_permission_bypass` is a fail-closed spawn-flag slot. A mandate to create a worker does not authorize `spawn_agent` with skip-permissions. Explicitly-off values are not a bypass. Delegation graphs are out of model.
 
 ## Session-taint egress control
 

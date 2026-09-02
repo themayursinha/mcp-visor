@@ -30,6 +30,7 @@ func Lint(p *Policy) LintResult {
 		"deny_secret":             true,
 		"allow_application":       true,
 		"allow_skill":             true,
+		"deny_permission_bypass":  true,
 		"allowed_repos":           true,
 		"max_file_size":           true,
 		"max_result_rows":         true, "max_export_rows": true,

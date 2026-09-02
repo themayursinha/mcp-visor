@@ -368,6 +368,35 @@ func TestLintAllowApplicationIsKnown(t *testing.T) {
 	}
 }
 
+func TestLintDenyPermissionBypassIsKnown(t *testing.T) {
+	p := &Policy{
+		Version:       "1.0",
+		DefaultAction: ActionDeny,
+		Settings:      Settings{ChainWindowSize: 10},
+		Servers: []Server{
+			{
+				Name:    "orchestrator",
+				Allowed: true,
+				Tools: []ToolRule{
+					{
+						Name: "spawn_agent",
+						Rules: []ArgRule{
+							{Type: "deny_permission_bypass"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("deny_permission_bypass must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintDenySecretIsKnown(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",

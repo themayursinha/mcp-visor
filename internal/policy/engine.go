@@ -416,6 +416,21 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
+	case "deny_permission_bypass":
+		// Fail-closed permission-bypass slot: a tool allowed to spawn a
+		// worker must not disable permission mediation on the child.
+		// Declared PERMISSION-bypass fields are the weakening signal;
+		// Visor does not compare parent/child obligation graphs.
+		// Explicitly-off values are not a bypass. Command strings are
+		// not parsed. Nested principals are out of model.
+		slots, reason := collectPresentPermissionBypassSlots(args)
+		if reason != "" {
+			return Decision{Action: ActionDeny, Reason: reason}
+		}
+		if len(slots) > 0 {
+			return Decision{Action: ActionDeny, Reason: reasonPermissionBypassDelegation}
+		}
+
 	case "deny_command_pattern":
 		if cmd, ok := getStringArg(args, "command", "cmd", "exec"); ok {
 			for _, pattern := range rule.Patterns {
@@ -812,6 +827,18 @@ const reasonUnauthorizedSkillPromotion = "unauthorized skill promotion: argument
 // skill_content / body are not identity aliases; Visor does not parse skill text.
 var skillSlotKeys = []string{"skill", "skill_id", "skill_name", "skillname", "skill_key", "skill_slug"}
 
+// reasonPermissionBypassDelegation is the deny evidence for deny_permission_bypass.
+const reasonPermissionBypassDelegation = "permission-bypass delegation: argument class PERMISSION, effect class DELEGATION, authority transition PARENT->CHILD"
+
+// permissionBypassSlotKeys are PERMISSION-bypass aliases inspected by deny_permission_bypass.
+// First-match is not used. skip_permissions EqualFold-matches Skip_Permissions;
+// skippermissions is distinct. permission_mode / flags / args / command are not aliases.
+var permissionBypassSlotKeys = []string{
+	"skip_permissions", "skip_permission", "skippermissions",
+	"dangerously_skip_permissions", "dangerouslyskippermissions",
+	"bypass_permissions", "bypasspermissions",
+}
+
 // pathShellMetacharacters are ASCII runes that turn a PATH-class argument
 // into a SHELL fragment when interpolated into a command. This is not a
 // shell parser. Unicode homoglyphs, percent-encoding, and glob-only
@@ -1054,6 +1081,62 @@ func collectSkillSlots(args map[string]any) ([]string, string) {
 		return nil, "skill is required"
 	}
 	return values, ""
+}
+
+func isPermissionBypassSlotKey(key string) bool {
+	for _, alias := range permissionBypassSlotKeys {
+		if strings.EqualFold(key, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPresentPermissionBypassSlots(args map[string]any) ([]string, string) {
+	if args == nil {
+		return nil, ""
+	}
+	values := make([]string, 0, len(permissionBypassSlotKeys))
+	for key, val := range args {
+		if !isPermissionBypassSlotKey(key) {
+			continue
+		}
+		weakens, reason := permissionBypassWeakens(val)
+		if reason != "" {
+			return nil, reason
+		}
+		if weakens {
+			values = append(values, "bypass")
+		}
+	}
+	return values, ""
+}
+
+func permissionBypassWeakens(val any) (bool, string) {
+	switch v := val.(type) {
+	case bool:
+		return v, ""
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return false, "permission bypass is required"
+		}
+		if permissionBypassExplicitlyOff(s) {
+			return false, ""
+		}
+		return true, ""
+	default:
+		return false, "permission bypass is required"
+	}
+}
+
+func permissionBypassExplicitlyOff(s string) bool {
+	switch strings.ToLower(s) {
+	case "false", "0", "no", "off":
+		return true
+	default:
+		return false
+	}
 }
 
 func isOwnerSlotKey(key string) bool {
