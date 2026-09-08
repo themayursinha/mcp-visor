@@ -20,14 +20,16 @@ Model guardrails try to shape what the model says or thinks inside the context w
 
 ## The Visor Trust Plane research program
 
-MCP Visor is the production enforcement layer of a broader research program on **governing autonomous agents at the boundary**. A sibling identity plane authenticates *who* is acting; two deterministic prototypes prove authority and capability semantics before any integration into this repo:
+MCP Visor is the production enforcement layer of a broader research program on **governing autonomous agents at the boundary**.
 
 | Repo | Question it answers | Status |
 |---|---|---|
-| [**mcp-visor**](https://github.com/themayursinha/mcp-visor) | What may an agent do? (runtime policy at the MCP `tools/call` boundary) | **Production** |
+| [**mcp-visor**](https://github.com/themayursinha/mcp-visor) | What may an agent *do*? (runtime policy at the MCP `tools/call` boundary) | **Production** |
 | [**agent-identity-plane**](https://github.com/themayursinha/agent-identity-plane) | *Who* is acting, for whom, through which chain? (identity + provenance) | v0.1.0 |
-| [**authority-graph-simulator**](https://github.com/themayursinha/authority-graph-simulator) | What authority can an agent *reach*? (counterfactual delegation analysis) | Prototype, merged |
-| [**capability-delta-receipts**](https://github.com/themayursinha/capability-delta-receipts) | What capability can an agent *acquire*? (trajectory-level capability accounting) | Prototype, merged |
+| [**authority-graph-simulator**](https://github.com/themayursinha/authority-graph-simulator) | What authority can an agent *reach*? (counterfactual delegation analysis) | Prototype |
+| [**capability-delta-receipts**](https://github.com/themayursinha/capability-delta-receipts) | What capability can an agent *acquire*? (trajectory-level capability accounting) | Prototype |
+
+This binary is the `tools/call` action boundary. Agent Identity Plane authenticates callers and carries actor-chain provenance via a visor-gateway; it is not yet an in-proxy token gate. The two prototypes are standalone proofs. Capability-delta semantics also exist here as an opt-in evaluator (`-capability-eval` or `settings.capability_accounting`); the authority-graph is not in the proxy.
 
 The Trust Plane governs not just what authority an agent is *given*, but what new authority its *discoveries make possible* — authorization must be re-evaluated when an agent materially increases its effective capabilities, even when nominal permissions are unchanged.
 
@@ -203,7 +205,7 @@ mcp-visor version          Print version
 
 Common flags: `-server`, `-policy`, `-audit-log`, `-approval-dir`, `-approval-cli`, `-demo`
 
-Advanced flags: `-server-url`, `-webhook-url`, `-siem-target`, `-vault-addr`, `-metrics-addr`, `-otel-endpoint`, `-dashboard`, `-trace`
+Advanced flags: `-server-url`, `-webhook-url`, `-siem-target`, `-vault-addr`, `-metrics-addr`, `-otel-endpoint`, `-dashboard`, `-trace`, `-capability-eval`
 
 Full reference: `mcp-visor serve -h`
 
