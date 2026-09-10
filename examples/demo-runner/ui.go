@@ -83,7 +83,7 @@ func runUI(addr string) error {
 
 	driveErr := make(chan error, 1)
 	go func() {
-		driveErr <- sess.driveSequence(false, time.Second)
+		driveErr <- sess.driveSequence(false, 0, time.Second)
 	}()
 	select {
 	case <-ctx.Done():
