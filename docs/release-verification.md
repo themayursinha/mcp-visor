@@ -9,13 +9,14 @@ keyless Sigstore OIDC):
 | `*.sbom.json` | Machine-readable SBOM per archive (covered by `checksums.txt`) |
 | SLSA attestation | Build provenance, verifiable with `gh` |
 
-Verify a download (replace `vX.Y.Z`):
+Verify a download (replace `vX.Y.Z` and `<version>` with the release tag and
+version, e.g. tag `v1.4.2` → version `1.4.2`):
 
 ```bash
 # verify only the archive you downloaded (checksums.txt lists every archive)
-grep mcp-visor_1.4.2-next_linux_amd64.tar.gz checksums.txt | sha256sum -c   # Linux
-grep mcp-visor_1.4.2-next_darwin_arm64.tar.gz checksums.txt | shasum -a 256 -c  # macOS
-```
+ASSET=mcp-visor_<version>_linux_amd64.tar.gz  # or the darwin_amd64/arm64 asset
+grep "$ASSET" checksums.txt | sha256sum -c   # Linux
+grep "$ASSET" checksums.txt | shasum -a 256 -c  # macOS
 gh attestation verify checksums.txt --repo themayursinha/mcp-visor
 cosign verify-blob --bundle checksums.txt.sig \
   --certificate-identity 'https://github.com/themayursinha/mcp-visor/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
