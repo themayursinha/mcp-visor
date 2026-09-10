@@ -72,13 +72,15 @@ jobs:
           go-version: "1.26.8"
       - run: go install github.com/anchore/syft/cmd/syft@v1.51.1
       - run: go install github.com/sigstore/cosign/v3/cmd/cosign@v3.1.3
-      # Fork PRs get no OIDC token, so keyless signing cannot run there. Keep
-      # snapshot+SBOM validation for every PR; skip only the signing step from
-      # untrusted fork context.
+      # Keyless signing needs an OIDC identity, which pull_request context does
+      # not reliably provide (forks, Dependabot and similar restricted actors
+      # get no OIDC token). Gate on event type, not actor identity, so no
+      # future restricted actor can break the gate: PRs prove snapshot+SBOM,
+      # signing is proven on every push to main.
       - name: Determine signing
         id: sign
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "skip=--skip=sign" >> "$GITHUB_OUTPUT"
           fi
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.0.0
