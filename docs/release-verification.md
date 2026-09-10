@@ -13,10 +13,11 @@ Verify a download (replace `vX.Y.Z` and `<version>` with the release tag and
 version, e.g. tag `v1.4.2` → version `1.4.2`):
 
 ```bash
-# verify only the archive you downloaded (checksums.txt lists every archive)
+# verify only the archive you downloaded (checksums.txt lists every archive
+# and SBOM; the end anchor keeps the archive's own .sbom.json entry out)
 ASSET=mcp-visor_<version>_linux_amd64.tar.gz  # or the darwin_amd64/arm64 asset
-grep "$ASSET" checksums.txt | sha256sum -c   # Linux
-grep "$ASSET" checksums.txt | shasum -a 256 -c  # macOS
+grep " $ASSET$" checksums.txt | sha256sum -c   # Linux
+grep " $ASSET$" checksums.txt | shasum -a 256 -c  # macOS
 gh attestation verify checksums.txt --repo themayursinha/mcp-visor
 cosign verify-blob --bundle checksums.txt.sig \
   --certificate-identity 'https://github.com/themayursinha/mcp-visor/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
