@@ -31,6 +31,9 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+sboms:
+  - artifacts: archive
+
 snapshot:
   name_template: "{{ incpatch .Version }}-next"
 
