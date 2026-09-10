@@ -31,6 +31,15 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    args:
+      - sign-blob
+      - "--yes"
+      - "--bundle=${signature}"
+      - "${artifact}"
+
 sboms:
   - artifacts: archive
 
