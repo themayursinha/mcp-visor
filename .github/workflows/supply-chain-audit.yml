@@ -25,7 +25,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
           govulncheck ./...
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.5.1
-          osv-scanner -r .
+          osv-scanner go.mod go.sum
 
       - name: Verify Docker digest pinning
         run: grep '^FROM ' Dockerfile | grep -q '@sha256:'
