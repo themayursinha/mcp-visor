@@ -23,3 +23,8 @@ cosign verify-blob --bundle checksums.txt.sig \
 Requires `gh` (with attestation support) and cosign v3 for the bundle format.
 `gh attestation verify` alone is sufficient for provenance; the cosign bundle
 adds an independent signature check on the same file.
+
+If the SLSA attestation is absent for a release (failed attest step), the
+cosign signature above is unaffected — it ships inside goreleaser's publish.
+Provenance is backfilled by re-running the failed workflow jobs; no republish
+is needed.

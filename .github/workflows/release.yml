@@ -31,21 +31,20 @@ jobs:
         with:
           distribution: goreleaser
           version: ~> v2
-          args: release --clean --skip=publish
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Attestation runs after goreleaser publishes. This is deliberate, not a
+      # gap: the cosign signature rides inside goreleaser's atomic publish, so a
+      # release is never signature-less. If this step fails, the workflow is red
+      # and provenance is backfilled by re-running failed jobs (attestation is
+      # idempotent; no republish needed). A separate publisher step was rejected:
+      # swapping publishers re-opens prerelease/latest/notes parity deltas one at
+      # a time (see PR discussion).
       - name: Attest release provenance (SLSA)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: dist/checksums.txt
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090  # v2.2.1
-        with:
-          files: dist/*
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
     name: Build Docker Image
