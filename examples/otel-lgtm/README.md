@@ -4,6 +4,9 @@ Companion to Obsidian note: **OTel and LGTM — Agent Security Observability**.
 
 ## Quick start (Python demo)
 
+Requires Python 3.12 (the hashed lock was compiled and verified for 3.12;
+`python3 --version` should report 3.12.x):
+
 ```bash
 cd examples/otel-lgtm
 docker compose up -d
