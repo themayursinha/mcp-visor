@@ -12,7 +12,7 @@ keyless Sigstore OIDC):
 Verify a download (replace `vX.Y.Z`):
 
 ```bash
-sha256sum -c checksums.txt
+sha256sum -c --ignore-missing checksums.txt
 gh attestation verify checksums.txt --repo themayursinha/mcp-visor
 cosign verify-blob --bundle checksums.txt.sig \
   --certificate-identity 'https://github.com/themayursinha/mcp-visor/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
