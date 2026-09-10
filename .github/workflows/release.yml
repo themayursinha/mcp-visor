@@ -17,7 +17,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
-      attestations: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -34,15 +34,32 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Attestation runs after goreleaser publishes. This is deliberate, not a
-      # gap: the cosign signature rides inside goreleaser's atomic publish, so a
-      # release is never signature-less. If this step fails, the workflow is red
-      # and provenance is backfilled by re-running failed jobs (attestation is
-      # idempotent; no republish needed). A separate publisher step was rejected:
-      # swapping publishers re-opens prerelease/latest/notes parity deltas one at
-      # a time (see PR discussion).
-      - name: Attest release provenance (SLSA)
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+      - name: Stage checksums for attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-checksums
+          path: dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  # Separate job so a failed attestation is retried alone: re-running failed
+  # jobs restarts only this job, never the publisher above. The cosign
+  # signature ships inside goreleaser's atomic publish, so a release is never
+  # signature-less while provenance is backfilled.
+  attest:
+    name: Attest release provenance (SLSA)
+    needs: goreleaser
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: release-checksums
+          path: dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: dist/checksums.txt
 
