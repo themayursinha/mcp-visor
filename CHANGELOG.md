@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Coordinated Go toolchain bump 1.26.6 → 1.26.8 across `go.mod`, CI, release, supply-chain audit, and the digest-pinned Docker builder. Supersedes #98, which moved only the Dockerfile builder and would have shipped an image built with an untested toolchain.
+
 ## v1.4.1 (2026-08-17)
 
 ### Fixed
