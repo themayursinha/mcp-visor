@@ -26,5 +26,7 @@ adds an independent signature check on the same file.
 
 If the SLSA attestation is absent for a release (failed attest job), the
 cosign signature above is unaffected — it ships inside goreleaser's publish.
-Provenance is backfilled by re-running only the failed `attest` job; the
-publisher never reruns, so no republish or collision is possible.
+Provenance is backfilled by re-running only the failed `attest` job, which
+re-fetches `checksums.txt` from the published release itself: there is no CI
+artifact to expire and no publisher to rerun, so recovery cannot collide with
+shipped assets.
