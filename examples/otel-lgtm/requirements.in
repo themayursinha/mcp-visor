@@ -1,0 +1,6 @@
+# Direct requirements for the OTel + LGTM local lab.
+# Compile into the hashed lockfile with:
+#   uv pip compile requirements.in --generate-hashes --python-version 3.12 -o requirements.txt
+opentelemetry-api>=1.28.0
+opentelemetry-sdk>=1.28.0
+opentelemetry-exporter-otlp-proto-grpc>=1.28.0

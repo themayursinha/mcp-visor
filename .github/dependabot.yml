@@ -4,6 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Quarantine freshly published modules (matches min-release-age posture).
+    cooldown:
+      default-days: 1
     open-pull-requests-limit: 5
 
   - package-ecosystem: "docker"
