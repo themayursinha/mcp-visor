@@ -28,6 +28,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // SpecVersion is the bundle schema version this package implements.
@@ -325,6 +326,12 @@ func (b *Bundle) Marshal() ([]byte, error) {
 // Call Verify afterwards; parsing alone proves nothing.
 func Unmarshal(data []byte) (*Bundle, error) {
 	var b Bundle
+	// encoding/json coerces invalid UTF-8 to U+FFFD, which would reproduce
+	// signed hashes from byte-different input: strict consumers must never
+	// see what lenient decoding normalized away.
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("bundle is not valid UTF-8")
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	// Strict struct decoding: unknown fields outside payload would
@@ -372,18 +379,36 @@ func exactKeys[T any]() map[string]bool {
 	return out
 }
 
+// requiredKeys returns the canonical members without `omitempty`: they
+// must be present (zero values marshal back identically, so presence —
+// not value — is what absence attacks remove).
+func requiredKeys[T any]() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		name, opts, _ := strings.Cut(tag, ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		if strings.Contains(opts, "omitempty") {
+			continue
+		}
+		out[name] = true
+	}
+	return out
+}
+
 // checkExactShape requires every struct-level member to use its canonical
-// spelling. Payload maps stay open; everything else is schema-fixed.
+// spelling, and every mandatory member to be present. Payload maps stay
+// open; everything else is schema-fixed.
 func checkExactShape(data []byte) error {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
 		return fmt.Errorf("unmarshal bundle envelope: %w", err)
 	}
-	bundleKeys := exactKeys[Bundle]()
-	for k := range top {
-		if !bundleKeys[k] {
-			return fmt.Errorf("non-canonical bundle member %q", k)
-		}
+	if err := checkMembers("bundle", top, exactKeys[Bundle](), requiredKeys[Bundle]()); err != nil {
+		return err
 	}
 	manifestKeys := exactKeys[Manifest]()
 	var manifest map[string]json.RawMessage
@@ -391,13 +416,12 @@ func checkExactShape(data []byte) error {
 		if err := json.Unmarshal(raw, &manifest); err != nil {
 			return fmt.Errorf("unmarshal manifest envelope: %w", err)
 		}
-		for k := range manifest {
-			if !manifestKeys[k] {
-				return fmt.Errorf("non-canonical manifest member %q", k)
-			}
+		if err := checkMembers("manifest", manifest, manifestKeys, requiredKeys[Manifest]()); err != nil {
+			return err
 		}
 	}
 	eventKeys := exactKeys[Event]()
+	eventRequired := requiredKeys[Event]()
 	var events []json.RawMessage
 	if raw, ok := top["events"]; ok {
 		if err := json.Unmarshal(raw, &events); err != nil {
@@ -408,11 +432,24 @@ func checkExactShape(data []byte) error {
 			if err := json.Unmarshal(eraw, &em); err != nil {
 				return fmt.Errorf("unmarshal event %d envelope: %w", i, err)
 			}
-			for k := range em {
-				if !eventKeys[k] {
-					return fmt.Errorf("non-canonical event member %q", k)
-				}
+			if err := checkMembers(fmt.Sprintf("event %d", i), em, eventKeys, eventRequired); err != nil {
+				return err
 			}
+		}
+	}
+	return nil
+}
+
+// checkMembers rejects non-canonical spellings and absent mandatory members.
+func checkMembers(where string, got map[string]json.RawMessage, exact, required map[string]bool) error {
+	for k := range got {
+		if !exact[k] {
+			return fmt.Errorf("non-canonical %s member %q", where, k)
+		}
+	}
+	for k := range required {
+		if _, ok := got[k]; !ok {
+			return fmt.Errorf("%s is missing required member %q", where, k)
 		}
 	}
 	return nil

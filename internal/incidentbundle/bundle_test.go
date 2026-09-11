@@ -754,3 +754,39 @@ func TestEmptyKeyIDRejected(t *testing.T) {
 		t.Fatal("empty manifest key id verified")
 	}
 }
+
+func TestMissingRequiredMemberRejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Delete zero-valued required members: typed decode restores the same
+	// zeros, so only presence checking catches the surgery.
+	stripped := bytes.Replace(data, []byte(`"seq":0,`), []byte(``), 1)
+	stripped = bytes.Replace(stripped, []byte(`"prev_hash":"",`), []byte(``), 1)
+	if bytes.Equal(stripped, data) {
+		t.Skip("fixture shape changed; rewrite surgery")
+	}
+	if _, err := Unmarshal(stripped); err == nil {
+		t.Fatal("missing required members accepted")
+	}
+	if _, err := Unmarshal(data); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+}
+
+func TestInvalidUTF8Rejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := bytes.Replace(data, []byte("readme.md"), []byte{'r', 'e', 'a', 'd', 0xff, 'm', 'e', '.', 'm', 'd'}, 1)
+	if bytes.Equal(corrupt, data) {
+		t.Skip("fixture shape changed; rewrite surgery")
+	}
+	if _, err := Unmarshal(corrupt); err == nil {
+		t.Fatal("invalid UTF-8 accepted")
+	}
+}

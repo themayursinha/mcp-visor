@@ -67,10 +67,12 @@ manifest field.
   `ed25519-vault-transit`, and `TransitVerifier` reports it), while
   non-reporting verifiers accept plain `ed25519` only; empty key ids on
   either side reject. Appending after sealing invalidates the signature
-  until re-sealed. Decoding requires exact canonical member spellings
-  (case variants rejected) and rejects duplicate members at every object
-  level, so unsigned or ambiguous claims cannot ride along; `supersedes`
-  is valid only on a genuine confirmation upgrade.
+  until re-sealed. Decoding requires valid UTF-8, exact canonical member
+  spellings (case variants rejected), presence of every mandatory member
+  (zero values marshal back identically, so presence is what absence
+  attacks remove), and rejects duplicate members at every object level —
+  unsigned, ambiguous, or incomplete documents cannot ride along;
+  `supersedes` is valid only on a genuine confirmation upgrade.
 - `Verify` checks: spec version, event count vs manifest, sequence numbers,
   chain linkage, payload bindings, required episode stages in order
   (`requested_action` → `policy_decision` → `runtime_attempt` →
