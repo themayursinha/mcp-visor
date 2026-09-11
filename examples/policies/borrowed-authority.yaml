@@ -1,0 +1,49 @@
+# Borrowed-authority fixture: fixed-clock policy documenting the ownership
+# and grant schema. The live demo generates time-relative grants at runtime;
+# unit tests pin the clock instead. Do not point production at this file.
+version: "1.0"
+description: "Tenant-B tools behind ownership proofs; tenant-A holds one narrow delegation."
+default_action: deny
+servers:
+  - name: "mcp-server-A"
+    allowed: true
+    tools:
+      - name: "calculator"
+        allowed: true
+        risk: low
+  - name: "mcp-server-B"
+    allowed: true
+    tools:
+      - name: "read_secret"
+        allowed: true
+        risk: high
+      - name: "internal_fetch"
+        allowed: true
+        risk: high
+capability_ownership:
+  endpoints:
+    - server: mcp-server-A
+      owner: tenant-A
+      capabilities:
+        - tool: calculator
+          effect_class: COMPUTE
+    - server: mcp-server-B
+      owner: tenant-B
+      capabilities:
+        - tool: read_secret
+          effect_class: CREDENTIAL
+        - tool: internal_fetch
+          effect_class: NETWORK
+          scope_argument: resource
+  delegations:
+    - id: b-to-a-fetch-x
+      owner: tenant-B
+      delegate: tenant-A
+      server: mcp-server-B
+      tool: internal_fetch
+      effect_class: NETWORK
+      resource_scope:
+        argument: resource
+        exact_values: ["X"]
+      issued_at: "2026-09-11T10:00:00Z"
+      expires_at: "2026-09-11T10:15:00Z"

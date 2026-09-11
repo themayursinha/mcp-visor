@@ -41,6 +41,7 @@ time_restrictions: # Time-of-day access controls (optional)
 | `identities` | array | No | Per-agent identity-based access control. |
 | `time_restrictions` | array | No | Time-of-day or day-of-week access restrictions. |
 | `redaction` | object | No | Sensitive data detection and redaction configuration. |
+| `capability_ownership` | object | No | Cross-principal capability ownership bindings plus exact delegation grants. Absent: no ownership proofs, zero behavioral delta. |
 
 ## Settings
 
@@ -607,9 +608,59 @@ servers:
   ceilings, cross-session budgets, and identity-plane token parsing
   (see card t_1851c97f design contract).
 
+## Capability Ownership
+
+Cross-principal authority proofs for multi-tenant routing layers. An
+optional `capability_ownership` block binds exact logical server names to
+one exact owner principal and enumerates protected tools with effect
+classes. The requester is always the operator-supplied `--client-id`;
+never an MCP argument. Everything matches as case-sensitive bytes: no
+globs, aliases, or substring matching.
+
+```yaml
+capability_ownership:
+  endpoints:
+    - server: mcp-server-B
+      owner: tenant-B
+      capabilities:
+        - tool: read_secret
+          effect_class: CREDENTIAL
+        - tool: internal_fetch
+          effect_class: NETWORK
+          scope_argument: resource
+  delegations:
+    - id: b-to-a-fetch-x
+      owner: tenant-B
+      delegate: tenant-A
+      server: mcp-server-B
+      tool: internal_fetch
+      effect_class: NETWORK
+      resource_scope:
+        argument: resource
+        exact_values: ["X"]
+      issued_at: "2026-09-11T10:00:00Z"
+      expires_at: "2026-09-11T10:15:00Z"
+```
+
+- Every allowed tool on a listed endpoint must declare exactly one
+  capability; duplicates, unknown servers, owner/tool/effect mismatches,
+  malformed timestamps, and inverted expiries fail policy loading.
+- Evaluation runs after ordinary policy evaluation succeeds (or requires
+  approval) and before egress, chain, approval, commit, or relay. Direct
+  owner calls pass; otherwise exactly one unexpired grant must match
+  requester, endpoint, owner, tool, effect class, scope value, and time
+  window — zero or multiple matches deny. Ownership never converts a deny
+  to allow. Grants are valid for `issued_at <= now < expires_at`.
+- Denials carry `cross-principal authority acquisition: capability
+  ownership proof invalid (<reason>); argument class PRINCIPAL; effect
+  class THIRD_PARTY; authority transition USER->OTHER`. Terminal events
+  attach the signed `capability_ownership_v1` receipt via dedicated
+  `ownership_receipt` fields; receipt failure on a potential allow denies.
+- The policy file asserts delegations (no tenant PKI). Requester identity
+  itself is operator-supplied, not authenticated by core Visor.
+
 ## Identity-Based Access
 Restrict tool access per agent identity. Only tools/servers listed in the identity's allowlists are permitted.
-
 ```yaml
 identities:
   - name: "github-copilot-dev"

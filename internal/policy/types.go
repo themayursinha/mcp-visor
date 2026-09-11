@@ -31,6 +31,10 @@ type Policy struct {
 	Identities       []Identity          `yaml:"identities"`
 	TimeRestrictions []TimeRestriction   `yaml:"time_restrictions"`
 	Redaction        RedactionConfig     `yaml:"redaction"`
+	// CapabilityOwnership binds logical servers to owner principals plus
+	// exact delegation grants. Nil (absent) disables ownership proofs with
+	// zero behavioral delta.
+	CapabilityOwnership *CapabilityOwnership `yaml:"capability_ownership,omitempty"`
 }
 
 type Settings struct {

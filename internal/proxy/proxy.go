@@ -67,6 +67,10 @@ type Proxy struct {
 	launchShape          *attestationShape
 	serverClaimedName    string
 	serverClaimedVersion string
+	// nowFunc supplies evaluation time for time-bound gates (capability
+	// ownership grant windows). Defaults to the system clock; tests pin it
+	// for determinism.
+	nowFunc func() time.Time
 }
 
 // attestationShape is the immutable resolution shape of the launch-time pin:
@@ -224,6 +228,7 @@ func New(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 		capEval:        newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+		nowFunc:        func() time.Time { return time.Now().UTC() },
 	}
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
@@ -283,6 +288,7 @@ func NewWithTracing(cfg Config) *Proxy {
 		siem:           siemExp,
 		approvalSigner: approvalSigner,
 		capEval:        newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+		nowFunc:        func() time.Time { return time.Now().UTC() },
 	}
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash

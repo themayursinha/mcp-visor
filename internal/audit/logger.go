@@ -57,27 +57,32 @@ const (
 )
 
 type Event struct {
-	Timestamp              string         `json:"timestamp"`
-	EventType              EventType      `json:"event_type"`
-	SessionID              string         `json:"session_id"`
-	AgentID                string         `json:"agent_id"`
-	Server                 string         `json:"server"`
-	Tool                   string         `json:"tool,omitempty"`
-	Arguments              map[string]any `json:"arguments,omitempty"`
-	Decision               string         `json:"policy_decision"`
-	Reason                 string         `json:"reason,omitempty"`
-	RiskLevel              string         `json:"risk_level,omitempty"`
-	SessionTaints          []string       `json:"session_taints,omitempty"`
-	TaintSource            string         `json:"taint_source,omitempty"`
-	TaintReason            string         `json:"taint_reason,omitempty"`
-	PolicyRule             string         `json:"policy_rule,omitempty"`
-	ChainContext           []string       `json:"chain_context,omitempty"`
-	RequestHash            string         `json:"request_hash,omitempty"`
-	RedactedArgumentHash   string         `json:"redacted_argument_hash,omitempty"`
-	PolicyHash             string         `json:"policy_hash,omitempty"`
-	ChainContextHash       string         `json:"chain_context_hash,omitempty"`
-	ApprovalReceiptHash    string         `json:"approval_receipt_hash,omitempty"`
-	ApprovalReceipt        map[string]any `json:"approval_receipt,omitempty"`
+	Timestamp            string         `json:"timestamp"`
+	EventType            EventType      `json:"event_type"`
+	SessionID            string         `json:"session_id"`
+	AgentID              string         `json:"agent_id"`
+	Server               string         `json:"server"`
+	Tool                 string         `json:"tool,omitempty"`
+	Arguments            map[string]any `json:"arguments,omitempty"`
+	Decision             string         `json:"policy_decision"`
+	Reason               string         `json:"reason,omitempty"`
+	RiskLevel            string         `json:"risk_level,omitempty"`
+	SessionTaints        []string       `json:"session_taints,omitempty"`
+	TaintSource          string         `json:"taint_source,omitempty"`
+	TaintReason          string         `json:"taint_reason,omitempty"`
+	PolicyRule           string         `json:"policy_rule,omitempty"`
+	ChainContext         []string       `json:"chain_context,omitempty"`
+	RequestHash          string         `json:"request_hash,omitempty"`
+	RedactedArgumentHash string         `json:"redacted_argument_hash,omitempty"`
+	PolicyHash           string         `json:"policy_hash,omitempty"`
+	ChainContextHash     string         `json:"chain_context_hash,omitempty"`
+	ApprovalReceiptHash  string         `json:"approval_receipt_hash,omitempty"`
+	ApprovalReceipt      map[string]any `json:"approval_receipt,omitempty"`
+	// OwnershipReceiptHash/Receipt carry a signed Capability Ownership
+	// Proof (card t_02a1bc43). Dedicated fields: never reuse or overwrite
+	// approval/capability-accounting receipt fields.
+	OwnershipReceiptHash   string         `json:"ownership_receipt_hash,omitempty"`
+	OwnershipReceipt       map[string]any `json:"ownership_receipt,omitempty"`
 	ServerIdentityKind     string         `json:"server_identity_kind,omitempty"`
 	ServerIdentityExpected string         `json:"server_identity_expected,omitempty"`
 	ServerIdentityResolved string         `json:"server_identity_resolved,omitempty"`
