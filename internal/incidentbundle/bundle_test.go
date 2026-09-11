@@ -453,3 +453,32 @@ func TestTrailingDataRejected(t *testing.T) {
 		t.Fatal("trailing data accepted")
 	}
 }
+
+func TestEvidencelessEventRejected(t *testing.T) {
+	// Hand-built bundle bypassing Append: every stage present and chained,
+	// but no payload evidence anywhere. Verify must uphold Append's invariant.
+	s := exampleSeedKey(t)
+	b := &Bundle{Manifest: Manifest{BundleID: "x", SpecVersion: SpecVersion, CreatedAt: 1, PolicyHash: "p"}}
+	prev := ""
+	for i, k := range []string{KindRequestedAction, KindPolicyDecision, KindRuntimeAttempt, KindExternalEffect} {
+		ev := Event{Seq: uint64(i), PrevHash: prev, Kind: k, Timestamp: int64(10 + i)}
+		if k == KindExternalEffect {
+			ev.Confirmation = ConfirmationConfirmed
+		}
+		h, err := eventHash(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ev.Hash = h
+		prev = h
+		b.Events = append(b.Events, ev)
+	}
+	b.Manifest.EventCount = uint64(len(b.Events))
+	b.Manifest.HeadHash = prev
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("evidenceless bundle verified")
+	}
+}

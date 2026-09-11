@@ -225,6 +225,11 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 		if ev.Seq != uint64(i) {
 			return fmt.Errorf("event %d has seq %d", i, ev.Seq)
 		}
+		// Append guarantees payload evidence; re-check here so hand-built
+		// bundles cannot slip evidenceless events past verification.
+		if ev.Payload == nil && ev.PayloadHash == "" {
+			return fmt.Errorf("event %d carries neither payload nor payload_hash", i)
+		}
 		if ev.PrevHash != prev {
 			return fmt.Errorf("event %d breaks the hash chain", i)
 		}
