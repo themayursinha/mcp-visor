@@ -113,7 +113,7 @@ var Contract = []MetricDef{
 	{
 		Name:          MetricApprovalOverridesTotal,
 		Definition:    "Holds resolved without a grant receipt (bypassed or decided off-record).",
-		SourceEvent:   "(no bypass/override outcome event exists)",
+		SourceEvent:   "none: no bypass/override outcome event exists",
 		SourceField:   "approval_outcome",
 		Computability: NeedsNewField,
 		Gap:           "Emit tool_call_approved / tool_call_approval_overridden with outcome + receipt hash; see docs/brake-metrics.md.",

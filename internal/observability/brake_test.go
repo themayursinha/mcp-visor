@@ -363,8 +363,10 @@ func TestDocContractTableMatches(t *testing.T) {
 		}
 		for _, token := range strings.Split(m.SourceEvent, "+") {
 			token = normalizeToken(token)
-			if idx := strings.Index(token, "("); idx >= 0 {
-				token = token[:idx]
+			// Strip one trailing annotation such as " (hold)"; leading
+			// text always participates in matching.
+			if i := strings.LastIndex(token, "("); i > 0 && strings.HasSuffix(token, ")") {
+				token = token[:i]
 			}
 			if token == "" {
 				continue
