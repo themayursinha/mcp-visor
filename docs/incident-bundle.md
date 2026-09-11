@@ -69,9 +69,9 @@ manifest field.
   either side reject. Appending after sealing invalidates the signature
   until re-sealed. Decoding requires valid UTF-8 with no surrogate escapes,
   exact canonical member spellings (case variants rejected), presence of
-  every mandatory member with non-null values (zero values marshal back
-  identically, so presence and null-ness are what absence attacks remove),
-  and rejects duplicate members at every object level — unsigned,
+  every mandatory member, and non-null values for every struct member
+  (null restores zeros that omitempty then drops from signature payloads;
+  nulls inside opaque payload maps stay legal data) — unsigned,
   ambiguous, or incomplete documents cannot ride along; `supersedes`
   is valid only on a genuine confirmation upgrade.
 - `Verify` checks: spec version, event count vs manifest, sequence numbers,

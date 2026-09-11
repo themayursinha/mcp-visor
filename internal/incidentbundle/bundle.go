@@ -449,19 +449,24 @@ func checkExactShape(data []byte) error {
 // checkMembers rejects non-canonical spellings and absent or null
 // mandatory members. Null restores typed zero values identically, so
 // presence alone cannot prove completeness.
+// checkMembers rejects non-canonical spellings, absent mandatory members,
+// and null values. Null restores typed zero values identically (and
+// omitempty drops them from signature payloads), so null anywhere in the
+// struct envelope is indistinguishable from tampering with the signed
+// representation. Payload maps stay exempt: nulls inside opaque evidence
+// are data, not structure.
 func checkMembers(where string, got map[string]json.RawMessage, exact, required map[string]bool) error {
-	for k := range got {
+	for k, raw := range got {
 		if !exact[k] {
 			return fmt.Errorf("non-canonical %s member %q", where, k)
 		}
-	}
-	for k := range required {
-		raw, ok := got[k]
-		if !ok {
-			return fmt.Errorf("%s is missing required member %q", where, k)
-		}
 		if string(bytes.TrimSpace(raw)) == "null" {
 			return fmt.Errorf("%s member %q is null", where, k)
+		}
+	}
+	for k := range required {
+		if _, ok := got[k]; !ok {
+			return fmt.Errorf("%s is missing required member %q", where, k)
 		}
 	}
 	return nil

@@ -847,3 +847,23 @@ func TestRejectSurrogateEscapes(t *testing.T) {
 		}
 	}
 }
+
+func TestNullOptionalMemberRejected(t *testing.T) {
+	b := loadFixture(t, "deny")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Optional member nulled: typed decode restores "" and omitempty drops
+	// it from the signature payload, so only the envelope check catches it.
+	nulled := bytes.Replace(data, []byte(`"redaction_note":"no patterns matched"`), []byte(`"redaction_note":null`), 1)
+	if bytes.Equal(nulled, data) {
+		t.Skip("fixture shape changed; rewrite surgery")
+	}
+	if _, err := Unmarshal(nulled); err == nil {
+		t.Fatal("null optional member accepted")
+	}
+	if _, err := Unmarshal(data); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+}
