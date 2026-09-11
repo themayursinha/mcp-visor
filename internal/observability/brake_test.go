@@ -151,3 +151,40 @@ func TestReconcileConsumesMultiplicity(t *testing.T) {
 		t.Fatalf("unlogged=%d want 1 (replay multiplicity)", rep.UnloggedDenials)
 	}
 }
+
+func TestTruncatedTailRejected(t *testing.T) {
+	data := loadBrakeFixture(t)
+	// Strip the final newline: last record is now a torn tail.
+	torn := bytes.TrimRight(data, "\n")
+	if bytes.Equal(torn, data) {
+		t.Skip("fixture has no trailing newline; rewrite surgery")
+	}
+	if _, err := LoadEvents(bytes.NewReader(torn)); err == nil {
+		t.Fatal("torn tail accepted")
+	}
+	if _, err := LoadEvents(bytes.NewReader(data)); err != nil {
+		t.Fatalf("clean fixture rejected: %v", err)
+	}
+}
+
+func TestTrailingBlankSpaceAccepted(t *testing.T) {
+	data := loadBrakeFixture(t)
+	padded := append(append([]byte{}, data...), []byte("\n  \n")...)
+	events, err := LoadEvents(bytes.NewReader(padded))
+	if err != nil {
+		t.Fatalf("trailing blank space rejected: %v", err)
+	}
+	if len(events) != 12 {
+		t.Fatalf("events=%d want 12", len(events))
+	}
+}
+
+func TestEmptyInputAccepted(t *testing.T) {
+	events, err := LoadEvents(bytes.NewReader([]byte("  \n")))
+	if err != nil {
+		t.Fatalf("blank input rejected: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events=%d want 0", len(events))
+	}
+}

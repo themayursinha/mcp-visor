@@ -155,14 +155,20 @@ type DecisionRef struct {
 
 // LoadEvents parses audit JSONL via a streaming decoder: no line-length cap
 // (production records can exceed 1 MiB), blank space skipped natively.
-// Unknown trailing structure fails closed.
+// Unknown trailing structure fails closed, as does a truncated tail: the
+// producer terminates every record with a newline, so a stream not ending
+// in one ends mid-record and must not contribute a phantom event.
 func LoadEvents(r io.Reader) ([]audit.Event, error) {
+	tap := &tailTapReader{r: r}
 	var events []audit.Event
-	dec := json.NewDecoder(r)
+	dec := json.NewDecoder(tap)
 	for {
 		var ev audit.Event
 		err := dec.Decode(&ev)
 		if err == io.EOF {
+			if err := tap.checkTail(); err != nil {
+				return nil, err
+			}
 			return events, nil
 		}
 		if err != nil {
@@ -173,6 +179,63 @@ func LoadEvents(r io.Reader) ([]audit.Event, error) {
 		}
 		events = append(events, ev)
 	}
+}
+
+// tailTapReader retains the stream tail plus the total count so EOF can
+// distinguish a clean newline-terminated ending (trailing blank space
+// allowed) from a torn record.
+type tailTapReader struct {
+	r     io.Reader
+	tail  []byte
+	total int64
+}
+
+func (t *tailTapReader) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		t.total += int64(n)
+		t.tail = append(t.tail, p[:n]...)
+		if len(t.tail) > 4096 {
+			t.tail = t.tail[len(t.tail)-4096:]
+		}
+	}
+	return n, err
+}
+
+func isSpaceByte(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+
+// checkTail rejects a stream whose final record lacks its terminating
+// newline. Pure whitespace (or empty input) passes. A 4 KiB window
+// suffices: any longer unterminated run is either torn or absurd, and the
+// decoder already validated structure.
+func (t *tailTapReader) checkTail() error {
+	lastNL := -1
+	for i := len(t.tail) - 1; i >= 0; i-- {
+		if t.tail[i] == '\n' {
+			lastNL = i
+			break
+		}
+	}
+	if lastNL < 0 {
+		// No newline in the visible tail: pass only if the whole stream
+		// is visible and blank.
+		if t.total <= int64(len(t.tail)) {
+			for _, c := range t.tail {
+				if !isSpaceByte(c) {
+					return fmt.Errorf("truncated tail: no terminating newline")
+				}
+			}
+		} else {
+			return fmt.Errorf("truncated tail: no terminating newline")
+		}
+		return nil
+	}
+	for _, c := range t.tail[lastNL+1:] {
+		if !isSpaceByte(c) {
+			return fmt.Errorf("truncated tail: final record lacks terminating newline")
+		}
+	}
+	return nil
 }
 
 // unattributedRule labels denials recorded without a policy rule. Free-form

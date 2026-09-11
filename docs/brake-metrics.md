@@ -74,7 +74,9 @@ Same fixture in, same numbers out: no sampling, no estimation, no
 model-produced scores. Inputs are append-only sink records outside the
 agent's write scope; the proof asserts exact expected values. Parsing is
 streaming with no line-length cap (production records can exceed 1 MiB);
-malformed lines and events without a type fail closed at load.
+malformed lines, events without a type, and truncated tails (final record
+lacking its framing newline, per the producer's own incomplete-tail rule)
+fail closed at load, while trailing blank space stays legal.
 
 ## Links
 
