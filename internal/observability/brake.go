@@ -105,9 +105,9 @@ var Contract = []MetricDef{
 	},
 	{
 		Name:          MetricApprovalGrantsTotal,
-		Definition:    "Holds resolved by human grant: allowed with a receipt hash whose request hash matches a preceding hold (capability-accounted allows share the receipt field and never count); each hold satisfies one grant.",
+		Definition:    "Holds resolved by human grant: allowed with a receipt hash whose request hash matches a preceding hold in the same session, each hold consumed once, and whose receipt map identifies a human approve decision (approver_id set, decision approve).",
 		SourceEvent:   string(audit.EventToolAllowed),
-		SourceField:   "approval_receipt_hash",
+		SourceField:   "approval_receipt_hash + request_hash + session_id + approval_receipt.decision/approver_id",
 		Computability: ComputableToday,
 	},
 	{
@@ -135,9 +135,9 @@ var Contract = []MetricDef{
 	},
 	{
 		Name:          MetricUnloggedDenialsTotal,
-		Definition:    "Declared terminal denials with no matching audit event. Mechanism only: most deny paths emit no request hash today, so production use stays a gap until they do.",
-		SourceEvent:   "reconciliation of declared decisions vs tool_call_denied by request_hash",
-		SourceField:   "request_hash",
+		Definition:    "Declared terminal denials with no matching deny event on the same (session, hash) key; declarations missing either half report as unjoinable, never silently as matched or missing. Mechanism only: most deny paths emit no request hash today, so production use stays a gap until they do.",
+		SourceEvent:   "reconciliation of declared decisions vs tool_call_denied by (session_id, request_hash)",
+		SourceField:   "session_id + request_hash",
 		Computability: NeedsNewField,
 		Gap:           "Emit request_hash on all terminal deny events; without join keys the metric cannot run on production logs.",
 	},

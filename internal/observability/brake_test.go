@@ -335,3 +335,21 @@ func TestDenyConsumesOneHold(t *testing.T) {
 		t.Fatalf("grants=%d want 1 (deny must consume exactly one hold)", rep.ApprovalGrants)
 	}
 }
+
+func TestDocListsEveryMetric(t *testing.T) {
+	// Contract/code/doc drift guard: docs/brake-metrics.md must reference
+	// every normative metric name, or the contract table silently lags the
+	// implementation it claims to describe.
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "brake-metrics.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range Contract {
+		if !strings.Contains(string(doc), "`"+m.Name+"`") {
+			t.Fatalf("doc is missing metric %q", m.Name)
+		}
+		if m.SourceField == "" {
+			t.Fatalf("contract entry %q has no source field", m.Name)
+		}
+	}
+}

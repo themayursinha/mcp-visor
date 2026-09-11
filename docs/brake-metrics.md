@@ -22,11 +22,11 @@ v0.1 claims no compliance, no certifications, and no benchmark results.
 | `brake.denied_by_rule` | Denials grouped by recorded policy rule; rule-less denials ride the separate `denied_no_rule` counter: no sentinel string can collide with a legal rule name, and free-form reasons are never folded in | `tool_call_denied` / `policy_rule` | per log scope | computable today, with open refinement below |
 | `brake.denied_no_rule` | Denials recorded without a policy rule (separate counter) | `tool_call_denied` / (absence of `policy_rule`) | per log scope | computable today |
 | `brake.approval_gates_total` | Calls held for human approval | `tool_call_approval_required` / `event_type` | per log scope | computable today |
-| `brake.approval_grants_total` | Holds resolved by human grant, joined to the hold by request hash | `tool_call_allowed` / `approval_receipt_hash` | per log scope | computable today |
+| `brake.approval_grants_total` | Holds resolved by human grant: (request hash, session) hold match consumed once, receipt map identifying human approve | `tool_call_allowed` / `approval_receipt_hash` + `request_hash` + `session_id` + `approval_receipt.decision`/`approver_id` | per log scope | computable today |
 | `brake.approval_overrides_total` | Holds resolved without a grant receipt (bypassed or decided off-record) | none — no bypass/override outcome event | — | needs new field |
 | `brake.chain_intercepts_total` | Chain-rule interceptions | `tool_call_chain_detected` / `event_type` | per log scope | computable today |
 | `brake.taint_blocks_total` | Taint-triggered egress denials (the only branch recording session taints) | `tool_call_denied` / `session_taints` | per log scope | computable today, narrow by construction |
-| `brake.unlogged_denials_total` | Declared terminal denials with no matching deny event (mechanism proof; production use needs the join-key gap closed) | reconciliation of declared decisions vs `tool_call_denied` by `request_hash` | per log scope | needs new field |
+| `brake.unlogged_denials_total` | Declared terminal denials with no matching deny event on the same (session, hash) key; declarations missing either half report as unjoinable (mechanism proof; production use needs the join-key gap closed) | reconciliation of declared decisions vs `tool_call_denied` by (`session_id`, `request_hash`) | per log scope | needs new field |
 
 ## Computability audit (OffSec brake classes)
 
