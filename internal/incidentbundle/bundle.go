@@ -293,6 +293,10 @@ func Unmarshal(data []byte) (*Bundle, error) {
 	var b Bundle
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
+	// Strict struct decoding: unknown fields outside payload would
+	// otherwise slip past every hash and signature below. Maps (payload)
+	// stay open by design.
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(&b); err != nil {
 		return nil, fmt.Errorf("unmarshal bundle: %w", err)
 	}
@@ -344,6 +348,9 @@ func checkEpisode(events []Event) error {
 			}
 		}
 		if rank < 0 {
+			if ev.Supersedes != nil {
+				return fmt.Errorf("supersedes is only valid on a confirmation upgrade")
+			}
 			continue
 		}
 		if ev.Kind == KindExternalEffect {
@@ -355,9 +362,9 @@ func checkEpisode(events []Event) error {
 			// Only genuine confirmation upgrades are allowed after
 			// completion: the repeat must be confirmed, name the
 			// unconfirmed effect it upgrades via supersedes, and that
-			// target must still be unconfirmed. Anything else out of
-			// position — premature, repeated, or regressed — breaks
-			// proof quality.
+			// target must still be unconfirmed and unconsumed. Anything
+			// else out of position — premature, repeated, or regressed —
+			// breaks proof quality.
 			if need == len(requiredStages) && ev.Kind == KindExternalEffect &&
 				ev.Confirmation == ConfirmationConfirmed && validUpgradeTarget(events, i, ev, consumed) {
 				consumed[*ev.Supersedes] = true
@@ -367,6 +374,12 @@ func checkEpisode(events []Event) error {
 				return fmt.Errorf("episode already complete: unexpected %q", ev.Kind)
 			}
 			return fmt.Errorf("episode out of order: got %q, want required stage %q", ev.Kind, requiredStages[need])
+		}
+		// Supersedes exists exclusively for the upgrade branch above: a
+		// first effect, a required stage, or an auxiliary event carrying
+		// it encodes an unvalidated supersession edge.
+		if ev.Supersedes != nil {
+			return fmt.Errorf("supersedes is only valid on a confirmation upgrade")
 		}
 		need++
 	}

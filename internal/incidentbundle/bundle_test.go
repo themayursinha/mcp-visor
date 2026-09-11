@@ -572,3 +572,50 @@ func TestDoubleUpgradeRejected(t *testing.T) {
 		t.Fatal("double-spend upgrade verified")
 	}
 }
+
+func TestStraySupersedesRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	// Supersedes on the first (in-order) effect: unvalidated edge.
+	b := New("exec-stray-001", "policy-sha256:demo", 1788000080)
+	ts := int64(1788000081)
+	mk := func(kind, confirmation string, supersedes *uint64) {
+		mustAppend(t, b, kind, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": kind}
+			ev.Confirmation = confirmation
+			ev.Supersedes = supersedes
+		})
+		ts++
+	}
+	self := uint64(0)
+	mk(KindRequestedAction, "", nil)
+	mk(KindPolicyDecision, "", nil)
+	mk(KindRuntimeAttempt, "", nil)
+	mk(KindExternalEffect, ConfirmationConfirmed, &self)
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("stray supersedes verified")
+	}
+}
+
+func TestUnknownFieldRejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inject an unsigned top-level claim into the manifest.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["manifest"].(map[string]any)["reviewer_note"] = "trust me"
+	doctored, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Unmarshal(doctored); err == nil {
+		t.Fatal("unknown manifest field accepted")
+	}
+}
