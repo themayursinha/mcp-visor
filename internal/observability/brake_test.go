@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -361,19 +362,11 @@ func TestDocContractTableMatches(t *testing.T) {
 				t.Fatalf("row %q omits source vocabulary %q", m.Name, strings.TrimSpace(token))
 			}
 		}
-		for _, token := range strings.Split(m.SourceEvent, "+") {
-			token = normalizeToken(token)
-			// Strip one trailing annotation such as " (hold)"; leading
-			// text always participates in matching.
-			if i := strings.LastIndex(token, "("); i > 0 && strings.HasSuffix(token, ")") {
-				token = token[:i]
-			}
-			if token == "" {
-				continue
-			}
-			if !strings.Contains(normalizeToken(row.event), token) {
-				t.Fatalf("row %q omits source event %q", m.Name, strings.TrimSpace(token))
-			}
+		// Event identity is exact-set equality over event tokens: substring
+		// matching lets negated or extended identifiers
+		// (not_tool_call_denied) pass.
+		if want, got := eventTokenSet(m.SourceEvent), eventTokenSet(row.event); !reflect.DeepEqual(want, got) {
+			t.Fatalf("row %q events %v do not match contract %v", m.Name, got, want)
 		}
 		wantStatus := map[Computability]string{ComputableToday: "computabletoday", NeedsNewField: "needsnewfield"}[m.Computability]
 		if !strings.Contains(normalizeToken(row.status), wantStatus) {
@@ -420,3 +413,18 @@ func normalizeToken(s string) string {
 	s = strings.ReplaceAll(s, " ", "")
 	return s
 }
+
+// eventTokenSet extracts the event identity of a source description: all
+// tool_call_* tokens, plus "none" for explicitly event-less sources.
+func eventTokenSet(s string) map[string]bool {
+	set := map[string]bool{}
+	for _, m := range eventTokenRe.FindAllString(s, -1) {
+		set[m] = true
+	}
+	if strings.Contains(s, "none:") {
+		set["none"] = true
+	}
+	return set
+}
+
+var eventTokenRe = regexp.MustCompile(`\btool_call_[a-z_]+\b`)
