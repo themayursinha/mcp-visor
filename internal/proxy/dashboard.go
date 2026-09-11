@@ -45,7 +45,7 @@ func (dp *dashboardProvider) RecentCalls(n int) []dashboard.CallInfo {
 }
 
 func (dp *dashboardProvider) Metrics() dashboard.MetricsSnapshot {
-	m := &dp.proxy.metrics
+	m := dp.proxy.metrics.Load()
 	return dashboard.MetricsSnapshot{
 		MessagesProcessed: m.MessagesProcessed,
 		MessagesDenied:    m.MessagesDenied,
