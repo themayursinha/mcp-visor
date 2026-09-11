@@ -251,3 +251,28 @@ func TestSessionReserveRelease(t *testing.T) {
 		t.Fatalf("release must floor at zero, depth=%d", got)
 	}
 }
+
+func TestDelegationCountedWhileUnenforced(t *testing.T) {
+	// Enabling the limit mid-session (hot reload) must not grant a fresh
+	// budget: relays authorized while off still counted.
+	s := NewSession("s", "c")
+	pol := mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "orchestrator"
+    allowed: true
+    tools:
+      - name: "spawn_agent"
+        allowed: true
+        delegates: true
+`)
+	for i := 0; i < 3; i++ {
+		if info, _ := tryReserveDelegation(pol, s, "orchestrator", "spawn_agent"); info != nil {
+			t.Fatalf("unenforced relay %d denied", i)
+		}
+	}
+	if got := s.DelegationDepth(); got != 3 {
+		t.Fatalf("depth=%d want 3 counted while off", got)
+	}
+}

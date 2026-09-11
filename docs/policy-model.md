@@ -587,11 +587,14 @@ servers:
 - `max_spawn_depth: 0` (default, never defaulted) disables enforcement;
   negative values fail lint. Unmarked tools never consume budget, and
   unknown tools never count (delegation is declared, not name-guessed).
-- The counter increments only on authorized relays, alongside taint
-  marking and after durable commit. Denied calls never consume budget;
-  a fresh session starts at zero. Check-and-reserve is atomic under
-  concurrency (one critical section); a reservation is released only if
-  the durable commit fails, so concurrent spawns cannot over-admit past
+- The counter increments on every authorized relay of a marked tool,
+  whether or not enforcement is on, alongside taint marking and after
+  durable commit. Denied calls never consume budget (an over-budget relay
+  rolls its increment back); a fresh session starts at zero. Counting
+  while unenforced means enabling the limit by hot reload cannot grant a
+  fresh budget to already-delegating sessions. Check-and-reserve is atomic
+  under concurrency (one critical section); a reservation is released only
+  if the durable commit fails, so concurrent spawns cannot over-admit past
   a hard cap.
 - A call that would exceed the ceiling denies before relay with evidence
   `argument class DELEGATION`, `effect class DELEGATION`, authority
