@@ -1,0 +1,89 @@
+{
+  "manifest": {
+    "bundle_id": "exec-allow-001",
+    "spec_version": "0.1",
+    "created_at": 1788000000,
+    "event_count": 5,
+    "head_hash": "8f09f1247c8b00a718eedab5785360ad960f13319f5689d021ed835e133695dc",
+    "policy_hash": "policy-sha256:demo",
+    "key_id": "key-79b5562e8fe654f9",
+    "algorithm": "ed25519",
+    "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+    "signature": "48ca986903ce4cd4a60bdadf142b0da428615e4b250d29a49a8965ae79693f4a1522695070734b660ff24d7822d62ee4587da249526fb3d0a2c66592af35d404"
+  },
+  "events": [
+    {
+      "seq": 0,
+      "prev_hash": "",
+      "kind": "requested_action",
+      "timestamp": 1788000001,
+      "principal": "agent:demo",
+      "delegation": [
+        "user:mayur"
+      ],
+      "authority_ref": "policy:demo-policy#filesystem/file_read",
+      "payload": {
+        "path": "/home/user/readme.md",
+        "server": "filesystem",
+        "tool": "file_read"
+      },
+      "payload_hash": "0bb33d91b5e1d3f3a45765fda874f8070be0c6388ac6e9d93cf9e7b6b45c73ba",
+      "redaction_note": "no patterns matched",
+      "evidence_source": "proxy-request",
+      "hash": "004a3a731e87288cac7ecac62f56bd932b711ed6286d87f8710b0f2132889e36"
+    },
+    {
+      "seq": 1,
+      "prev_hash": "004a3a731e87288cac7ecac62f56bd932b711ed6286d87f8710b0f2132889e36",
+      "kind": "policy_decision",
+      "timestamp": 1788000002,
+      "payload": {
+        "decision": "allow",
+        "risk": "medium",
+        "rule": "allow_path"
+      },
+      "payload_hash": "24d7800a0599473f12f0c5550e58edfd4256fdbd7e45469cc2179a657936d614",
+      "evidence_source": "policy-evaluate",
+      "hash": "90b274b8c12ad751b7de8dc861aa75d5a8bb50b1c16b92b7783bb3e16bc493b4"
+    },
+    {
+      "seq": 2,
+      "prev_hash": "90b274b8c12ad751b7de8dc861aa75d5a8bb50b1c16b92b7783bb3e16bc493b4",
+      "kind": "runtime_attempt",
+      "timestamp": 1788000003,
+      "payload": {
+        "relayed": true,
+        "transport": "stdio"
+      },
+      "payload_hash": "8fb4c7d2a13161178c1dcd3d4f624976e5612125b987ba7f17de95e5a8032bc9",
+      "evidence_source": "proxy-relay",
+      "hash": "92f17324ac8b872b16ce9a7ce6c5305247e139e73c3f3b6e5857d98273bf1be7"
+    },
+    {
+      "seq": 3,
+      "prev_hash": "92f17324ac8b872b16ce9a7ce6c5305247e139e73c3f3b6e5857d98273bf1be7",
+      "kind": "external_effect",
+      "timestamp": 1788000004,
+      "payload": {
+        "bytes": 42,
+        "effect": "file bytes returned"
+      },
+      "payload_hash": "d14ee349884edd86dbfea11635e9a2fee1f31c8d1807cccce304c644aac792a5",
+      "confirmation": "confirmed",
+      "evidence_source": "server-response",
+      "hash": "dac78f63f30ebf50b519d6048151ec5e67e66431464139903ab5b080c960edb1"
+    },
+    {
+      "seq": 4,
+      "prev_hash": "dac78f63f30ebf50b519d6048151ec5e67e66431464139903ab5b080c960edb1",
+      "kind": "state_delta",
+      "timestamp": 1788000005,
+      "payload": {
+        "taints_added": []
+      },
+      "payload_hash": "6c0dbb40b11ca76102bcad8d8c19c39577ce5f7f3fa60c1b8b93453bf610ffe3",
+      "evidence_source": "session-state",
+      "hash": "8f09f1247c8b00a718eedab5785360ad960f13319f5689d021ed835e133695dc"
+    }
+  ]
+}
