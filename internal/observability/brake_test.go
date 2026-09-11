@@ -336,20 +336,63 @@ func TestDenyConsumesOneHold(t *testing.T) {
 	}
 }
 
-func TestDocListsEveryMetric(t *testing.T) {
-	// Contract/code/doc drift guard: docs/brake-metrics.md must reference
-	// every normative metric name, or the contract table silently lags the
-	// implementation it claims to describe.
+func TestDocContractTableMatches(t *testing.T) {
+	// Contract/code/doc drift guard: parse the contract table in
+	// docs/brake-metrics.md and require one row per normative metric whose
+	// source column carries every vocabulary token from Contract. Row
+	// deletion, renamed metrics, or diverged sources fail here — not in
+	// review.
 	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "brake-metrics.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	rows := parseContractTable(t, string(doc))
 	for _, m := range Contract {
-		if !strings.Contains(string(doc), "`"+m.Name+"`") {
-			t.Fatalf("doc is missing metric %q", m.Name)
+		source, ok := rows[m.Name]
+		if !ok {
+			t.Fatalf("contract table has no row for %q", m.Name)
+		}
+		for _, token := range strings.Split(m.SourceField, "+") {
+			token = normalizeToken(token)
+			if token == "" {
+				continue
+			}
+			if !strings.Contains(normalizeToken(source), token) {
+				t.Fatalf("row %q omits source vocabulary %q", m.Name, strings.TrimSpace(token))
+			}
 		}
 		if m.SourceField == "" {
 			t.Fatalf("contract entry %q has no source field", m.Name)
 		}
 	}
+}
+
+// parseContractTable extracts metric-name → source-column from the
+// "## Contract table" markdown section.
+func parseContractTable(t *testing.T, doc string) map[string]string {
+	t.Helper()
+	rows := map[string]string{}
+	inTable := false
+	for _, line := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(line, "## ") {
+			inTable = strings.HasPrefix(line, "## Contract table")
+			continue
+		}
+		if !inTable || !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) < 6 {
+			t.Fatalf("malformed contract row: %q", line)
+		}
+		name := normalizeToken(parts[1])
+		rows[name] = parts[3]
+	}
+	return rows
+}
+
+func normalizeToken(s string) string {
+	s = strings.ReplaceAll(s, "`", "")
+	s = strings.ReplaceAll(s, " ", "")
+	return s
 }
