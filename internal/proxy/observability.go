@@ -15,7 +15,7 @@ func (p *Proxy) initObservability() error {
 		return nil
 	}
 	rt, err := observability.New(cfg, func() observability.Snapshot {
-		m := p.metrics
+		m := p.metrics.Load()
 		return observability.Snapshot{
 			MessagesProcessed: m.MessagesProcessed,
 			MessagesDenied:    m.MessagesDenied,

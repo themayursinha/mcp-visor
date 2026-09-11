@@ -49,6 +49,7 @@ time_restrictions: # Time-of-day access controls (optional)
 | `max_argument_size_bytes` | int | 1048576 | Max tool call argument size (1 MB). Measured on the original `params` object bytes before unique-key collapse (duplicate `arguments` members and padding count). Larger calls rejected. |
 | `max_output_size_bytes` | int | 10485760 | Truncation threshold for each textual `Content[].Text`; a marker is appended after truncation, so final text can exceed the threshold. Not an aggregate/structured/error limit. |
 | `session_max_tools` | int | 100 | Max tool calls per session. New calls denied after limit. |
+| `max_spawn_depth` | int | 0 | Max authorized delegation relays per session for tools marked `delegates`. Zero (default, never defaulted) disables enforcement. Negative fails lint. |
 | `session_timeout_seconds` | int | 3600 | Session timeout (1 hour). |
 | `approval_timeout_seconds` | int | 300 | Approval timeout (5 minutes). Deny after timeout. |
 | `chain_window_size` | int | 10 | Number of previous calls to inspect for chain detection. |
@@ -77,6 +78,7 @@ Each tool in a server's `tools` list:
 | `allowed` | bool | Yes | Whether this tool is allowed (`true`/`false`). |
 | `risk` | string | No | Risk classification: `"critical"`, `"high"`, `"medium"`, `"low"`. If omitted, inferred from tool name. |
 | `approval_required` | bool | No | Require human approval before every execution. |
+| `delegates` | bool | No | Marks a delegation (spawn) tool. Authorized relays consume the session delegation budget enforced by `max_spawn_depth`. Default false: unmarked tools never count. |
 | `rules` | array | No | Argument validation rules. |
 
 ## Argument Rule Types
@@ -563,8 +565,49 @@ egress_controls:
 
 Audit events for taint-triggered denials include `session_taints`, `taint_source`, `taint_reason`, and `policy_rule`.
 
-## Identity-Based Access
+## Delegation Ceilings
 
+Hard cap on authorized delegation relays per session for tools marked
+`delegates`. Generation budget, not call-stack nesting: Visor observes a
+flat authorized-call stream, not spawn returns, so each authorized relay
+of a marked tool consumes one unit of budget.
+
+```yaml
+settings:
+  max_spawn_depth: 2
+servers:
+  - name: "orchestrator"
+    allowed: true
+    tools:
+      - name: "spawn_agent"
+        allowed: true
+        delegates: true
+```
+
+- `max_spawn_depth: 0` (default, never defaulted) disables enforcement;
+  negative values fail lint. Unmarked tools never consume budget, and
+  unknown tools never count (delegation is declared, not name-guessed).
+- The counter increments on every authorized relay of a marked tool,
+  whether or not enforcement is on, alongside taint marking and after
+  durable commit. Denied calls never consume budget (an over-budget relay
+  rolls its increment back); a fresh session starts at zero. Counting
+  while unenforced means enabling the limit by hot reload cannot grant a
+  fresh budget to already-delegating sessions. Check-and-reserve is atomic
+  under concurrency (one critical section); a reservation is released only
+  if the durable commit fails, so concurrent spawns cannot over-admit past
+  a hard cap.
+- A call that would exceed the ceiling denies before relay with evidence
+  `argument class DELEGATION`, `effect class DELEGATION`, authority
+  transition `PARENT->CHILD`, and the depth/limit numbers. The terminal
+  deny event carries `delegation_depth` and `max_spawn_depth`.
+- Approval-gated spawners are checked before the approval wait and again
+  at grant (the budget may move during the wait); both checks deny
+  fail-closed at the relay boundary.
+- Out of scope: true nesting via spawn-return linkage, per-identity
+  ceilings, cross-session budgets, and identity-plane token parsing
+  (see card t_1851c97f design contract).
+
+## Identity-Based Access
 Restrict tool access per agent identity. Only tools/servers listed in the identity's allowlists are permitted.
 
 ```yaml

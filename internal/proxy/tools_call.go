@@ -287,6 +287,23 @@ func (p *Proxy) processToolsCall(
 			decision = policy.Decision{Action: policy.ActionRequireApproval, Reason: capPauseReason}
 		}
 	}
+	// Delegation ceiling: an allow-bound delegation call atomically checks
+	// the budget and reserves one unit here; a spent budget becomes a deny
+	// flowing through the deny path below (metrics, audit with depth
+	// fields, SIEM, release handling). The unit is released below if the
+	// durable commit fails. Approval-bound calls are checked at grant time
+	// instead.
+	var ceiling *ceilingDenyInfo
+	delegationReserved := false
+	if decision.Action == policy.ActionAllow {
+		var reserved bool
+		ceiling, reserved = tryReserveDelegation(snapshot.policy, p.session, serverName, callReq.Name)
+		if ceiling != nil {
+			decision = policy.Decision{Action: policy.ActionDeny, Reason: ceiling.reason}
+		} else {
+			delegationReserved = reserved
+		}
+	}
 
 	switch decision.Action {
 	case policy.ActionDeny:
@@ -303,6 +320,10 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(decision.Action),
 			Reason:    withRedactionNote(decision.Reason, redactionResult),
 			RiskLevel: string(risk),
+		}
+		if ceiling != nil {
+			deniedEvent.DelegationDepth = ceiling.depth
+			deniedEvent.MaxSpawnDepth = ceiling.max
 		}
 		if egressTriggered {
 			deniedEvent.SessionTaints = p.session.TaintNames()
@@ -324,6 +345,11 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
+		// Delegation ceiling: deny before any approval work when the budget
+		// is already spent; the grant site rechecks for races.
+		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info)
+		}
 		// The runtime snapshot was captured at the top of this call while
 		// runtimeMu.RLock was held and remains authoritative: the barrier is
 		// held until just before the blocking approval wait, so reloads
@@ -366,10 +392,21 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
+		// Delegation ceiling recheck: the budget may have been spent while
+		// the approval wait was outstanding. Atomic reserve; released below
+		// if the commit fails.
+		if info, reserved := tryReserveDelegation(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info)
+		} else {
+			delegationReserved = reserved
+		}
 		// Durable commit before any relay: the runtime barrier is already
 		// released (approval wait happened above), so a failure here only
 		// denies; it does not touch chain/taint/metric state.
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
 			return raw, "denied"
 		}
@@ -396,6 +433,9 @@ func (p *Proxy) processToolsCall(
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
 			return raw, "denied"
@@ -423,6 +463,9 @@ func (p *Proxy) processToolsCall(
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
 			return raw, "denied"

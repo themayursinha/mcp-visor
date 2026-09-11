@@ -32,7 +32,11 @@ type Session struct {
 	CreatedAt time.Time
 	ToolCalls []ToolCallRecord
 	Taints    map[string]SessionTaint
-	mu        sync.RWMutex
+	// SpawnDepth counts authorized delegation relays (tools marked
+	// delegates) in this session. Enforced against
+	// settings.max_spawn_depth; a fresh session starts at zero.
+	SpawnDepth int
+	mu         sync.RWMutex
 }
 
 func NewSession(id, clientID string) *Session {

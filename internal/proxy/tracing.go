@@ -1,5 +1,7 @@
 package proxy
 
+import "sync/atomic"
+
 type TracingConfig struct {
 	Enabled       bool
 	OutputFile    string
@@ -29,10 +31,25 @@ type ProxyMetrics struct {
 	ChainDetections   int64
 }
 
-func (m *ProxyMetrics) IncrementProcessed()      { m.MessagesProcessed++ }
-func (m *ProxyMetrics) IncrementDenied()         { m.MessagesDenied++ }
-func (m *ProxyMetrics) IncrementAllowed()        { m.MessagesAllowed++ }
-func (m *ProxyMetrics) IncrementApproved()       { m.MessagesApproved++ }
-func (m *ProxyMetrics) AddBytesRedacted(n int64) { m.BytesRedacted += n }
-func (m *ProxyMetrics) IncrementApprovals()      { m.ApprovalRequests++ }
-func (m *ProxyMetrics) IncrementChains()         { m.ChainDetections++ }
+// Counters use atomic ops: concurrent calls share one ProxyMetrics, and
+// the delegation-ceiling tests prove concurrent authorization stays exact.
+func (m *ProxyMetrics) IncrementProcessed()      { atomic.AddInt64(&m.MessagesProcessed, 1) }
+func (m *ProxyMetrics) IncrementDenied()         { atomic.AddInt64(&m.MessagesDenied, 1) }
+func (m *ProxyMetrics) IncrementAllowed()        { atomic.AddInt64(&m.MessagesAllowed, 1) }
+func (m *ProxyMetrics) IncrementApproved()       { atomic.AddInt64(&m.MessagesApproved, 1) }
+func (m *ProxyMetrics) AddBytesRedacted(n int64) { atomic.AddInt64(&m.BytesRedacted, n) }
+func (m *ProxyMetrics) IncrementApprovals()      { atomic.AddInt64(&m.ApprovalRequests, 1) }
+func (m *ProxyMetrics) IncrementChains()         { atomic.AddInt64(&m.ChainDetections, 1) }
+
+// Load returns a point-in-time copy safe to read from any goroutine.
+func (m *ProxyMetrics) Load() ProxyMetrics {
+	return ProxyMetrics{
+		MessagesProcessed: atomic.LoadInt64(&m.MessagesProcessed),
+		MessagesDenied:    atomic.LoadInt64(&m.MessagesDenied),
+		MessagesAllowed:   atomic.LoadInt64(&m.MessagesAllowed),
+		MessagesApproved:  atomic.LoadInt64(&m.MessagesApproved),
+		BytesRedacted:     atomic.LoadInt64(&m.BytesRedacted),
+		ApprovalRequests:  atomic.LoadInt64(&m.ApprovalRequests),
+		ChainDetections:   atomic.LoadInt64(&m.ChainDetections),
+	}
+}

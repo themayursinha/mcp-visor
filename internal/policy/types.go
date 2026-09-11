@@ -34,13 +34,16 @@ type Policy struct {
 }
 
 type Settings struct {
-	MaxArgumentSizeBytes int    `yaml:"max_argument_size_bytes"`
-	MaxOutputSizeBytes   int    `yaml:"max_output_size_bytes"`
-	SessionMaxTools      int    `yaml:"session_max_tools"`
-	SessionTimeoutSecs   int    `yaml:"session_timeout_seconds"`
-	ApprovalTimeoutSecs  int    `yaml:"approval_timeout_seconds"`
-	ChainWindowSize      int    `yaml:"chain_window_size"`
-	LogLevel             string `yaml:"log_level"`
+	MaxArgumentSizeBytes int `yaml:"max_argument_size_bytes"`
+	MaxOutputSizeBytes   int `yaml:"max_output_size_bytes"`
+	SessionMaxTools      int `yaml:"session_max_tools"`
+	SessionTimeoutSecs   int `yaml:"session_timeout_seconds"`
+	ApprovalTimeoutSecs  int `yaml:"approval_timeout_seconds"`
+	// MaxSpawnDepth caps authorized delegation relays per session for tools
+	// marked delegates. Zero (default, never defaulted) disables enforcement.
+	MaxSpawnDepth   int    `yaml:"max_spawn_depth"`
+	ChainWindowSize int    `yaml:"chain_window_size"`
+	LogLevel        string `yaml:"log_level"`
 	// CapabilityEval opts the session into the capability accounting evaluator (default false = no-op evaluator, zero behavioral delta).
 	CapabilityEval bool `yaml:"capability_accounting"`
 }
@@ -81,7 +84,11 @@ type ToolRule struct {
 	Allowed          bool      `yaml:"allowed"`
 	Risk             RiskLevel `yaml:"risk"`
 	ApprovalRequired bool      `yaml:"approval_required"`
-	Rules            []ArgRule `yaml:"rules"`
+	// Delegates marks tools that spawn delegated sub-agents. Authorized
+	// relays of such tools consume the session delegation budget enforced
+	// by settings.max_spawn_depth. Default false: unknown tools never count.
+	Delegates bool      `yaml:"delegates"`
+	Rules     []ArgRule `yaml:"rules"`
 }
 
 type ArgRule struct {

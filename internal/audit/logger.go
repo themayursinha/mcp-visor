@@ -90,6 +90,11 @@ type Event struct {
 	Hash                   string         `json:"hash,omitempty"`
 	PrevHash               string         `json:"prev_hash,omitempty"`
 	ChainIndex             uint64         `json:"chain_index,omitempty"`
+	// DelegationDepth is the session delegation count at a ceiling denial;
+	// MaxSpawnDepth is the enforced settings.max_spawn_depth. Populated
+	// only by delegation-ceiling denials (card t_1851c97f).
+	DelegationDepth int `json:"delegation_depth,omitempty"`
+	MaxSpawnDepth   int `json:"max_spawn_depth,omitempty"`
 }
 
 type Logger struct {
