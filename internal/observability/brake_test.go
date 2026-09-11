@@ -188,3 +188,31 @@ func TestEmptyInputAccepted(t *testing.T) {
 		t.Fatalf("events=%d want 0", len(events))
 	}
 }
+
+func TestMissingDelimiterRejected(t *testing.T) {
+	data := loadBrakeFixture(t)
+	// Remove one inter-record newline: two valid objects joined as }{.
+	joined := bytes.Replace(data, []byte("}\n{"), []byte("}{"), 1)
+	if bytes.Equal(joined, data) {
+		t.Skip("fixture shape changed; rewrite surgery")
+	}
+	if _, err := LoadEvents(bytes.NewReader(joined)); err == nil {
+		t.Fatal("missing newline delimiter accepted")
+	}
+	if _, err := LoadEvents(bytes.NewReader(data)); err != nil {
+		t.Fatalf("valid fixture rejected: %v", err)
+	}
+}
+
+func TestLongTrailingBlankSpaceAccepted(t *testing.T) {
+	data := loadBrakeFixture(t)
+	padded := append(append([]byte{}, data...), bytes.Repeat([]byte(" \t"), 5000)...)
+	padded = append(padded, '\n')
+	events, err := LoadEvents(bytes.NewReader(padded))
+	if err != nil {
+		t.Fatalf("long trailing blank space rejected: %v", err)
+	}
+	if len(events) != 12 {
+		t.Fatalf("events=%d want 12", len(events))
+	}
+}
