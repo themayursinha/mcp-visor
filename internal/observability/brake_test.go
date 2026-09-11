@@ -434,7 +434,9 @@ func fieldNorm(s string) string {
 // (session_taints) are not events and never match.
 func eventTokenSet(s string) map[string]bool {
 	set := map[string]bool{}
-	for _, w := range wordRe.FindAllString(normalizeToken(s), -1) {
+	// Spaces preserved (fieldNorm): fusing prose around event names would
+	// hide them from \b matching and make both sets vacuously equal.
+	for _, w := range wordRe.FindAllString(fieldNorm(s), -1) {
 		if auditEventUniverse[w] {
 			set[w] = true
 		}
