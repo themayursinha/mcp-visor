@@ -243,8 +243,16 @@ func Compute(events []audit.Event) Report {
 			if len(ev.SessionTaints) > 0 {
 				rep.TaintBlocks++
 			}
+			// Terminal outcomes consume one hold each: a deny retires exactly
+			// the hold it decides, so overlapping holds for the same key
+			// keep their remaining outcomes countable.
 			if ev.RequestHash != "" {
-				delete(holds, holdKey(ev.SessionID, ev.RequestHash))
+				key := holdKey(ev.SessionID, ev.RequestHash)
+				if holds[key] <= 1 {
+					delete(holds, key)
+				} else {
+					holds[key]--
+				}
 			}
 		case audit.EventToolAllowed:
 			if ev.ApprovalReceiptHash != "" && ev.RequestHash != "" && isHumanApproveReceipt(ev.ApprovalReceipt) {

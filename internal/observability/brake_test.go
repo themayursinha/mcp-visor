@@ -319,3 +319,19 @@ func TestCrossSessionSubstitutionRejected(t *testing.T) {
 		t.Fatalf("unlogged=%d want 1 (cross-session substitution)", rep.UnloggedDenials)
 	}
 }
+
+func TestDenyConsumesOneHold(t *testing.T) {
+	// Two overlapping holds, one terminal deny, one human grant: the deny
+	// retires exactly its own hold; the grant still counts.
+	grant := map[string]any{"decision": "approve", "approver_id": "human-operator"}
+	events := testEvents([]testEvent{
+		{kind: "hold", hash: "req-h", session: "s"},
+		{kind: "hold", hash: "req-h", session: "s"},
+		{kind: "deny", hash: "req-h", session: "s"},
+		{kind: "allow", hash: "req-h", session: "s", receiptHash: "receipt-sha256:g", receipt: grant},
+	})
+	rep := Compute(events)
+	if rep.ApprovalGrants != 1 {
+		t.Fatalf("grants=%d want 1 (deny must consume exactly one hold)", rep.ApprovalGrants)
+	}
+}
