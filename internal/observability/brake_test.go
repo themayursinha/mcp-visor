@@ -40,15 +40,18 @@ func TestComputeFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := Compute(events)
-	if rep.DeniedTotal != 2 {
-		t.Fatalf("denied=%d want 2", rep.DeniedTotal)
+	if rep.DeniedTotal != 3 {
+		t.Fatalf("denied=%d want 3", rep.DeniedTotal)
 	}
-	wantRules := map[string]int64{"block_sensitive_egress": 1, "allow_destination": 1}
+	wantRules := map[string]int64{"block_sensitive_egress": 1, "allow_destination": 1, "unattributed": 1}
 	if !reflect.DeepEqual(rep.DeniedByRule, wantRules) {
 		t.Fatalf("by_rule=%v want %v", rep.DeniedByRule, wantRules)
 	}
 	if rep.ApprovalGates != 1 {
 		t.Fatalf("gates=%d want 1", rep.ApprovalGates)
+	}
+	if rep.ApprovalGrants != 1 {
+		t.Fatalf("grants=%d want 1", rep.ApprovalGrants)
 	}
 	if rep.ChainIntercepts != 1 {
 		t.Fatalf("chains=%d want 1", rep.ChainIntercepts)
@@ -67,9 +70,13 @@ func TestReconcileClean(t *testing.T) {
 		{RequestHash: "req-deny-1", Decision: "deny"},
 		{RequestHash: "req-deny-2", Decision: "deny"},
 		{RequestHash: "req-allow-1", Decision: "allow"},
+		{RequestHash: "", Decision: "deny"},
 	}, events)
 	if rep.UnloggedDenials != 0 {
 		t.Fatalf("unlogged=%d (%v) want 0", rep.UnloggedDenials, rep.UnloggedDetail)
+	}
+	if rep.Unjoinable != 1 {
+		t.Fatalf("unjoinable=%d want 1 (hashless runtime-limits deny)", rep.Unjoinable)
 	}
 }
 
@@ -89,6 +96,22 @@ func TestReconcileCatchesMissingEvent(t *testing.T) {
 	}
 	if len(rep.UnloggedDetail) != 1 || !strings.Contains(rep.UnloggedDetail[0], "req-vanished-9") {
 		t.Fatalf("detail names the gap: %v", rep.UnloggedDetail)
+	}
+}
+
+// TestHoldDoesNotSatisfyDenial: the approval hold shares req-hold-1 with the
+// granted call, but no tool_call_denied carries it. Holds must never satisfy
+// a denial lookup.
+func TestHoldDoesNotSatisfyDenial(t *testing.T) {
+	events, err := LoadEvents(bytes.NewReader(loadBrakeFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Reconcile(Report{}, []DecisionRef{
+		{RequestHash: "req-hold-1", Decision: "deny"},
+	}, events)
+	if rep.UnloggedDenials != 1 {
+		t.Fatalf("unlogged=%d want 1 (hold must not satisfy denial)", rep.UnloggedDenials)
 	}
 }
 

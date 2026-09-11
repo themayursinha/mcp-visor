@@ -19,29 +19,43 @@ v0.1 claims no compliance, no certifications, and no benchmark results.
 | Metric | Definition | Source event / field | Window | Status |
 |---|---|---|---|---|
 | `brake.denied_total` | Terminal policy denials at the tools/call boundary | `tool_call_denied` / `event_type` | per log scope | computable today |
-| `brake.denied_by_rule` | Denials grouped by firing policy rule | `tool_call_denied` / `policy_rule` (fallback `reason`) | per log scope | computable today |
+| `brake.denied_by_rule` | Denials grouped by recorded policy rule; paths that record none fall in `unattributed` (free-form reasons are never folded in) | `tool_call_denied` / `policy_rule` | per log scope | computable today, with open refinement below |
 | `brake.approval_gates_total` | Calls held for human approval | `tool_call_approval_required` / `event_type` | per log scope | computable today |
-| `brake.approval_overrides_total` | Held calls later overridden | none — no approval-outcome event | — | needs new field |
+| `brake.approval_grants_total` | Holds resolved by human grant, joined to the hold by request hash | `tool_call_allowed` / `approval_receipt_hash` | per log scope | computable today |
+| `brake.approval_overrides_total` | Holds resolved without a grant receipt (bypassed or decided off-record) | none — no bypass/override outcome event | — | needs new field |
 | `brake.chain_intercepts_total` | Chain-rule interceptions | `tool_call_chain_detected` / `event_type` | per log scope | computable today |
-| `brake.taint_blocks_total` | Denials on already-tainted sessions | `tool_call_denied` / `session_taints` non-empty | per log scope | computable today |
-| `brake.unlogged_denials_total` | Declared terminal denials with no matching audit event | reconciliation of declared decisions vs `tool_call_denied` by `request_hash` | per log scope | computable today |
+| `brake.taint_blocks_total` | Taint-triggered egress denials (the only branch recording session taints) | `tool_call_denied` / `session_taints` | per log scope | computable today, narrow by construction |
+| `brake.unlogged_denials_total` | Declared terminal denials with no matching deny event (mechanism proof; production use needs the join-key gap closed) | reconciliation of declared decisions vs `tool_call_denied` by `request_hash` | per log scope | needs new field |
 
 ## Computability audit (OffSec brake classes)
 
+Grounded in what `internal/proxy/tools_call.go` actually emits — every
+mapping below was checked against the producer, not the schema wish-list.
+
 1. **Out-of-scope reaches** — computable today via `brake.denied_total` /
-   `brake.denied_by_rule`. Reason strings carry the authority-transition
-   evidence (`MANDATE->EGRESS`, …); grouping is by rule, not by a
-   normalized reach taxonomy (open refinement).
-2. **Guardrail hits** — computable today: denials plus approval holds
-   (`brake.denied_total` + `brake.approval_gates_total`).
-3. **Approvals overridden** — NOT computable today. The log records the
-   hold (`tool_call_approval_required`) but no outcome. Gap: emit
-   `tool_call_approved` / `tool_call_approval_overridden` carrying the
-   outcome and the approval receipt hash.
-4. **Actions outside allowed classes** — computable today at rule
-   granularity via `brake.denied_by_rule`; a normalized effect-class
-   rollup (NETWORK, DESTRUCTIVE, …) needs no new fields, only a mapping
+   `brake.denied_by_rule`. Only the taint-egress branch records
+   `policy_rule`; other deny paths (identity, runtime limits, ordinary
+   policy) record none and fall in `unattributed`. Reason strings carry
+   authority-transition evidence but are never grouped as rules.
+2. **Guardrail hits** — computable today: denials plus approval holds and
+   grant receipts (`brake.denied_total` + `brake.approval_gates_total` +
+   `brake.approval_grants_total`, the last joined hold→grant by
+   request hash).
+3. **Approvals overridden** — NOT computable today. Grants are visible
+   (allowed + receipt hash); bypasses and off-record decisions leave no
+   outcome event. Gap: emit `tool_call_approved` /
+   `tool_call_approval_overridden` with outcome + receipt hash.
+4. **Actions outside allowed classes** — computable today at recorded-rule
+   granularity via `brake.denied_by_rule` (`unattributed` bucket included);
+   a normalized effect-class rollup needs no new fields, only a mapping
    table (open refinement).
+
+Join-key gap: most deny paths emit no `request_hash`, so reconciliation
+against production logs stays a gap until they do. The proof demonstrates
+the mechanism on joinable records; hashless declared decisions report as
+unjoinable, never silently as matched or missing. Reconciliation indexes
+denials only — holds share hashes with their eventual denials and must
+never satisfy a denial lookup.
 
 ## Negative case
 
@@ -71,5 +85,8 @@ lines and events without a type fail closed at load.
 ## Open refinements (not v0.1)
 
 - Approval-outcome events (the one hard gap above).
+- `request_hash` on all terminal deny events (join-key gap).
+- Stable rule identifier on every deny path (shrink `unattributed`).
+- Session-taint presence on every denial (widen taint blocks).
 - Normalized effect-class rollup mapping.
 - Per-principal / per-server windows (fields exist; windows undeclared).

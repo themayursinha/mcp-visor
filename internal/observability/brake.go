@@ -17,8 +17,6 @@ package observability
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,8 +33,12 @@ const (
 	MetricDeniedByRule = "brake.denied_by_rule"
 	// MetricApprovalGatesTotal counts calls held for human approval.
 	MetricApprovalGatesTotal = "brake.approval_gates_total"
-	// MetricApprovalOverridesTotal counts approvals overridden after hold.
-	// NOT COMPUTABLE TODAY: no approval-outcome event exists.
+	// MetricApprovalGrantsTotal counts holds resolved by human grant,
+	// joined to the hold by request hash.
+	MetricApprovalGrantsTotal = "brake.approval_grants_total"
+	// MetricApprovalOverridesTotal counts holds resolved without a grant
+	// receipt (bypassed or decided off-record).
+	// NOT COMPUTABLE TODAY: bypasses leave no outcome event.
 	MetricApprovalOverridesTotal = "brake.approval_overrides_total"
 	// MetricChainInterceptsTotal counts chain-rule interceptions.
 	MetricChainInterceptsTotal = "brake.chain_intercepts_total"
@@ -78,10 +80,11 @@ var Contract = []MetricDef{
 	},
 	{
 		Name:          MetricDeniedByRule,
-		Definition:    "Denials grouped by the firing policy rule name.",
+		Definition:    "Denials grouped by recorded policy rule; paths that record none fall in unattributed (never merge free-form reasons into rule names).",
 		SourceEvent:   string(audit.EventToolDenied),
 		SourceField:   "policy_rule",
 		Computability: ComputableToday,
+		Gap:           "Open refinement: a stable rule identifier on every deny path so unattributed shrinks to zero.",
 	},
 	{
 		Name:          MetricApprovalGatesTotal,
@@ -91,9 +94,16 @@ var Contract = []MetricDef{
 		Computability: ComputableToday,
 	},
 	{
+		Name:          MetricApprovalGrantsTotal,
+		Definition:    "Holds resolved by human grant: tool_call_allowed carrying an approval receipt, joined to the hold by request hash.",
+		SourceEvent:   string(audit.EventToolAllowed),
+		SourceField:   "approval_receipt_hash",
+		Computability: ComputableToday,
+	},
+	{
 		Name:          MetricApprovalOverridesTotal,
-		Definition:    "Held calls later overridden (approved despite hold, or hold bypassed).",
-		SourceEvent:   "(no approval-outcome event exists)",
+		Definition:    "Holds resolved without a grant receipt (bypassed or decided off-record).",
+		SourceEvent:   "(no bypass/override outcome event exists)",
 		SourceField:   "approval_outcome",
 		Computability: NeedsNewField,
 		Gap:           "Emit tool_call_approved / tool_call_approval_overridden with outcome + receipt hash; see docs/brake-metrics.md.",
@@ -107,17 +117,19 @@ var Contract = []MetricDef{
 	},
 	{
 		Name:          MetricTaintBlocksTotal,
-		Definition:    "Denials on sessions already carrying taint.",
+		Definition:    "Taint-triggered egress denials: the control recorded session taints. Narrow by construction — only the taint-egress branch populates session_taints today.",
 		SourceEvent:   string(audit.EventToolDenied),
 		SourceField:   "session_taints",
 		Computability: ComputableToday,
+		Gap:           "Open refinement: session-taint presence on every denial so the metric can widen to all tainted-session denials.",
 	},
 	{
 		Name:          MetricUnloggedDenialsTotal,
-		Definition:    "Declared terminal decisions with no matching audit event.",
+		Definition:    "Declared terminal denials with no matching audit event. Mechanism only: most deny paths emit no request hash today, so production use stays a gap until they do.",
 		SourceEvent:   "reconciliation of declared decisions vs tool_call_denied by request_hash",
 		SourceField:   "request_hash",
-		Computability: ComputableToday,
+		Computability: NeedsNewField,
+		Gap:           "Emit request_hash on all terminal deny events; without join keys the metric cannot run on production logs.",
 	},
 }
 
@@ -126,10 +138,14 @@ type Report struct {
 	DeniedTotal     int64
 	DeniedByRule    map[string]int64
 	ApprovalGates   int64
+	ApprovalGrants  int64
 	ChainIntercepts int64
 	TaintBlocks     int64
 	UnloggedDenials int64
 	UnloggedDetail  []string
+	// Unjoinable counts declared decisions that carry no request hash and
+	// therefore can neither match nor miss: unprovable either way.
+	Unjoinable int64
 }
 
 // DecisionRef declares one terminal decision the log must contain (test
@@ -167,6 +183,11 @@ func LoadEvents(r io.Reader) ([]audit.Event, error) {
 	return events, nil
 }
 
+// unattributedRule labels denials recorded without a policy rule. Free-form
+// reasons are never folded in: request-specific text would split one rule
+// across many groups and merge unrelated rules.
+const unattributedRule = "unattributed"
+
 // Compute derives today's computable metrics from parsed events.
 func Compute(events []audit.Event) Report {
 	rep := Report{DeniedByRule: map[string]int64{}}
@@ -176,14 +197,15 @@ func Compute(events []audit.Event) Report {
 			rep.DeniedTotal++
 			rule := ev.PolicyRule
 			if rule == "" {
-				rule = ev.Reason
-			}
-			if rule == "" {
-				rule = "unspecified"
+				rule = unattributedRule
 			}
 			rep.DeniedByRule[rule]++
 			if len(ev.SessionTaints) > 0 {
 				rep.TaintBlocks++
+			}
+		case audit.EventToolAllowed:
+			if ev.ApprovalReceiptHash != "" {
+				rep.ApprovalGrants++
 			}
 		case audit.EventToolApprovalRequired:
 			rep.ApprovalGates++
@@ -195,25 +217,30 @@ func Compute(events []audit.Event) Report {
 }
 
 // Reconcile verifies every declared terminal deny decision has a matching
-// audit event by request hash. A deny with no event is the negative case:
-// the brake fired (or should have) with no record. Returns the report with
-// UnloggedDenials filled; error only on malformed input.
+// tool_call_denied audit event by request hash. Only denials index: holds
+// share hashes with their eventual denials, so other event types must not
+// satisfy the lookup. Decision refs without a hash are unjoinable, never
+// silently counted either way. A deny with no event is the negative case.
 func Reconcile(rep Report, decisions []DecisionRef, events []audit.Event) Report {
 	byHash := map[string]bool{}
 	for _, ev := range events {
+		if ev.EventType != audit.EventToolDenied {
+			continue
+		}
 		if ev.RequestHash == "" {
 			continue
 		}
-		// Normalize: match on raw or hex sha256 of the reference.
 		byHash[ev.RequestHash] = true
-		sum := sha256.Sum256([]byte(ev.RequestHash))
-		byHash[hex.EncodeToString(sum[:])] = true
 	}
 	for _, d := range decisions {
 		if d.Decision != "deny" {
 			continue
 		}
-		if d.RequestHash == "" || !byHash[d.RequestHash] {
+		if d.RequestHash == "" {
+			rep.Unjoinable++
+			continue
+		}
+		if !byHash[d.RequestHash] {
 			rep.UnloggedDenials++
 			rep.UnloggedDetail = append(rep.UnloggedDetail, d.RequestHash)
 		}
