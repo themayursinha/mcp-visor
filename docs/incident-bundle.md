@@ -37,12 +37,16 @@ server observe-log shows the egress never arrived), never an assumption.
 Event: `seq`, `prev_hash`, `kind`, `timestamp` (unix), `principal`,
 `delegation[]` (user→agent→tool chain, cf. agent-identity-plane),
 `authority_ref` (policy rule that grants), `payload` (redacted JSON),
-`payload_hash` (sha256 over canonical payload JSON, enforced on append),
+`payload_hash` (sha256 hex digest over canonical payload JSON, enforced on
+append; hash-only references must still decode as 32 bytes of hex),
 `redaction_note` (which patterns applied), `confirmation`
-(`unconfirmed`|`confirmed`, external effects only), `evidence_source`
-(which subsystem attests this node: proxy-request, policy-evaluate,
-proxy-relay, server-response, server-observe-log, session-state,
-siem-exporter), `hash` (chain link).
+(`unconfirmed`|`confirmed`, required on external effects),
+`supersedes` (seq of the upgraded event; only genuine confirmation
+upgrades — a `confirmed` repeat naming a still-`unconfirmed` effect),
+`evidence_source` (which subsystem attests this node: proxy-request,
+policy-evaluate, proxy-relay, server-response, server-observe-log,
+session-state, siem-exporter), `hash` (chain link). `Append` owns framing
+(kind, seq, linkage, timestamp): builder callbacks supply content only.
 
 Manifest: `bundle_id` (caller-assigned, e.g. execution id), `spec_version`
 (`"0.1"`), `created_at`, `event_count`, `head_hash` (tip event),

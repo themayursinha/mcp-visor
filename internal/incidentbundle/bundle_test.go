@@ -318,10 +318,39 @@ func TestOutOfOrderEpisodeRejected(t *testing.T) {
 }
 
 func TestRepeatedEffectAccepted(t *testing.T) {
-	// Genuine upgrade: unconfirmed effect, then the confirmed record.
+	// Genuine upgrade: unconfirmed effect (seq 3), then the confirmed record
+	// explicitly superseding it.
 	s := exampleSeedKey(t)
 	b := New("exec-upgrade-001", "policy-sha256:demo", 1788000040)
 	ts := int64(1788000041)
+	appendStage := func(kind, confirmation string, supersedes *uint64) {
+		mustAppend(t, b, kind, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": kind}
+			ev.Confirmation = confirmation
+			ev.Supersedes = supersedes
+		})
+		ts++
+	}
+	appendStage(KindRequestedAction, "", nil)
+	appendStage(KindPolicyDecision, "", nil)
+	appendStage(KindRuntimeAttempt, "", nil)
+	appendStage(KindExternalEffect, ConfirmationUnconfirmed, nil)
+	appendStage(KindStateDelta, "", nil)
+	upgradeOf := uint64(3)
+	appendStage(KindExternalEffect, ConfirmationConfirmed, &upgradeOf)
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err != nil {
+		t.Fatalf("confirmation-upgrade episode rejected: %v", err)
+	}
+}
+
+func TestUnlinkedRepeatRejected(t *testing.T) {
+	// Confirmed repeat naming no target: different effect, not an upgrade.
+	s := exampleSeedKey(t)
+	b := New("exec-nolink-001", "policy-sha256:demo", 1788000060)
+	ts := int64(1788000061)
 	stages := []struct {
 		kind         string
 		confirmation string
@@ -330,13 +359,12 @@ func TestRepeatedEffectAccepted(t *testing.T) {
 		{KindPolicyDecision, ""},
 		{KindRuntimeAttempt, ""},
 		{KindExternalEffect, ConfirmationUnconfirmed},
-		{KindStateDelta, ""},
 		{KindExternalEffect, ConfirmationConfirmed},
 	}
 	for _, st := range stages {
 		st := st
 		mustAppend(t, b, st.kind, ts, func(ev *Event) {
-			ev.Payload = map[string]any{"note": st.kind}
+			ev.Payload = map[string]any{"note": "other effect"}
 			ev.Confirmation = st.confirmation
 		})
 		ts++
@@ -344,8 +372,41 @@ func TestRepeatedEffectAccepted(t *testing.T) {
 	if err := b.Seal(s); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err != nil {
-		t.Fatalf("confirmation-upgrade episode rejected: %v", err)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("unlinked repeat verified as upgrade")
+	}
+}
+
+func TestInvalidDigestRejected(t *testing.T) {
+	b := New("x", "p", 1)
+	err := b.Append(KindRequestedAction, 1, func(ev *Event) {
+		ev.PayloadHash = "x"
+	})
+	if err == nil {
+		t.Fatal("non-digest payload_hash accepted by Append")
+	}
+	s := exampleSeedKey(t)
+	hand := &Bundle{Manifest: Manifest{BundleID: "y", SpecVersion: SpecVersion, CreatedAt: 1, PolicyHash: "p"}}
+	mustAppend(t, hand, KindRequestedAction, 1, func(ev *Event) {
+		ev.Payload = map[string]any{"a": 1}
+	})
+	mustAppend(t, hand, KindPolicyDecision, 2, func(ev *Event) {
+		ev.Payload = map[string]any{"b": 2}
+	})
+	mustAppend(t, hand, KindRuntimeAttempt, 3, func(ev *Event) {
+		ev.Payload = map[string]any{"c": 3}
+	})
+	mustAppend(t, hand, KindExternalEffect, 4, func(ev *Event) {
+		ev.Payload = map[string]any{"d": 4}
+		ev.Confirmation = ConfirmationConfirmed
+	})
+	hand.Events[0].Payload = nil
+	hand.Events[0].PayloadHash = "not-a-digest"
+	if err := hand.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := hand.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("non-digest payload_hash verified")
 	}
 }
 

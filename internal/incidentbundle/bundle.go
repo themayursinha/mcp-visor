@@ -65,7 +65,10 @@ type Event struct {
 	RedactionNote  string         `json:"redaction_note,omitempty"`
 	Confirmation   string         `json:"confirmation,omitempty"`
 	EvidenceSource string         `json:"evidence_source,omitempty"`
-	Hash           string         `json:"hash"`
+	// Supersedes names the seq of the event this one upgrades. Only
+	// confirmation upgrades use it (see checkEpisode).
+	Supersedes *uint64 `json:"supersedes,omitempty"`
+	Hash       string  `json:"hash"`
 }
 
 // Manifest seals the bundle. Signature covers every field except Signature
@@ -170,6 +173,8 @@ func (b *Bundle) Append(kind string, timestamp int64, build func(*Event)) error 
 		ev.PayloadHash = sum
 	} else if ev.PayloadHash == "" {
 		return fmt.Errorf("event carries neither payload nor payload_hash")
+	} else if !validDigest(ev.PayloadHash) {
+		return fmt.Errorf("payload_hash is not a sha256 hex digest")
 	}
 	h, err := eventHash(ev)
 	if err != nil {
@@ -225,10 +230,15 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 		if ev.Seq != uint64(i) {
 			return fmt.Errorf("event %d has seq %d", i, ev.Seq)
 		}
-		// Append guarantees payload evidence; re-check here so hand-built
-		// bundles cannot slip evidenceless events past verification.
-		if ev.Payload == nil && ev.PayloadHash == "" {
-			return fmt.Errorf("event %d carries neither payload nor payload_hash", i)
+		// Payload evidence must bind something: inline payloads rehash
+		// here, hash-only references must be well-formed digests.
+		if ev.Payload == nil {
+			if ev.PayloadHash == "" {
+				return fmt.Errorf("event %d carries neither payload nor payload_hash", i)
+			}
+			if !validDigest(ev.PayloadHash) {
+				return fmt.Errorf("event %d: payload_hash is not a sha256 hex digest", i)
+			}
 		}
 		if ev.PrevHash != prev {
 			return fmt.Errorf("event %d breaks the hash chain", i)
@@ -318,8 +328,7 @@ var knownKinds = map[string]bool{
 
 func checkEpisode(events []Event) error {
 	need := 0
-	lastEffect := ""
-	for _, ev := range events {
+	for i, ev := range events {
 		if !knownKinds[ev.Kind] {
 			return fmt.Errorf("unknown event kind %q", ev.Kind)
 		}
@@ -340,12 +349,13 @@ func checkEpisode(events []Event) error {
 		}
 		if rank != need {
 			// Only genuine confirmation upgrades are allowed after
-			// completion: the prior effect must be unconfirmed and the
-			// repeat confirmed. Anything else out of position — premature,
-			// repeated, or regressed — breaks proof quality.
+			// completion: the repeat must be confirmed, name the
+			// unconfirmed effect it upgrades via supersedes, and that
+			// target must still be unconfirmed. Anything else out of
+			// position — premature, repeated, or regressed — breaks
+			// proof quality.
 			if need == len(requiredStages) && ev.Kind == KindExternalEffect &&
-				ev.Confirmation == ConfirmationConfirmed && lastEffect == ConfirmationUnconfirmed {
-				lastEffect = ConfirmationConfirmed
+				ev.Confirmation == ConfirmationConfirmed && validUpgradeTarget(events, i, ev) {
 				continue
 			}
 			if need >= len(requiredStages) {
@@ -353,15 +363,38 @@ func checkEpisode(events []Event) error {
 			}
 			return fmt.Errorf("episode out of order: got %q, want required stage %q", ev.Kind, requiredStages[need])
 		}
-		if ev.Kind == KindExternalEffect {
-			lastEffect = ev.Confirmation
-		}
 		need++
 	}
 	if need < len(requiredStages) {
 		return fmt.Errorf("episode incomplete: missing required stage %q", requiredStages[need])
 	}
 	return nil
+}
+
+// validUpgradeTarget reports whether events[i] (a confirmed post-completion
+// external_effect) explicitly upgrades a still-unconfirmed earlier effect.
+func validUpgradeTarget(events []Event, i int, ev Event) bool {
+	if ev.Supersedes == nil {
+		return false
+	}
+	target := *ev.Supersedes
+	if target >= uint64(i) {
+		return false
+	}
+	prev := events[target]
+	if prev.Seq != target {
+		return false
+	}
+	return prev.Kind == KindExternalEffect && prev.Confirmation == ConfirmationUnconfirmed
+}
+
+// validDigest reports whether s is a lowercase sha256 hex digest.
+func validDigest(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	raw, err := hex.DecodeString(s)
+	return err == nil && len(raw) == 32
 }
 
 func eventHash(ev Event) (string, error) {
