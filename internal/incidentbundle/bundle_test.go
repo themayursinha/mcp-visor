@@ -543,3 +543,32 @@ func TestEvidencelessEventRejected(t *testing.T) {
 		t.Fatal("evidenceless bundle verified")
 	}
 }
+
+func TestDoubleUpgradeRejected(t *testing.T) {
+	// Two confirmed repeats naming the same unconfirmed effect: the second
+	// is a double-spend, not an upgrade.
+	s := exampleSeedKey(t)
+	b := New("exec-double-001", "policy-sha256:demo", 1788000070)
+	ts := int64(1788000071)
+	appendStage := func(kind, confirmation string, supersedes *uint64) {
+		mustAppend(t, b, kind, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": kind}
+			ev.Confirmation = confirmation
+			ev.Supersedes = supersedes
+		})
+		ts++
+	}
+	appendStage(KindRequestedAction, "", nil)
+	appendStage(KindPolicyDecision, "", nil)
+	appendStage(KindRuntimeAttempt, "", nil)
+	appendStage(KindExternalEffect, ConfirmationUnconfirmed, nil)
+	upgradeOf := uint64(3)
+	appendStage(KindExternalEffect, ConfirmationConfirmed, &upgradeOf)
+	appendStage(KindExternalEffect, ConfirmationConfirmed, &upgradeOf)
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("double-spend upgrade verified")
+	}
+}

@@ -328,6 +328,10 @@ var knownKinds = map[string]bool{
 
 func checkEpisode(events []Event) error {
 	need := 0
+	// Targets consumed by confirmation upgrades: each unconfirmed effect
+	// upgrades at most once, so a second confirmed repeat naming the same
+	// target is a double-spend, not an upgrade.
+	consumed := map[uint64]bool{}
 	for i, ev := range events {
 		if !knownKinds[ev.Kind] {
 			return fmt.Errorf("unknown event kind %q", ev.Kind)
@@ -355,7 +359,8 @@ func checkEpisode(events []Event) error {
 			// position — premature, repeated, or regressed — breaks
 			// proof quality.
 			if need == len(requiredStages) && ev.Kind == KindExternalEffect &&
-				ev.Confirmation == ConfirmationConfirmed && validUpgradeTarget(events, i, ev) {
+				ev.Confirmation == ConfirmationConfirmed && validUpgradeTarget(events, i, ev, consumed) {
+				consumed[*ev.Supersedes] = true
 				continue
 			}
 			if need >= len(requiredStages) {
@@ -372,13 +377,17 @@ func checkEpisode(events []Event) error {
 }
 
 // validUpgradeTarget reports whether events[i] (a confirmed post-completion
-// external_effect) explicitly upgrades a still-unconfirmed earlier effect.
-func validUpgradeTarget(events []Event, i int, ev Event) bool {
+// external_effect) explicitly upgrades a still-unconfirmed earlier effect
+// that no previous upgrade has consumed.
+func validUpgradeTarget(events []Event, i int, ev Event, consumed map[uint64]bool) bool {
 	if ev.Supersedes == nil {
 		return false
 	}
 	target := *ev.Supersedes
 	if target >= uint64(i) {
+		return false
+	}
+	if consumed[target] {
 		return false
 	}
 	prev := events[target]
