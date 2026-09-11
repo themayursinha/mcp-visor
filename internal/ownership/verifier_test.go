@@ -151,3 +151,18 @@ func TestCanonicalGrantSHADeterministic(t *testing.T) {
 		t.Fatalf("grant SHA unstable: %q", a)
 	}
 }
+
+func TestGrantSHADistinguishesSubSecondWindows(t *testing.T) {
+	base := Grant{
+		ID: "g", Owner: "tenant-B", Delegate: "tenant-A",
+		Server: "mcp-server-B", Tool: "internal_fetch", EffectClass: "NETWORK",
+		ScopeArgument: "resource", ExactValues: []string{"X"},
+		IssuedAt:  time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC),
+		ExpiresAt: time.Date(2026, 9, 11, 10, 15, 0, 0, time.UTC),
+	}
+	shifted := base
+	shifted.ExpiresAt = base.ExpiresAt.Add(500 * time.Millisecond)
+	if CanonicalGrantSHA(base) == CanonicalGrantSHA(shifted) {
+		t.Fatal("sub-second window difference lost in grant hash")
+	}
+}

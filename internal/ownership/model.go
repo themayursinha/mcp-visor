@@ -97,10 +97,12 @@ type Proof struct {
 	EvaluatedAt   time.Time
 }
 
-// CanonicalGrantSHA binds a grant's exact terms.
+// CanonicalGrantSHA binds a grant's exact terms. Timestamps use RFC3339Nano:
+// time.Parse accepts fractional seconds, and coarser formatting would merge
+// grants whose windows differ below one second into one hash.
 func CanonicalGrantSHA(g Grant) string {
 	h := sha256.New()
-	for _, s := range []string{g.ID, g.Owner, g.Delegate, g.Server, g.Tool, g.EffectClass, g.ScopeArgument, g.IssuedAt.UTC().Format(time.RFC3339), g.ExpiresAt.UTC().Format(time.RFC3339)} {
+	for _, s := range []string{g.ID, g.Owner, g.Delegate, g.Server, g.Tool, g.EffectClass, g.ScopeArgument, g.IssuedAt.UTC().Format(time.RFC3339Nano), g.ExpiresAt.UTC().Format(time.RFC3339Nano)} {
 		h.Write([]byte(s))
 		h.Write([]byte{0})
 	}
