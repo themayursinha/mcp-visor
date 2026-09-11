@@ -354,11 +354,19 @@ func TestDocContractTableMatches(t *testing.T) {
 			t.Fatalf("contract table has no row for %q", m.Name)
 		}
 		for _, token := range strings.Split(m.SourceField, "+") {
-			token = normalizeToken(token)
+			token = strings.ReplaceAll(token, "`", "")
+			token = strings.ReplaceAll(token, "(", "")
+			token = strings.ReplaceAll(token, ")", "")
+			token = strings.TrimSpace(token)
 			if token == "" {
 				continue
 			}
-			if !strings.Contains(normalizeToken(row.source), token) {
+			// Boundary match on backtick-stripped text (spaces kept, so
+			// word boundaries survive): not_policy_rule must not satisfy
+			// policy_rule.
+			pat := `\b` + regexp.QuoteMeta(token) + `\b`
+			matched, err := regexp.MatchString(pat, fieldNorm(row.source))
+			if err != nil || !matched {
 				t.Fatalf("row %q omits source vocabulary %q", m.Name, strings.TrimSpace(token))
 			}
 		}
@@ -414,12 +422,22 @@ func normalizeToken(s string) string {
 	return s
 }
 
-// eventTokenSet extracts the event identity of a source description: all
-// tool_call_* tokens, plus "none" for explicitly event-less sources.
+// fieldNorm strips code fencing but keeps spacing so word boundaries in
+// field-vocabulary matching survive.
+func fieldNorm(s string) string {
+	return strings.ReplaceAll(s, "`", "")
+}
+
+// eventTokenSet extracts the event identity of a source description: the
+// audit event vocabulary members it names, plus "none" for explicitly
+// event-less sources. Fields that merely share a prefix shape
+// (session_taints) are not events and never match.
 func eventTokenSet(s string) map[string]bool {
 	set := map[string]bool{}
-	for _, m := range eventTokenRe.FindAllString(s, -1) {
-		set[m] = true
+	for _, w := range wordRe.FindAllString(normalizeToken(s), -1) {
+		if auditEventUniverse[w] {
+			set[w] = true
+		}
 	}
 	if strings.Contains(s, "none:") {
 		set["none"] = true
@@ -427,4 +445,17 @@ func eventTokenSet(s string) map[string]bool {
 	return set
 }
 
-var eventTokenRe = regexp.MustCompile(`\btool_call_[a-z_]+\b`)
+// auditEventUniverse is every audit event type a contract may name.
+var auditEventUniverse = map[string]bool{
+	string(audit.EventToolAllowed):          true,
+	string(audit.EventToolDenied):           true,
+	string(audit.EventToolApprovalRequired): true,
+	string(audit.EventToolChainDetected):    true,
+	string(audit.EventSessionTainted):       true,
+	string(audit.EventSessionStarted):       true,
+	string(audit.EventSessionEnded):         true,
+	string(audit.EventPolicyLoaded):         true,
+	string(audit.EventPolicyReloaded):       true,
+}
+
+var wordRe = regexp.MustCompile(`\b[a-z][a-z0-9_]*\b`)

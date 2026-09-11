@@ -23,10 +23,10 @@ v0.1 claims no compliance, no certifications, and no benchmark results.
 | `brake.denied_no_rule` | Denials recorded without a policy rule (separate counter) | `tool_call_denied` / (absence of `policy_rule`) | per log scope | computable today |
 | `brake.approval_gates_total` | Calls held for human approval | `tool_call_approval_required` / `event_type` | per log scope | computable today |
 | `brake.approval_grants_total` | Holds resolved by human grant: (request hash, session) hold match consumed once, receipt map identifying human approve | `tool_call_allowed` / `approval_receipt_hash` + `request_hash` + `session_id` + `approval_receipt.decision`/`approver_id` + hold:`tool_call_approval_required`/`request_hash`/`session_id` | per log scope | computable today |
-| `brake.approval_overrides_total` | Holds resolved without a grant receipt (bypassed or decided off-record) | none: no bypass/override outcome event exists (`approval_outcome` missing) | — | needs new field |
+| `brake.approval_overrides_total` | Holds resolved without a grant receipt (bypassed or decided off-record) | none: no bypass/override outcome event exists (`approval_outcome`, missing) | — | needs new field |
 | `brake.chain_intercepts_total` | Chain-rule interceptions | `tool_call_chain_detected` / `event_type` | per log scope | computable today |
 | `brake.taint_blocks_total` | Taint-triggered egress denials (the only branch recording session taints) | `tool_call_denied` / `session_taints` | per log scope | computable today, narrow by construction |
-| `brake.unlogged_denials_total` | Declared terminal denials (`decision` deny) with no matching deny event on the same (session, hash) key; declarations missing `decision`, `session_id`, or `request_hash` report as unjoinable (mechanism proof; production use needs the join-key gap closed) | reconciliation of declared `decision`s vs `tool_call_denied` by (`session_id`, `request_hash`) | per log scope | needs new field |
+| `brake.unlogged_denials_total` | Declared terminal denials (`decision` deny) with no matching deny event on the same (session, hash) key; declarations missing `decision`, `session_id`, or `request_hash` report as unjoinable (mechanism proof; production use needs the join-key gap closed) | reconciliation of declared `decision` vs `tool_call_denied` by (`session_id`, `request_hash`) | per log scope | needs new field |
 
 ## Computability audit (OffSec brake classes)
 
