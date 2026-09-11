@@ -79,11 +79,11 @@ var Contract = []MetricDef{
 	},
 	{
 		Name:          MetricDeniedByRule,
-		Definition:    "Denials grouped by recorded policy rule; paths that record none fall in unattributed (never merge free-form reasons into rule names).",
+		Definition:    "Denials grouped by recorded policy rule; rule-less denials ride the separate denied_no_rule counter (no in-band sentinel can collide with a legal rule name, and free-form reasons are never folded in).",
 		SourceEvent:   string(audit.EventToolDenied),
 		SourceField:   "policy_rule",
 		Computability: ComputableToday,
-		Gap:           "Open refinement: a stable rule identifier on every deny path so unattributed shrinks to zero.",
+		Gap:           "Open refinement: a stable rule identifier on every deny path so denied_no_rule shrinks to zero.",
 	},
 	{
 		Name:          MetricApprovalGatesTotal,
@@ -133,9 +133,12 @@ var Contract = []MetricDef{
 }
 
 // Report holds one computed number per metric plus the rule breakdown.
+// Rule-less denials ride a separate counter, never an in-band sentinel:
+// any sentinel string could collide with a legal egress-control name.
 type Report struct {
 	DeniedTotal     int64
 	DeniedByRule    map[string]int64
+	DeniedNoRule    int64
 	ApprovalGates   int64
 	ApprovalGrants  int64
 	ChainIntercepts int64
@@ -202,11 +205,6 @@ func LoadEvents(r io.Reader) ([]audit.Event, error) {
 	}
 }
 
-// unattributedRule labels denials recorded without a policy rule. Free-form
-// reasons are never folded in: request-specific text would split one rule
-// across many groups and merge unrelated rules.
-const unattributedRule = "unattributed"
-
 // Compute derives today's computable metrics from parsed events, in log
 // order. Approval grants join holds: an allow counts only when its request
 // hash matches a preceding approval hold, because capability accounting
@@ -219,11 +217,11 @@ func Compute(events []audit.Event) Report {
 		switch ev.EventType {
 		case audit.EventToolDenied:
 			rep.DeniedTotal++
-			rule := ev.PolicyRule
-			if rule == "" {
-				rule = unattributedRule
+			if ev.PolicyRule == "" {
+				rep.DeniedNoRule++
+			} else {
+				rep.DeniedByRule[ev.PolicyRule]++
 			}
-			rep.DeniedByRule[rule]++
 			if len(ev.SessionTaints) > 0 {
 				rep.TaintBlocks++
 			}

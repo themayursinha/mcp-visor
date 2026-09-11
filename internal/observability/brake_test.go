@@ -43,9 +43,12 @@ func TestComputeFixture(t *testing.T) {
 	if rep.DeniedTotal != 3 {
 		t.Fatalf("denied=%d want 3", rep.DeniedTotal)
 	}
-	wantRules := map[string]int64{"block_sensitive_egress": 1, "allow_destination": 1, "unattributed": 1}
+	wantRules := map[string]int64{"block_sensitive_egress": 1, "allow_destination": 1}
 	if !reflect.DeepEqual(rep.DeniedByRule, wantRules) {
 		t.Fatalf("by_rule=%v want %v", rep.DeniedByRule, wantRules)
+	}
+	if rep.DeniedNoRule != 1 {
+		t.Fatalf("denied_no_rule=%d want 1 (separate counter, no sentinel)", rep.DeniedNoRule)
 	}
 	if rep.ApprovalGates != 1 {
 		t.Fatalf("gates=%d want 1", rep.ApprovalGates)
