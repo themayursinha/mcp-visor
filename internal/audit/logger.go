@@ -80,21 +80,24 @@ type Event struct {
 	ApprovalReceipt      map[string]any `json:"approval_receipt,omitempty"`
 	// OwnershipReceiptHash/Receipt carry a signed Capability Ownership
 	// Proof (card t_02a1bc43). Dedicated fields: never reuse or overwrite
-	// approval/capability-accounting receipt fields.
-	OwnershipReceiptHash   string         `json:"ownership_receipt_hash,omitempty"`
-	OwnershipReceipt       map[string]any `json:"ownership_receipt,omitempty"`
-	ServerIdentityKind     string         `json:"server_identity_kind,omitempty"`
-	ServerIdentityExpected string         `json:"server_identity_expected,omitempty"`
-	ServerIdentityResolved string         `json:"server_identity_resolved,omitempty"`
-	ServerAttested         *bool          `json:"server_attested,omitempty"`
-	ServerClaimedName      string         `json:"server_claimed_name,omitempty"`
-	ServerClaimedVersion   string         `json:"server_claimed_version,omitempty"`
-	ResultPreview          string         `json:"result_preview,omitempty"`
-	IsError                bool           `json:"is_error,omitempty"`
-	Message                string         `json:"message,omitempty"`
-	Hash                   string         `json:"hash,omitempty"`
-	PrevHash               string         `json:"prev_hash,omitempty"`
-	ChainIndex             uint64         `json:"chain_index,omitempty"`
+	// approval/capability-accounting receipt fields. RawMessage, not a
+	// decoded map: the exact signed bytes embed verbatim, so hash chains,
+	// recovery replays, and SIEM forwards can never diverge from what the
+	// hash covers (float64 decoding would rewrite large integers).
+	OwnershipReceiptHash   string          `json:"ownership_receipt_hash,omitempty"`
+	OwnershipReceipt       json.RawMessage `json:"ownership_receipt,omitempty"`
+	ServerIdentityKind     string          `json:"server_identity_kind,omitempty"`
+	ServerIdentityExpected string          `json:"server_identity_expected,omitempty"`
+	ServerIdentityResolved string          `json:"server_identity_resolved,omitempty"`
+	ServerAttested         *bool           `json:"server_attested,omitempty"`
+	ServerClaimedName      string          `json:"server_claimed_name,omitempty"`
+	ServerClaimedVersion   string          `json:"server_claimed_version,omitempty"`
+	ResultPreview          string          `json:"result_preview,omitempty"`
+	IsError                bool            `json:"is_error,omitempty"`
+	Message                string          `json:"message,omitempty"`
+	Hash                   string          `json:"hash,omitempty"`
+	PrevHash               string          `json:"prev_hash,omitempty"`
+	ChainIndex             uint64          `json:"chain_index,omitempty"`
 	// DelegationDepth is the session delegation count at a ceiling denial;
 	// MaxSpawnDepth is the enforced settings.max_spawn_depth. Populated
 	// only by delegation-ceiling denials (card t_1851c97f).

@@ -404,8 +404,8 @@ capability_ownership:
 }
 
 func TestOwnershipReceiptNanosSurviveEmbed(t *testing.T) {
-	// Unix-nano integers exceed float64 exact range: attach must preserve
-	// digits so the embedded receipt still verifies.
+	// Unix-nano integers exceed float64 exact range: the embedded bytes
+	// must equal the signed bytes exactly, and re-parsing must verify.
 	kp, err := receipt.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
@@ -420,16 +420,19 @@ func TestOwnershipReceiptNanosSurviveEmbed(t *testing.T) {
 	if err := rec.Sign(kp); err != nil {
 		t.Fatal(err)
 	}
+	signed, err := rec.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ev := audit.Event{EventType: audit.EventToolAllowed}
 	attachOwnershipReceipt(&ev, rec)
 	if ev.OwnershipReceiptHash == "" || ev.OwnershipReceipt == nil {
 		t.Fatal("receipt not attached")
 	}
-	embedded, err := json.Marshal(ev.OwnershipReceipt)
-	if err != nil {
-		t.Fatal(err)
+	if !bytes.Equal([]byte(ev.OwnershipReceipt), signed) {
+		t.Fatal("embedded bytes differ from signed bytes")
 	}
-	rt, err := receipt.UnmarshalOwnershipReceipt(embedded)
+	rt, err := receipt.UnmarshalOwnershipReceipt(ev.OwnershipReceipt)
 	if err != nil {
 		t.Fatal(err)
 	}

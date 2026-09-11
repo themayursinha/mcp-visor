@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -195,6 +194,9 @@ func (p *Proxy) denyOwnership(
 
 // attachOwnershipReceipt binds a signed ownership proof to a terminal
 // audit event via dedicated fields (never the approval/capability fields).
+// The receipt's exact signed bytes embed verbatim: hashing, embedding,
+// recovery replay, and SIEM forwarding all operate on identical bytes, so
+// no decode step can rewrite large integers or reorder keys.
 func attachOwnershipReceipt(event *audit.Event, rec *receipt.CapabilityOwnershipReceipt) {
 	if event == nil || rec == nil {
 		return
@@ -205,15 +207,7 @@ func attachOwnershipReceipt(event *audit.Event, rec *receipt.CapabilityOwnership
 	}
 	sum := sha256.Sum256(data)
 	event.OwnershipReceiptHash = hex.EncodeToString(sum[:])
-	// Decode with UseNumber: unix-nano integers exceed float64's exact
-	// range, and a float64 round trip would rewrite the signed bytes and
-	// break the embedded receipt hash.
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var recMap map[string]any
-	if err := dec.Decode(&recMap); err == nil {
-		event.OwnershipReceipt = recMap
-	}
+	event.OwnershipReceipt = append([]byte{}, data...)
 }
 
 // recOrNil returns the receipt only if it carries a signature.
