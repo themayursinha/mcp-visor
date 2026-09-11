@@ -40,10 +40,12 @@ mapping below was checked against the producer, not the schema wish-list.
    authority-transition evidence but are never grouped as rules.
 2. **Guardrail hits** — computable today: denials plus approval holds and
    grant receipts (`brake.denied_total` + `brake.approval_gates_total` +
-   `brake.approval_grants_total`). Grants join holds by request hash and
-   consume one hold each: capability accounting stores receipts in the
-   same receipt-hash field on ordinary allows, so receipt presence alone
-   never counts — only hold-matched grants do.
+   `brake.approval_grants_total`). Grants join holds on (request hash,
+   session), consume one hold each, and require the receipt to identify a
+   human `approve` decision: capability accounting shares the receipt
+   field, denied-after-hold emits no event, and terminal denials retire
+   their hold — so stale holds and capability allows can never mint
+   grants.
 3. **Approvals overridden** — NOT computable today. Grants are visible
    (allowed + receipt hash); bypasses and off-record decisions leave no
    outcome event. Gap: emit `tool_call_approved` /

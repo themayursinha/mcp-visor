@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/themayursinha/mcp-visor/internal/audit"
 )
 
 func loadBrakeFixture(t *testing.T) []byte {
@@ -241,5 +243,64 @@ func TestNonJSONWhitespaceNotBlank(t *testing.T) {
 	// True framing whitespace stays legal.
 	if _, err := LoadEvents(bytes.NewReader([]byte(" \t\r\n"))); err != nil {
 		t.Fatalf("framing whitespace rejected: %v", err)
+	}
+}
+
+// testEvent builds synthetic audit events for join-semantics tests.
+type testEvent struct {
+	kind        string // hold | deny | allow
+	hash        string
+	session     string
+	receiptHash string
+	receipt     map[string]any
+}
+
+func testEvents(tes []testEvent) []audit.Event {
+	out := make([]audit.Event, 0, len(tes))
+	for _, te := range tes {
+		ev := audit.Event{SessionID: te.session, RequestHash: te.hash}
+		switch te.kind {
+		case "hold":
+			ev.EventType = audit.EventToolApprovalRequired
+		case "deny":
+			ev.EventType = audit.EventToolDenied
+			ev.Decision = "deny"
+		case "allow":
+			ev.EventType = audit.EventToolAllowed
+			ev.Decision = "allow"
+			ev.ApprovalReceiptHash = te.receiptHash
+			ev.ApprovalReceipt = te.receipt
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+// TestStaleHoldGrantsNothing reproduces the exact review scenario: a hold
+// denied off-record (denied-after-hold emits no event), then a retry as an
+// ordinary capability-accounted allow with the same hash in the same
+// session. No human receipt exists, so no grant may count.
+func TestStaleHoldGrantsNothing(t *testing.T) {
+	events := []testEvent{
+		{kind: "hold", hash: "req-h", session: "s"},
+		{kind: "allow", hash: "req-h", session: "s", receiptHash: "receipt-sha256:cap", receipt: map[string]any{"receipt_version": 1, "decision": "ALLOW"}},
+	}
+	rep := Compute(testEvents(events))
+	if rep.ApprovalGrants != 0 {
+		t.Fatalf("grants=%d want 0 (capability allow on stale hold)", rep.ApprovalGrants)
+	}
+}
+
+// TestDenyConsumesHold: an explicit deny retires the hold, so even a later
+// human-receipt allow with the same hash cannot count.
+func TestDenyConsumesHold(t *testing.T) {
+	events := []testEvent{
+		{kind: "hold", hash: "req-h", session: "s"},
+		{kind: "deny", hash: "req-h", session: "s"},
+		{kind: "allow", hash: "req-h", session: "s", receiptHash: "receipt-sha256:grant", receipt: map[string]any{"decision": "approve", "approver_id": "human-operator"}},
+	}
+	rep := Compute(testEvents(events))
+	if rep.ApprovalGrants != 0 {
+		t.Fatalf("grants=%d want 0 (deny consumed the hold)", rep.ApprovalGrants)
 	}
 }

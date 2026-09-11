@@ -217,13 +217,17 @@ func LoadEvents(r io.Reader) ([]audit.Event, error) {
 }
 
 // Compute derives today's computable metrics from parsed events, in log
-// order. Approval grants join holds: an allow counts only when its request
-// hash matches a preceding approval hold, because capability accounting
-// stores receipts in the same receipt-hash field on ordinary allows. Each
-// hold satisfies one grant; replays beyond that do not count.
+// order. Approval grants join holds on (request hash, session), consume one
+// hold each, and additionally require the receipt to identify a human
+// approve decision: capability accounting stores receipts in the same
+// receipt-hash field on ordinary allows, and denied-after-hold emits no
+// event at all, so hash-only matching would credit capability allows and
+// stale holds. Terminal denials consume their hold: a decided hold can
+// never grant later.
 func Compute(events []audit.Event) Report {
 	rep := Report{DeniedByRule: map[string]int64{}}
 	holds := map[string]int{}
+	holdKey := func(session, hash string) string { return hash + "\x00" + session }
 	for _, ev := range events {
 		switch ev.EventType {
 		case audit.EventToolDenied:
@@ -236,14 +240,19 @@ func Compute(events []audit.Event) Report {
 			if len(ev.SessionTaints) > 0 {
 				rep.TaintBlocks++
 			}
+			if ev.RequestHash != "" {
+				delete(holds, holdKey(ev.SessionID, ev.RequestHash))
+			}
 		case audit.EventToolAllowed:
-			if ev.ApprovalReceiptHash != "" && ev.RequestHash != "" && holds[ev.RequestHash] > 0 {
-				holds[ev.RequestHash]--
-				rep.ApprovalGrants++
+			if ev.ApprovalReceiptHash != "" && ev.RequestHash != "" && isHumanApproveReceipt(ev.ApprovalReceipt) {
+				if key := holdKey(ev.SessionID, ev.RequestHash); holds[key] > 0 {
+					holds[key]--
+					rep.ApprovalGrants++
+				}
 			}
 		case audit.EventToolApprovalRequired:
 			if ev.RequestHash != "" {
-				holds[ev.RequestHash]++
+				holds[holdKey(ev.SessionID, ev.RequestHash)]++
 			}
 			rep.ApprovalGates++
 		case audit.EventToolChainDetected:
@@ -251,6 +260,19 @@ func Compute(events []audit.Event) Report {
 		}
 	}
 	return rep
+}
+
+// isHumanApproveReceipt reports whether an attached receipt map identifies
+// a human approval grant. Capability eval/pause receipts share the
+// receipt-hash field but carry no approver identity and never decide
+// "approve", so they can neither match nor mint grants.
+func isHumanApproveReceipt(rec map[string]any) bool {
+	if rec == nil {
+		return false
+	}
+	approver, _ := rec["approver_id"].(string)
+	decision, _ := rec["decision"].(string)
+	return approver != "" && decision == "approve"
 }
 
 // Reconcile verifies every declared terminal deny decision has a matching
