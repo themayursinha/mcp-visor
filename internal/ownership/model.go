@@ -6,7 +6,9 @@ package ownership
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"strconv"
 	"time"
 )
 
@@ -97,18 +99,26 @@ type Proof struct {
 	EvaluatedAt   time.Time
 }
 
-// CanonicalGrantSHA binds a grant's exact terms. Timestamps use RFC3339Nano:
-// time.Parse accepts fractional seconds, and coarser formatting would merge
-// grants whose windows differ below one second into one hash.
+// CanonicalGrantSHA binds a grant's exact terms. The encoding is
+// injective: every field and every collection element is length-prefixed
+// (including the element count), so no two distinct grants share a hash.
+// Timestamps use RFC3339Nano: time.Parse accepts fractional seconds, and
+// coarser formatting would merge grants whose windows differ below one
+// second into one hash.
 func CanonicalGrantSHA(g Grant) string {
 	h := sha256.New()
-	for _, s := range []string{g.ID, g.Owner, g.Delegate, g.Server, g.Tool, g.EffectClass, g.ScopeArgument, g.IssuedAt.UTC().Format(time.RFC3339Nano), g.ExpiresAt.UTC().Format(time.RFC3339Nano)} {
+	writeField := func(s string) {
+		var buf [binary.MaxVarintLen64]byte
+		n := binary.PutUvarint(buf[:], uint64(len(s)))
+		h.Write(buf[:n])
 		h.Write([]byte(s))
-		h.Write([]byte{0})
 	}
+	for _, s := range []string{g.ID, g.Owner, g.Delegate, g.Server, g.Tool, g.EffectClass, g.ScopeArgument, g.IssuedAt.UTC().Format(time.RFC3339Nano), g.ExpiresAt.UTC().Format(time.RFC3339Nano)} {
+		writeField(s)
+	}
+	writeField(strconv.Itoa(len(g.ExactValues)))
 	for _, v := range g.ExactValues {
-		h.Write([]byte(v))
-		h.Write([]byte{0})
+		writeField(v)
 	}
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)

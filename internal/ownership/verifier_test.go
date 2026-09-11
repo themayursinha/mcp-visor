@@ -166,3 +166,19 @@ func TestGrantSHADistinguishesSubSecondWindows(t *testing.T) {
 		t.Fatal("sub-second window difference lost in grant hash")
 	}
 }
+
+func TestGrantSHADelimiterAmbiguity(t *testing.T) {
+	// ["a\x00b"] must not hash like ["a", "b"]: length-prefixing keeps the
+	// encoding injective.
+	mk := func(vals ...string) Grant {
+		return Grant{
+			ID: "g", Owner: "tenant-B", Delegate: "tenant-A",
+			Server: "mcp-server-B", Tool: "internal_fetch", EffectClass: "NETWORK",
+			ScopeArgument: "resource", ExactValues: vals,
+			IssuedAt: grantOn, ExpiresAt: grantOff,
+		}
+	}
+	if CanonicalGrantSHA(mk("a\x00b")) == CanonicalGrantSHA(mk("a", "b")) {
+		t.Fatal("delimiter ambiguity: distinct scope sets share a hash")
+	}
+}

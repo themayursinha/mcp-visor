@@ -28,13 +28,15 @@ type CapabilityOwnershipReceipt struct {
 	GrantExpiresAt string `json:"grant_expires_at,omitempty"`
 	RequestHash    string `json:"request_hash"`
 	PolicyHash     string `json:"policy_hash"`
-	EvaluatedAt    int64  `json:"evaluated_at"`
-	Verdict        string `json:"verdict"`
-	ReasonCode     string `json:"reason_code"`
-	KeyID          string `json:"signature_key_id"`
-	Algorithm      string `json:"signature_algorithm,omitempty"`
-	PublicKey      string `json:"public_key,omitempty"`
-	Signature      string `json:"signature,omitempty"`
+	// EvaluatedAt is unix nanoseconds: sub-second grant windows need
+	// lossless evaluation instants in signed evidence.
+	EvaluatedAt int64  `json:"evaluated_at"`
+	Verdict     string `json:"verdict"`
+	ReasonCode  string `json:"reason_code"`
+	KeyID       string `json:"signature_key_id"`
+	Algorithm   string `json:"signature_algorithm,omitempty"`
+	PublicKey   string `json:"public_key,omitempty"`
+	Signature   string `json:"signature,omitempty"`
 }
 
 // Receipt statuses mirror ownership verdicts plus the reason dimension.

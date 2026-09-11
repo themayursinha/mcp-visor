@@ -27,6 +27,7 @@
     "internal/policy/loader.go",
     "internal/proxy/capability_ownership.go",
     "internal/proxy/capability_ownership_test.go",
+    "internal/proxy/proxy.go",
     "internal/proxy/tools_call.go",
     "internal/audit/logger.go",
     "examples/borrowed-authority/main.go",
