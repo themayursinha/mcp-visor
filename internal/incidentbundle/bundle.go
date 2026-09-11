@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -144,6 +145,11 @@ func (b *Bundle) Append(kind string, timestamp int64, build func(*Event)) error 
 	}
 	if build != nil {
 		build(&ev)
+	}
+	// Re-check after the builder: it must not smuggle in an unknown kind
+	// (or rewrite timestamp/seq linkage inputs unchecked).
+	if !knownKinds[ev.Kind] {
+		return fmt.Errorf("unknown event kind %q", ev.Kind)
 	}
 	if ev.Payload != nil {
 		sum, err := canonicalHash(ev.Payload)
@@ -267,6 +273,11 @@ func Unmarshal(data []byte) (*Bundle, error) {
 	if err := dec.Decode(&b); err != nil {
 		return nil, fmt.Errorf("unmarshal bundle: %w", err)
 	}
+	// A single Decode stops at the first JSON value; trailing bytes would
+	// sit outside every hash and signature while the bundle still verifies.
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after bundle")
+	}
 	return &b, nil
 }
 
@@ -281,9 +292,23 @@ var requiredStages = []string{
 	KindExternalEffect,
 }
 
+// knownKinds is every event kind spec v0.1 admits: the four required
+// stages plus the two documented auxiliary kinds.
+var knownKinds = map[string]bool{
+	KindRequestedAction: true,
+	KindPolicyDecision:  true,
+	KindRuntimeAttempt:  true,
+	KindExternalEffect:  true,
+	KindStateDelta:      true,
+	KindPropagation:     true,
+}
+
 func checkEpisode(events []Event) error {
 	need := 0
 	for _, ev := range events {
+		if !knownKinds[ev.Kind] {
+			return fmt.Errorf("unknown event kind %q", ev.Kind)
+		}
 		rank := -1
 		for i, k := range requiredStages {
 			if ev.Kind == k {
@@ -294,17 +319,20 @@ func checkEpisode(events []Event) error {
 		if rank < 0 {
 			continue
 		}
-		if rank < need {
+		if rank != need {
 			// Only post-completion external_effect repeats are allowed:
 			// confirmation upgrades arrive after the episode is complete.
+			// Anything else out of position — premature, repeated, or
+			// regressed — breaks proof quality.
 			if need == len(requiredStages) && ev.Kind == KindExternalEffect {
 				continue
 			}
-			return fmt.Errorf("episode out of order: %q before required stage %q", ev.Kind, requiredStages[need])
+			if need >= len(requiredStages) {
+				return fmt.Errorf("episode already complete: unexpected %q", ev.Kind)
+			}
+			return fmt.Errorf("episode out of order: got %q, want required stage %q", ev.Kind, requiredStages[need])
 		}
-		if rank == need {
-			need++
-		}
+		need++
 	}
 	if need < len(requiredStages) {
 		return fmt.Errorf("episode incomplete: missing required stage %q", requiredStages[need])

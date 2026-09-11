@@ -321,3 +321,55 @@ func TestRepeatedEffectAccepted(t *testing.T) {
 		t.Fatalf("confirmation-upgrade episode rejected: %v", err)
 	}
 }
+
+func TestPrematureStageRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	// runtime_attempt before policy_decision, then a repeat to advance:
+	// the premature event must still fail the bundle.
+	b := buildPartialBundle(t, s, KindRequestedAction, KindRuntimeAttempt, KindPolicyDecision, KindRuntimeAttempt, KindExternalEffect)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("premature-stage episode verified")
+	}
+}
+
+func TestRepeatedRequiredStageRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildPartialBundle(t, s, KindRequestedAction, KindPolicyDecision, KindPolicyDecision, KindRuntimeAttempt, KindExternalEffect)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("repeated required stage verified")
+	}
+}
+
+func TestUnknownKindInBundleRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildPartialBundle(t, s, KindRequestedAction, KindPolicyDecision, KindRuntimeAttempt, KindExternalEffect)
+	b.Events[2].Kind = "side_quest"
+	// Re-seal over the mutated shape is impossible without the key mutating
+	// hashes, so verification must fail at the latest on kind policy.
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("unknown-kind episode verified")
+	}
+}
+
+func TestBuilderMutatedKindRejected(t *testing.T) {
+	b := New("x", "p", 1)
+	err := b.Append(KindRequestedAction, 1, func(ev *Event) {
+		ev.Kind = "side_quest"
+		ev.Payload = map[string]any{"a": 1}
+	})
+	if err == nil {
+		t.Fatal("builder-mutated kind accepted")
+	}
+}
+
+func TestTrailingDataRejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte(`{"injected":true}`)...)
+	if _, err := Unmarshal(data); err == nil {
+		t.Fatal("trailing data accepted")
+	}
+}
