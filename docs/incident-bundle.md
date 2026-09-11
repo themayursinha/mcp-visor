@@ -66,13 +66,14 @@ manifest field.
   verifiers must agree exactly (backends label their own variants, e.g.
   `ed25519-vault-transit`, and `TransitVerifier` reports it), while
   non-reporting verifiers accept plain `ed25519` only; empty key ids on
-  either side reject. Appending after sealing invalidates the signature
+  either side reject, as do non-`ed25519`-family labels at seal and verify
+  time. Appending after sealing invalidates the signature
   until re-sealed. Decoding requires valid UTF-8 with no surrogate escapes,
   exact canonical member spellings (case variants rejected), presence of
-  every mandatory member, and non-null values for every struct member
-  (null restores zeros that omitempty then drops from signature payloads;
-  nulls inside opaque payload maps stay legal data) — unsigned,
-  ambiguous, or incomplete documents cannot ride along; `supersedes`
+  every mandatory member, and non-null, non-empty values for every struct
+  member (empty optionals marshal back to absent; nulls inside opaque
+  payload maps stay legal data) — unsigned, ambiguous, or incomplete
+  documents cannot ride along; `supersedes`
   is valid only on a genuine confirmation upgrade.
 - `Verify` checks: spec version, event count vs manifest, sequence numbers,
   chain linkage, payload bindings, required episode stages in order

@@ -867,3 +867,36 @@ func TestNullOptionalMemberRejected(t *testing.T) {
 		t.Fatalf("valid bundle rejected: %v", err)
 	}
 }
+
+func TestEmptyOptionalMemberRejected(t *testing.T) {
+	b := loadFixture(t, "deny")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptied := bytes.Replace(data, []byte(`"principal":"agent:demo"`), []byte(`"principal":""`), 1)
+	if bytes.Equal(emptied, data) {
+		t.Skip("fixture shape changed; rewrite surgery")
+	}
+	if _, err := Unmarshal(emptied); err == nil {
+		t.Fatal("empty optional member accepted")
+	}
+	if _, err := Unmarshal(data); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+}
+
+func TestUnsupportedAlgorithmRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	lk := &labeledKey{fixedKey: s, label: "rsa"}
+	b := buildAllowBundle(t, s)
+	if err := b.Seal(lk); err == nil {
+		t.Fatal("unsupported algorithm sealed")
+	}
+	// A bundle somehow carrying the label still fails verification.
+	b2 := buildAllowBundle(t, s)
+	b2.Manifest.Algorithm = "rsa"
+	if err := b2.Verify(&labeledVerifier{pub: s.pub, id: s.id, label: "rsa"}); err == nil {
+		t.Fatal("unsupported algorithm verified")
+	}
+}

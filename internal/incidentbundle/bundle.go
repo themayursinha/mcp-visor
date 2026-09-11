@@ -199,6 +199,10 @@ func (b *Bundle) Seal(key SigningKey) error {
 	if len(b.Events) == 0 {
 		return fmt.Errorf("cannot seal an empty bundle")
 	}
+	// Fail fast: never create a bundle whose algorithm label Verify rejects.
+	if alg := key.Algorithm(); alg != "ed25519" && !strings.HasPrefix(alg, "ed25519-") {
+		return fmt.Errorf("unsupported signature algorithm %q", alg)
+	}
 	b.Manifest.KeyID = key.KeyID()
 	b.Manifest.Algorithm = key.Algorithm()
 	if pub, ok := key.PublicKey().(ed25519.PublicKey); ok {
@@ -275,11 +279,12 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 	}
 	// Bind the signed metadata claims to the verifier before checking the
 	// signature itself: otherwise a valid signature gets reported under the
-	// wrong key or algorithm. Backends label their own Ed25519 variants
-	// (e.g. ed25519-vault-transit); a reporting verifier must agree exactly
-	// with the manifest, while a non-reporting verifier only accepts plain
-	// ed25519 — unknown labels fail closed. Key ids bind unconditionally:
-	// empty on either side rejects.
+	// wrong key or algorithm. Labels must denote Ed25519: plain "ed25519"
+	// or an "ed25519-*" backend variant. A reporting verifier must agree
+	// exactly (backends label their own variants, e.g.
+	// ed25519-vault-transit, and TransitVerifier reports it); a
+	// non-reporting verifier only accepts plain ed25519. Unknown labels
+	// fail closed, and empty key ids on either side reject.
 	if b.Manifest.KeyID == "" {
 		return fmt.Errorf("manifest key id is empty")
 	}
@@ -290,6 +295,9 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 	if ak, ok := key.(algorithmReporter); ok && ak.Algorithm() != "" {
 		if b.Manifest.Algorithm != ak.Algorithm() {
 			return fmt.Errorf("manifest algorithm %q does not match verifier %q", b.Manifest.Algorithm, ak.Algorithm())
+		}
+		if b.Manifest.Algorithm != "ed25519" && !strings.HasPrefix(b.Manifest.Algorithm, "ed25519-") {
+			return fmt.Errorf("unsupported signature algorithm %q", b.Manifest.Algorithm)
 		}
 	} else if b.Manifest.Algorithm != "ed25519" {
 		return fmt.Errorf("unsupported signature algorithm %q", b.Manifest.Algorithm)
@@ -460,8 +468,16 @@ func checkMembers(where string, got map[string]json.RawMessage, exact, required 
 		if !exact[k] {
 			return fmt.Errorf("non-canonical %s member %q", where, k)
 		}
-		if string(bytes.TrimSpace(raw)) == "null" {
+		trimmed := string(bytes.TrimSpace(raw))
+		if trimmed == "null" {
 			return fmt.Errorf("%s member %q is null", where, k)
+		}
+		// Present-but-empty optionals marshal back to absent (omitempty),
+		// so an empty value verifies while asserting content the signer
+		// never saw. Required members are exempt: prev_hash:"" on seq 0
+		// and numeric zeros are structurally meaningful.
+		if !required[k] && (trimmed == `""` || trimmed == "[]" || trimmed == "{}") {
+			return fmt.Errorf("%s member %q is empty", where, k)
 		}
 	}
 	for k := range required {
