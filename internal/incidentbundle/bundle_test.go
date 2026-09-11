@@ -900,3 +900,63 @@ func TestUnsupportedAlgorithmRejected(t *testing.T) {
 		t.Fatal("unsupported algorithm verified")
 	}
 }
+
+func TestPaddedEmptyRejected(t *testing.T) {
+	// Padded empty array decodes empty and remarshal drops it: the envelope
+	// gate must catch the spelling-independent emptiness.
+	raw := []byte(`{"manifest":{"bundle_id":"b","spec_version":"0.1","created_at":1,"event_count":0,"head_hash":"h","policy_hash":"p","key_id":"k","algorithm":"ed25519"},"events":[]}`)
+	if _, err := Unmarshal(raw); err != nil {
+		t.Fatalf("control doc rejected: %v", err)
+	}
+	rawPad := []byte(`{"manifest":{"bundle_id":"b","spec_version":"0.1","created_at":1,"event_count":0,"head_hash":"h","policy_hash":"p","key_id":"k","algorithm":"ed25519","policy_id":[ ]},"events":[]}`)
+	if _, err := Unmarshal(rawPad); err == nil {
+		t.Fatal("padded empty optional accepted")
+	}
+}
+
+func TestEmptyIdentifiersRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := New("", "", 1788000090)
+	mustAppend(t, b, KindRequestedAction, 1788000091, func(ev *Event) {
+		ev.Payload = map[string]any{"a": 1}
+	})
+	mustAppend(t, b, KindPolicyDecision, 1788000092, func(ev *Event) {
+		ev.Payload = map[string]any{"b": 2}
+	})
+	mustAppend(t, b, KindRuntimeAttempt, 1788000093, func(ev *Event) {
+		ev.Payload = map[string]any{"c": 3}
+	})
+	mustAppend(t, b, KindExternalEffect, 1788000094, func(ev *Event) {
+		ev.Payload = map[string]any{"d": 4}
+		ev.Confirmation = ConfirmationConfirmed
+	})
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("empty identifiers verified")
+	}
+}
+
+func TestBadConfirmationRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := New("exec-badconf-001", "policy-sha256:demo", 1788000100)
+	ts := int64(1788000101)
+	mk := func(kind, confirmation string) {
+		mustAppend(t, b, kind, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": kind}
+			ev.Confirmation = confirmation
+		})
+		ts++
+	}
+	mk(KindRequestedAction, "")
+	mk(KindPolicyDecision, "verified")
+	mk(KindRuntimeAttempt, "")
+	mk(KindExternalEffect, ConfirmationConfirmed)
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("invalid confirmation value verified")
+	}
+}

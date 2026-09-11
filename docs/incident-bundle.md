@@ -67,12 +67,15 @@ manifest field.
   `ed25519-vault-transit`, and `TransitVerifier` reports it), while
   non-reporting verifiers accept plain `ed25519` only; empty key ids on
   either side reject, as do non-`ed25519`-family labels at seal and verify
-  time. Appending after sealing invalidates the signature
+  time. Bundle id and policy hash must be non-empty (they have no other
+  self-enforcing check). Appending after sealing invalidates the signature
   until re-sealed. Decoding requires valid UTF-8 with no surrogate escapes,
   exact canonical member spellings (case variants rejected), presence of
-  every mandatory member, and non-null, non-empty values for every struct
-  member (empty optionals marshal back to absent; nulls inside opaque
-  payload maps stay legal data) — unsigned, ambiguous, or incomplete
+  every mandatory member, and non-null values for every struct member;
+  present-but-empty optionals are rejected decode-aware (spelling variants
+  included; required zeros exempt), while confirmation values are validated
+  against the enum on every event that carries one. Nulls inside opaque
+  payload maps stay legal data. Unsigned, ambiguous, or incomplete
   documents cannot ride along; `supersedes`
   is valid only on a genuine confirmation upgrade.
 - `Verify` checks: spec version, event count vs manifest, sequence numbers,

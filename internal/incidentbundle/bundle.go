@@ -228,6 +228,14 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 	if uint64(len(b.Events)) != b.Manifest.EventCount {
 		return fmt.Errorf("event count %d does not match manifest %d", len(b.Events), b.Manifest.EventCount)
 	}
+	// Identifiers with no self-enforcing check elsewhere: an empty bundle
+	// id or policy binding would verify as a proof of nothing.
+	if b.Manifest.BundleID == "" {
+		return fmt.Errorf("bundle id is empty")
+	}
+	if b.Manifest.PolicyHash == "" {
+		return fmt.Errorf("policy hash is empty")
+	}
 	if err := checkEpisode(b.Events); err != nil {
 		return err
 	}
@@ -474,10 +482,30 @@ func checkMembers(where string, got map[string]json.RawMessage, exact, required 
 		}
 		// Present-but-empty optionals marshal back to absent (omitempty),
 		// so an empty value verifies while asserting content the signer
-		// never saw. Required members are exempt: prev_hash:"" on seq 0
-		// and numeric zeros are structurally meaningful.
-		if !required[k] && (trimmed == `""` || trimmed == "[]" || trimmed == "{}") {
-			return fmt.Errorf("%s member %q is empty", where, k)
+		// never saw. Decode-aware check: spelling variants ([ ], {\n})
+		// decode to the same empty values. Exactly-"" strings are empty;
+		// padded strings survive remarshal byte-identically, so no
+		// divergence exists for them (content quality is out of scope).
+		// Required members are exempt: prev_hash:"" on seq 0 and numeric
+		// zeros are structurally meaningful.
+		if !required[k] {
+			var v any
+			if err := json.Unmarshal(raw, &v); err == nil {
+				switch t := v.(type) {
+				case string:
+					if t == "" {
+						return fmt.Errorf("%s member %q is empty", where, k)
+					}
+				case []any:
+					if len(t) == 0 {
+						return fmt.Errorf("%s member %q is empty", where, k)
+					}
+				case map[string]any:
+					if len(t) == 0 {
+						return fmt.Errorf("%s member %q is empty", where, k)
+					}
+				}
+			}
 		}
 	}
 	for k := range required {
@@ -631,6 +659,8 @@ func checkEpisode(events []Event) error {
 			if ev.Confirmation != ConfirmationConfirmed && ev.Confirmation != ConfirmationUnconfirmed {
 				return fmt.Errorf("external_effect requires confirmation %q or %q", ConfirmationConfirmed, ConfirmationUnconfirmed)
 			}
+		} else if ev.Confirmation != "" && ev.Confirmation != ConfirmationConfirmed && ev.Confirmation != ConfirmationUnconfirmed {
+			return fmt.Errorf("event %d: confirmation %q is not a valid value", i, ev.Confirmation)
 		}
 		if rank != need {
 			// Only genuine confirmation upgrades are allowed after
