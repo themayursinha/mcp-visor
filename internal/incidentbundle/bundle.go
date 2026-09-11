@@ -17,6 +17,7 @@
 package incidentbundle
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -201,6 +202,9 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 	if uint64(len(b.Events)) != b.Manifest.EventCount {
 		return fmt.Errorf("event count %d does not match manifest %d", len(b.Events), b.Manifest.EventCount)
 	}
+	if err := checkEpisode(b.Events); err != nil {
+		return err
+	}
 	prev := ""
 	for i := range b.Events {
 		ev := &b.Events[i]
@@ -252,14 +256,60 @@ func (b *Bundle) Marshal() ([]byte, error) {
 	return json.Marshal(b)
 }
 
-// Unmarshal parses a bundle. Call Verify afterwards; parsing alone proves
-// nothing.
+// Unmarshal parses a bundle. Numbers decode as json.Number (same convention
+// as internal/mcp canonicalization) so large integers survive the
+// marshal→unmarshal→verify round trip without float64 precision loss.
+// Call Verify afterwards; parsing alone proves nothing.
 func Unmarshal(data []byte) (*Bundle, error) {
 	var b Bundle
-	if err := json.Unmarshal(data, &b); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&b); err != nil {
 		return nil, fmt.Errorf("unmarshal bundle: %w", err)
 	}
 	return &b, nil
+}
+
+// requiredStages is the v0.1 episode order. A proof-quality bundle must show
+// every stage in order; state_delta and propagation ride along freely, and
+// external_effect may repeat (confirmation upgrades are append-only new
+// events per docs/incident-bundle.md).
+var requiredStages = []string{
+	KindRequestedAction,
+	KindPolicyDecision,
+	KindRuntimeAttempt,
+	KindExternalEffect,
+}
+
+func checkEpisode(events []Event) error {
+	need := 0
+	for _, ev := range events {
+		rank := -1
+		for i, k := range requiredStages {
+			if ev.Kind == k {
+				rank = i
+				break
+			}
+		}
+		if rank < 0 {
+			continue
+		}
+		if rank < need {
+			// Only post-completion external_effect repeats are allowed:
+			// confirmation upgrades arrive after the episode is complete.
+			if need == len(requiredStages) && ev.Kind == KindExternalEffect {
+				continue
+			}
+			return fmt.Errorf("episode out of order: %q before required stage %q", ev.Kind, requiredStages[need])
+		}
+		if rank == need {
+			need++
+		}
+	}
+	if need < len(requiredStages) {
+		return fmt.Errorf("episode incomplete: missing required stage %q", requiredStages[need])
+	}
+	return nil
 }
 
 func eventHash(ev Event) (string, error) {

@@ -239,3 +239,85 @@ func TestPayloadHashMismatchRejected(t *testing.T) {
 		t.Fatal("mismatched payload_hash accepted")
 	}
 }
+
+func TestLargeIntegersRoundTrip(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := New("exec-bigint-001", "policy-sha256:demo", 1788000020)
+	mustAppend(t, b, KindRequestedAction, 1788000021, func(ev *Event) {
+		// 2^53+1: loses precision as float64; must survive marshal→parse→verify.
+		ev.Payload = map[string]any{"execution_id": 9007199254740993}
+		ev.EvidenceSource = "proxy-request"
+	})
+	mustAppend(t, b, KindPolicyDecision, 1788000022, func(ev *Event) {
+		ev.Payload = map[string]any{"decision": "allow"}
+	})
+	mustAppend(t, b, KindRuntimeAttempt, 1788000023, func(ev *Event) {
+		ev.Payload = map[string]any{"relayed": true}
+	})
+	mustAppend(t, b, KindExternalEffect, 1788000024, func(ev *Event) {
+		ev.Payload = map[string]any{"effect": "ok"}
+		ev.Confirmation = ConfirmationConfirmed
+	})
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Unmarshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err != nil {
+		t.Fatalf("large-int bundle fails round trip: %v", err)
+	}
+}
+
+func buildPartialBundle(t *testing.T, s *fixedKey, kinds ...string) *Bundle {
+	t.Helper()
+	b := New("exec-partial-001", "policy-sha256:demo", 1788000030)
+	ts := int64(1788000031)
+	for _, k := range kinds {
+		mustAppend(t, b, k, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": k}
+		})
+		ts++
+	}
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestPartialEpisodeRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildPartialBundle(t, s, KindRequestedAction)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("partial episode verified")
+	}
+}
+
+func TestSkippedStageRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildPartialBundle(t, s, KindRequestedAction, KindExternalEffect)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("stage-skipping episode verified")
+	}
+}
+
+func TestOutOfOrderEpisodeRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildPartialBundle(t, s, KindRequestedAction, KindRuntimeAttempt, KindPolicyDecision, KindExternalEffect)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("out-of-order episode verified")
+	}
+}
+
+func TestRepeatedEffectAccepted(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildPartialBundle(t, s, KindRequestedAction, KindPolicyDecision, KindRuntimeAttempt, KindExternalEffect, KindStateDelta, KindExternalEffect)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err != nil {
+		t.Fatalf("confirmation-upgrade episode rejected: %v", err)
+	}
+}
