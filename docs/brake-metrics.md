@@ -57,11 +57,13 @@ mapping below was checked against the producer, not the schema wish-list.
 
 Join-key gap: most deny paths emit no `request_hash`, so reconciliation
 against production logs stays a gap until they do. The proof demonstrates
-the mechanism on joinable records; hashless declared decisions report as
-unjoinable, never silently as matched or missing. Reconciliation indexes
-denials only — holds share hashes with their eventual denials and must
-never satisfy a denial lookup — and consumes one logged occurrence per
-declaration, so replayed requests cannot hide a missing second event.
+the mechanism on joinable records; hashless or sessionless declared
+decisions report as unjoinable, never silently as matched or missing.
+Reconciliation indexes denials by (session, hash) and consumes one logged
+occurrence per declaration: holds share hashes with their eventual
+denials and must never satisfy a denial lookup, replays cannot hide a
+missing second event, and a denial in one session never satisfies another
+session's declaration.
 
 ## Negative case
 

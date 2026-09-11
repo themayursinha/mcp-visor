@@ -82,10 +82,10 @@ func TestReconcileClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := Reconcile(Report{}, []DecisionRef{
-		{RequestHash: "req-deny-1", Decision: "deny"},
-		{RequestHash: "req-deny-2", Decision: "deny"},
-		{RequestHash: "req-allow-1", Decision: "allow"},
-		{RequestHash: "", Decision: "deny"},
+		{RequestHash: "req-deny-1", SessionID: "sess-brake-001", Decision: "deny"},
+		{RequestHash: "req-deny-2", SessionID: "sess-brake-001", Decision: "deny"},
+		{RequestHash: "req-allow-1", SessionID: "sess-brake-001", Decision: "allow"},
+		{RequestHash: "", SessionID: "sess-brake-001", Decision: "deny"},
 	}, events)
 	if rep.UnloggedDenials != 0 {
 		t.Fatalf("unlogged=%d (%v) want 0", rep.UnloggedDenials, rep.UnloggedDetail)
@@ -103,8 +103,8 @@ func TestReconcileCatchesMissingEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := Reconcile(Report{}, []DecisionRef{
-		{RequestHash: "req-deny-1", Decision: "deny"},
-		{RequestHash: "req-vanished-9", Decision: "deny"},
+		{RequestHash: "req-deny-1", SessionID: "sess-brake-001", Decision: "deny"},
+		{RequestHash: "req-vanished-9", SessionID: "sess-brake-001", Decision: "deny"},
 	}, events)
 	if rep.UnloggedDenials != 1 {
 		t.Fatalf("unlogged=%d want 1", rep.UnloggedDenials)
@@ -123,7 +123,7 @@ func TestHoldDoesNotSatisfyDenial(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := Reconcile(Report{}, []DecisionRef{
-		{RequestHash: "req-hold-1", Decision: "deny"},
+		{RequestHash: "req-hold-1", SessionID: "sess-brake-001", Decision: "deny"},
 	}, events)
 	if rep.UnloggedDenials != 1 {
 		t.Fatalf("unlogged=%d want 1 (hold must not satisfy denial)", rep.UnloggedDenials)
@@ -159,8 +159,8 @@ func TestReconcileConsumesMultiplicity(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := Reconcile(Report{}, []DecisionRef{
-		{RequestHash: "req-deny-1", Decision: "deny"},
-		{RequestHash: "req-deny-1", Decision: "deny"},
+		{RequestHash: "req-deny-1", SessionID: "sess-brake-001", Decision: "deny"},
+		{RequestHash: "req-deny-1", SessionID: "sess-brake-001", Decision: "deny"},
 	}, events)
 	if rep.UnloggedDenials != 1 {
 		t.Fatalf("unlogged=%d want 1 (replay multiplicity)", rep.UnloggedDenials)
@@ -302,5 +302,20 @@ func TestDenyConsumesHold(t *testing.T) {
 	rep := Compute(testEvents(events))
 	if rep.ApprovalGrants != 0 {
 		t.Fatalf("grants=%d want 0 (deny consumed the hold)", rep.ApprovalGrants)
+	}
+}
+
+func TestCrossSessionSubstitutionRejected(t *testing.T) {
+	// Same raw request (same hash) in two sessions: the logged denial in
+	// sess-brake-001 must not satisfy a declaration from sess-other.
+	events, err := LoadEvents(bytes.NewReader(loadBrakeFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Reconcile(Report{}, []DecisionRef{
+		{RequestHash: "req-deny-1", SessionID: "sess-other", Decision: "deny"},
+	}, events)
+	if rep.UnloggedDenials != 1 {
+		t.Fatalf("unlogged=%d want 1 (cross-session substitution)", rep.UnloggedDenials)
 	}
 }

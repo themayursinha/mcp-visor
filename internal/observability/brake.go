@@ -162,9 +162,12 @@ type Report struct {
 }
 
 // DecisionRef declares one terminal decision the log must contain (test
-// oracle / receipt excerpt for reconciliation).
+// oracle / receipt excerpt for reconciliation). Both identity halves are
+// required: identical raw requests in different sessions legitimately
+// share a request hash, so hash-only matching substitutes across sessions.
 type DecisionRef struct {
 	RequestHash string
+	SessionID   string
 	Decision    string
 }
 
@@ -282,8 +285,11 @@ func isHumanApproveReceipt(rec map[string]any) bool {
 // silently counted either way. A deny with no event is the negative case.
 func Reconcile(rep Report, decisions []DecisionRef, events []audit.Event) Report {
 	// Multiplicity matters: identical replayed requests share a hash, so
-	// each declared decision consumes one logged occurrence.
-	byHash := map[string]int{}
+	// each declared decision consumes one logged occurrence. Sessions
+	// scope the key: the same raw request in two sessions shares its hash,
+	// and a denial in one must never satisfy a declaration from another.
+	joinKey := func(session, hash string) string { return hash + "\x00" + session }
+	byKey := map[string]int{}
 	for _, ev := range events {
 		if ev.EventType != audit.EventToolDenied {
 			continue
@@ -291,22 +297,23 @@ func Reconcile(rep Report, decisions []DecisionRef, events []audit.Event) Report
 		if ev.RequestHash == "" {
 			continue
 		}
-		byHash[ev.RequestHash]++
+		byKey[joinKey(ev.SessionID, ev.RequestHash)]++
 	}
 	for _, d := range decisions {
 		if d.Decision != "deny" {
 			continue
 		}
-		if d.RequestHash == "" {
+		if d.RequestHash == "" || d.SessionID == "" {
 			rep.Unjoinable++
 			continue
 		}
-		if byHash[d.RequestHash] == 0 {
+		key := joinKey(d.SessionID, d.RequestHash)
+		if byKey[key] == 0 {
 			rep.UnloggedDenials++
-			rep.UnloggedDetail = append(rep.UnloggedDetail, d.RequestHash)
+			rep.UnloggedDetail = append(rep.UnloggedDetail, key)
 			continue
 		}
-		byHash[d.RequestHash]--
+		byKey[key]--
 	}
 	sort.Strings(rep.UnloggedDetail)
 	return rep
