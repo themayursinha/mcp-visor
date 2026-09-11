@@ -118,7 +118,7 @@ func (p *Proxy) renderOwnershipDecision(
 		GrantExpiresAt: grantBound(proof, false),
 		RequestHash:    sha256Hex(originalRaw),
 		PolicyHash:     sha256Hex([]byte(marshalEvidence(pol))),
-		EvaluatedAt:    proof.EvaluatedAt.Unix(),
+		EvaluatedAt:    proof.EvaluatedAt.UnixNano(),
 		ReasonCode:     proof.Reason,
 	}
 	if hasScope && cap.ScopeArgument != "" {
