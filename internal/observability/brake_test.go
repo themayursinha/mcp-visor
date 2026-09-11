@@ -339,16 +339,16 @@ func TestDenyConsumesOneHold(t *testing.T) {
 func TestDocContractTableMatches(t *testing.T) {
 	// Contract/code/doc drift guard: parse the contract table in
 	// docs/brake-metrics.md and require one row per normative metric whose
-	// source column carries every vocabulary token from Contract. Row
-	// deletion, renamed metrics, or diverged sources fail here — not in
-	// review.
+	// source, event, and status columns match the Contract entry. Row
+	// deletion, renamed metrics, or diverged sources/events/status fail
+	// here — not in review.
 	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "brake-metrics.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	rows := parseContractTable(t, string(doc))
 	for _, m := range Contract {
-		source, ok := rows[m.Name]
+		row, ok := rows[m.Name]
 		if !ok {
 			t.Fatalf("contract table has no row for %q", m.Name)
 		}
@@ -357,9 +357,25 @@ func TestDocContractTableMatches(t *testing.T) {
 			if token == "" {
 				continue
 			}
-			if !strings.Contains(normalizeToken(source), token) {
+			if !strings.Contains(normalizeToken(row.source), token) {
 				t.Fatalf("row %q omits source vocabulary %q", m.Name, strings.TrimSpace(token))
 			}
+		}
+		for _, token := range strings.Split(m.SourceEvent, "+") {
+			token = normalizeToken(token)
+			if idx := strings.Index(token, "("); idx >= 0 {
+				token = token[:idx]
+			}
+			if token == "" {
+				continue
+			}
+			if !strings.Contains(normalizeToken(row.event), token) {
+				t.Fatalf("row %q omits source event %q", m.Name, strings.TrimSpace(token))
+			}
+		}
+		wantStatus := map[Computability]string{ComputableToday: "computabletoday", NeedsNewField: "needsnewfield"}[m.Computability]
+		if !strings.Contains(normalizeToken(row.status), wantStatus) {
+			t.Fatalf("row %q status %q does not match contract %q", m.Name, row.status, m.Computability)
 		}
 		if m.SourceField == "" {
 			t.Fatalf("contract entry %q has no source field", m.Name)
@@ -367,11 +383,17 @@ func TestDocContractTableMatches(t *testing.T) {
 	}
 }
 
-// parseContractTable extracts metric-name → source-column from the
+type contractRow struct {
+	source string
+	event  string
+	status string
+}
+
+// parseContractTable extracts metric-name → row columns from the
 // "## Contract table" markdown section.
-func parseContractTable(t *testing.T, doc string) map[string]string {
+func parseContractTable(t *testing.T, doc string) map[string]contractRow {
 	t.Helper()
-	rows := map[string]string{}
+	rows := map[string]contractRow{}
 	inTable := false
 	for _, line := range strings.Split(doc, "\n") {
 		if strings.HasPrefix(line, "## ") {
@@ -386,7 +408,7 @@ func parseContractTable(t *testing.T, doc string) map[string]string {
 			t.Fatalf("malformed contract row: %q", line)
 		}
 		name := normalizeToken(parts[1])
-		rows[name] = parts[3]
+		rows[name] = contractRow{source: parts[3], event: parts[3], status: parts[5]}
 	}
 	return rows
 }
