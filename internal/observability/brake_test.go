@@ -50,6 +50,16 @@ func TestComputeFixture(t *testing.T) {
 	if rep.DeniedNoRule != 1 {
 		t.Fatalf("denied_no_rule=%d want 1 (separate counter, no sentinel)", rep.DeniedNoRule)
 	}
+	// Every computed counter has a registered contract name.
+	names := map[string]bool{}
+	for _, m := range Contract {
+		names[m.Name] = true
+	}
+	for _, want := range []string{MetricDeniedTotal, MetricDeniedByRule, MetricDeniedNoRule, MetricApprovalGatesTotal, MetricApprovalGrantsTotal, MetricApprovalOverridesTotal, MetricChainInterceptsTotal, MetricTaintBlocksTotal, MetricUnloggedDenialsTotal} {
+		if !names[want] {
+			t.Fatalf("counter %q missing from Contract", want)
+		}
+	}
 	if rep.ApprovalGates != 1 {
 		t.Fatalf("gates=%d want 1", rep.ApprovalGates)
 	}

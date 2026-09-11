@@ -20,6 +20,7 @@ v0.1 claims no compliance, no certifications, and no benchmark results.
 |---|---|---|---|---|
 | `brake.denied_total` | Terminal policy denials at the tools/call boundary | `tool_call_denied` / `event_type` | per log scope | computable today |
 | `brake.denied_by_rule` | Denials grouped by recorded policy rule; rule-less denials ride the separate `denied_no_rule` counter: no sentinel string can collide with a legal rule name, and free-form reasons are never folded in | `tool_call_denied` / `policy_rule` | per log scope | computable today, with open refinement below |
+| `brake.denied_no_rule` | Denials recorded without a policy rule (separate counter) | `tool_call_denied` / (absence of `policy_rule`) | per log scope | computable today |
 | `brake.approval_gates_total` | Calls held for human approval | `tool_call_approval_required` / `event_type` | per log scope | computable today |
 | `brake.approval_grants_total` | Holds resolved by human grant, joined to the hold by request hash | `tool_call_allowed` / `approval_receipt_hash` | per log scope | computable today |
 | `brake.approval_overrides_total` | Holds resolved without a grant receipt (bypassed or decided off-record) | none — no bypass/override outcome event | — | needs new field |
@@ -35,7 +36,7 @@ mapping below was checked against the producer, not the schema wish-list.
 1. **Out-of-scope reaches** — computable today via `brake.denied_total` /
    `brake.denied_by_rule`. Only the taint-egress branch records
    `policy_rule`; other deny paths (identity, runtime limits, ordinary
-   policy) record none and fall in `unattributed`. Reason strings carry
+   policy) record none and ride the separate `denied_no_rule` counter. Reason strings carry
    authority-transition evidence but are never grouped as rules.
 2. **Guardrail hits** — computable today: denials plus approval holds and
    grant receipts (`brake.denied_total` + `brake.approval_gates_total` +
@@ -96,7 +97,7 @@ parse boundary continuously instead of one review round at a time.
 
 - Approval-outcome events (the one hard gap above).
 - `request_hash` on all terminal deny events (join-key gap).
-- Stable rule identifier on every deny path (shrink `unattributed`).
+- Stable rule identifier on every deny path (shrink `denied_no_rule`).
 - Session-taint presence on every denial (widen taint blocks).
 - Normalized effect-class rollup mapping.
 - Per-principal / per-server windows (fields exist; windows undeclared).

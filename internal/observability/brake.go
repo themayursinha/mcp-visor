@@ -30,6 +30,10 @@ const (
 	MetricDeniedTotal = "brake.denied_total"
 	// MetricDeniedByRule breaks denials down by the firing policy rule.
 	MetricDeniedByRule = "brake.denied_by_rule"
+	// MetricDeniedNoRule counts denials recorded without a policy rule.
+	// Separate counter (never an in-band sentinel value) so no legal rule
+	// name can collide with it.
+	MetricDeniedNoRule = "brake.denied_no_rule"
 	// MetricApprovalGatesTotal counts calls held for human approval.
 	MetricApprovalGatesTotal = "brake.approval_gates_total"
 	// MetricApprovalGrantsTotal counts holds resolved by human grant,
@@ -84,6 +88,13 @@ var Contract = []MetricDef{
 		SourceField:   "policy_rule",
 		Computability: ComputableToday,
 		Gap:           "Open refinement: a stable rule identifier on every deny path so denied_no_rule shrinks to zero.",
+	},
+	{
+		Name:          MetricDeniedNoRule,
+		Definition:    "Denials recorded without a policy rule (separate counter; see denied_by_rule).",
+		SourceEvent:   string(audit.EventToolDenied),
+		SourceField:   "(absence of policy_rule)",
+		Computability: ComputableToday,
 	},
 	{
 		Name:          MetricApprovalGatesTotal,
