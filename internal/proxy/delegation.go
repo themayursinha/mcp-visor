@@ -28,13 +28,21 @@ func (s *Session) DelegationDepth() int {
 	return s.SpawnDepth
 }
 
-// AddDelegation records one delegation relay and returns the new depth.
-// Single critical section for increment-then-check callers.
-func (s *Session) AddDelegation() int {
+// AddCheckDelegation records one delegation relay and enforces max in a
+// single critical section: increment, limit check, and over-budget
+// rollback never separate, so concurrent denials cannot observe phantom
+// depths in their evidence. Counting runs whether or not max enforces
+// (max<=0 counts without limiting); over=true means the increment was
+// rolled back and the call is denied.
+func (s *Session) AddCheckDelegation(max int) (depth int, over bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.SpawnDepth++
-	return s.SpawnDepth
+	if max > 0 && s.SpawnDepth > max {
+		s.SpawnDepth--
+		return s.SpawnDepth, true
+	}
+	return s.SpawnDepth, false
 }
 
 // TryReserveDelegation atomically checks the ceiling and reserves one
@@ -131,15 +139,14 @@ func tryReserveDelegation(pol *policy.Policy, session *Session, serverName, tool
 		return nil, false
 	}
 	max := pol.Settings.MaxSpawnDepth
-	depth := session.AddDelegation()
-	if max > 0 && depth > max {
-		session.ReleaseDelegation()
+	depth, over := session.AddCheckDelegation(max)
+	if over {
 		return &ceilingDenyInfo{
 			reason: fmt.Sprintf(
 				"delegation ceiling exceeded (depth %d at max %d): argument class DELEGATION, effect class DELEGATION, authority transition PARENT->CHILD",
-				depth-1, max,
+				depth, max,
 			),
-			depth: depth - 1,
+			depth: depth,
 			max:   max,
 		}, false
 	}
