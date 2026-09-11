@@ -790,3 +790,60 @@ func TestInvalidUTF8Rejected(t *testing.T) {
 		t.Fatal("invalid UTF-8 accepted")
 	}
 }
+
+func TestNullRequiredMemberRejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nulled := bytes.Replace(data, []byte(`"seq":0`), []byte(`"seq":null`), 1)
+	if bytes.Equal(nulled, data) {
+		t.Skip("fixture shape changed; rewrite surgery")
+	}
+	if _, err := Unmarshal(nulled); err == nil {
+		t.Fatal("null required member accepted")
+	}
+	if _, err := Unmarshal(data); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+}
+
+func TestSurrogateEscapeRejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inject a lone surrogate escape into a path string.
+	forged := bytes.Replace(data, []byte("readme.md"), []byte(`read\ud800me.md`), 1)
+	if bytes.Equal(forged, data) {
+		t.Skip("fixture shape changed; rewrite surgery")
+	}
+	if _, err := Unmarshal(forged); err == nil {
+		t.Fatal("surrogate escape accepted")
+	}
+	if _, err := Unmarshal(data); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+}
+
+func TestRejectSurrogateEscapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{"plain", `{"a":"readme.md"}`, false},
+		{"lone high", `{"a":"read\ud800me"}`, true},
+		{"lone low", `{"a":"read\udc00me"}`, true},
+		{"paired astral", `{"a":"face\ud83d\ude00"}`, true},
+		{"escaped backslash", `{"a":"C:\\ud800"}`, false},
+		{"ordinary escape", "{\"a\":\"tab\\there\"}", false},
+	}
+	for _, tc := range cases {
+		if err := rejectSurrogateEscapes([]byte(tc.raw)); (err != nil) != tc.wantErr {
+			t.Errorf("%s: err=%v wantErr=%v", tc.name, err, tc.wantErr)
+		}
+	}
+}

@@ -332,6 +332,12 @@ func Unmarshal(data []byte) (*Bundle, error) {
 	if !utf8.Valid(data) {
 		return nil, fmt.Errorf("bundle is not valid UTF-8")
 	}
+	// Surrogate escapes (\uD800–\uDFFF, paired or lone) decode to characters
+	// Go re-encodes as raw UTF-8, so raw and canonical forms diverge while
+	// hashes still match. Canonical output never contains them.
+	if err := rejectSurrogateEscapes(data); err != nil {
+		return nil, err
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	// Strict struct decoding: unknown fields outside payload would
@@ -440,7 +446,9 @@ func checkExactShape(data []byte) error {
 	return nil
 }
 
-// checkMembers rejects non-canonical spellings and absent mandatory members.
+// checkMembers rejects non-canonical spellings and absent or null
+// mandatory members. Null restores typed zero values identically, so
+// presence alone cannot prove completeness.
 func checkMembers(where string, got map[string]json.RawMessage, exact, required map[string]bool) error {
 	for k := range got {
 		if !exact[k] {
@@ -448,9 +456,52 @@ func checkMembers(where string, got map[string]json.RawMessage, exact, required 
 		}
 	}
 	for k := range required {
-		if _, ok := got[k]; !ok {
+		raw, ok := got[k]
+		if !ok {
 			return fmt.Errorf("%s is missing required member %q", where, k)
 		}
+		if string(bytes.TrimSpace(raw)) == "null" {
+			return fmt.Errorf("%s member %q is null", where, k)
+		}
+	}
+	return nil
+}
+
+// rejectSurrogateEscapes fails raw documents containing \uD800–\uDFFF
+// escapes. The scan is escape-aware (a `\\` consumes its follower), so an
+// escaped backslash before 'u' does not false-positive.
+func rejectSurrogateEscapes(data []byte) error {
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\\' || i+1 >= len(data) {
+			continue
+		}
+		next := data[i+1]
+		if next != 'u' {
+			i++
+			continue
+		}
+		if i+5 >= len(data) {
+			break
+		}
+		var v int
+		ok := true
+		for _, c := range data[i+2 : i+6] {
+			v <<= 4
+			switch {
+			case c >= '0' && c <= '9':
+				v |= int(c - '0')
+			case c >= 'a' && c <= 'f':
+				v |= int(c-'a') + 10
+			case c >= 'A' && c <= 'F':
+				v |= int(c-'A') + 10
+			default:
+				ok = false
+			}
+		}
+		if ok && v >= 0xD800 && v <= 0xDFFF {
+			return fmt.Errorf("surrogate escape \\u%04X", v)
+		}
+		i += 5
 	}
 	return nil
 }
