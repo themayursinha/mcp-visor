@@ -283,6 +283,12 @@ func Lint(p *Policy) LintResult {
 			Severity: SeverityError, Message: "session_max_tools must be non-negative",
 		})
 	}
+	if p.Settings.MaxSpawnDepth < 0 {
+		res.Violations = append(res.Violations, LintViolation{
+			Path: "settings.max_spawn_depth", Type: ViolationTypeError, Field: "max_spawn_depth",
+			Severity: SeverityError, Message: "max_spawn_depth must be non-negative",
+		})
+	}
 	if p.Settings.ApprovalTimeoutSecs < 0 {
 		res.Violations = append(res.Violations, LintViolation{
 			Path: "settings.approval_timeout_seconds", Type: ViolationTypeError, Field: "approval_timeout_seconds",

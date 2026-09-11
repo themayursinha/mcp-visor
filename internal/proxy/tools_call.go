@@ -287,6 +287,17 @@ func (p *Proxy) processToolsCall(
 			decision = policy.Decision{Action: policy.ActionRequireApproval, Reason: capPauseReason}
 		}
 	}
+	// Delegation ceiling: an allow-bound delegation call past the session
+	// budget becomes a deny here and flows through the deny path below
+	// (metrics, audit with depth fields, SIEM, release handling).
+	// Approval-bound calls are checked at grant time instead.
+	var ceiling *ceilingDenyInfo
+	if decision.Action == policy.ActionAllow {
+		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
+			ceiling = info
+			decision = policy.Decision{Action: policy.ActionDeny, Reason: info.reason}
+		}
+	}
 
 	switch decision.Action {
 	case policy.ActionDeny:
@@ -303,6 +314,10 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(decision.Action),
 			Reason:    withRedactionNote(decision.Reason, redactionResult),
 			RiskLevel: string(risk),
+		}
+		if ceiling != nil {
+			deniedEvent.DelegationDepth = ceiling.depth
+			deniedEvent.MaxSpawnDepth = ceiling.max
 		}
 		if egressTriggered {
 			deniedEvent.SessionTaints = p.session.TaintNames()
@@ -324,6 +339,11 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 
 	case policy.ActionRequireApproval:
+		// Delegation ceiling: deny before any approval work when the budget
+		// is already spent; the grant site rechecks for races.
+		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info)
+		}
 		// The runtime snapshot was captured at the top of this call while
 		// runtimeMu.RLock was held and remains authoritative: the barrier is
 		// held until just before the blocking approval wait, so reloads
@@ -366,6 +386,11 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
+		// Delegation ceiling recheck: the budget may have been spent while
+		// the approval wait was outstanding.
+		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info)
+		}
 		// Durable commit before any relay: the runtime barrier is already
 		// released (approval wait happened above), so a failure here only
 		// denies; it does not touch chain/taint/metric state.
@@ -374,6 +399,7 @@ func (p *Proxy) processToolsCall(
 			return raw, "denied"
 		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
+		noteDelegationRelay(snapshot.policy, p.session, serverName, callReq.Name)
 		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
 		p.metrics.IncrementApproved()
 		p.forwardAudit(allowEvent)
@@ -401,6 +427,7 @@ func (p *Proxy) processToolsCall(
 			return raw, "denied"
 		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
+		noteDelegationRelay(snapshot.policy, p.session, serverName, callReq.Name)
 		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(allowEvent)
@@ -428,6 +455,7 @@ func (p *Proxy) processToolsCall(
 			return raw, "denied"
 		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
+		noteDelegationRelay(snapshot.policy, p.session, serverName, callReq.Name)
 		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(defaultAllowEvent)
