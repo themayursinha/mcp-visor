@@ -101,4 +101,11 @@ func (v *TransitVerifier) KeyID() string {
 	return v.keyID
 }
 
+// Algorithm reports the same Ed25519-transit label the signer records, so
+// consumers binding manifest metadata to verifiers (e.g.
+// internal/incidentbundle) accept vault-sealed bundles.
+func (v *TransitVerifier) Algorithm() string {
+	return "ed25519-vault-transit"
+}
+
 var _ signer.Verifier = (*TransitVerifier)(nil)

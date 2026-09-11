@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
+	"strings"
 	"time"
 )
 
@@ -272,17 +274,26 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 	}
 	// Bind the signed metadata claims to the verifier before checking the
 	// signature itself: otherwise a valid signature gets reported under the
-	// wrong key or algorithm.
-	if b.Manifest.Algorithm != "ed25519" {
+	// wrong key or algorithm. Backends label their own Ed25519 variants
+	// (e.g. ed25519-vault-transit); a reporting verifier must agree exactly
+	// with the manifest, while a non-reporting verifier only accepts plain
+	// ed25519 — unknown labels fail closed. Key ids bind unconditionally:
+	// empty on either side rejects.
+	if b.Manifest.KeyID == "" {
+		return fmt.Errorf("manifest key id is empty")
+	}
+	if key.KeyID() == "" {
+		return fmt.Errorf("verifier key id is empty")
+	}
+	type algorithmReporter interface{ Algorithm() string }
+	if ak, ok := key.(algorithmReporter); ok && ak.Algorithm() != "" {
+		if b.Manifest.Algorithm != ak.Algorithm() {
+			return fmt.Errorf("manifest algorithm %q does not match verifier %q", b.Manifest.Algorithm, ak.Algorithm())
+		}
+	} else if b.Manifest.Algorithm != "ed25519" {
 		return fmt.Errorf("unsupported signature algorithm %q", b.Manifest.Algorithm)
 	}
-	// Algorithm is advisory on verifiers that report one; key id and bytes
-	// always bind.
-	type algorithmReporter interface{ Algorithm() string }
-	if ak, ok := key.(algorithmReporter); ok && ak.Algorithm() != "" && ak.Algorithm() != b.Manifest.Algorithm {
-		return fmt.Errorf("verifier algorithm %q does not match manifest %q", ak.Algorithm(), b.Manifest.Algorithm)
-	}
-	if key.KeyID() != "" && key.KeyID() != b.Manifest.KeyID {
+	if key.KeyID() != b.Manifest.KeyID {
 		return fmt.Errorf("verifier key id does not match manifest")
 	}
 	keyPub, ok := key.PublicKey().(ed25519.PublicKey)
@@ -330,11 +341,81 @@ func Unmarshal(data []byte) (*Bundle, error) {
 	}
 	// encoding/json is last-wins on duplicate members while other
 	// consumers are first-wins: reject duplicates at every object level
-	// (including open payload maps) before trusting the shape.
+	// (including open payload maps) before trusting the shape. Matching is
+	// case-sensitive here; struct-field folding is handled by exact-shape
+	// validation below.
 	if err := rejectDuplicateKeys(data); err != nil {
 		return nil, err
 	}
+	// Struct levels must use exact canonical spellings: encoding/json binds
+	// fields case-insensitively, so BUNDLE_ID would otherwise alias
+	// bundle_id for some consumers and not others. Key sets derive from
+	// struct tags via reflection, so they cannot drift from the schema.
+	if err := checkExactShape(data); err != nil {
+		return nil, err
+	}
 	return &b, nil
+}
+
+// exactKeys returns the canonical JSON member names of a struct from its
+// json tags.
+func exactKeys[T any]() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		out[name] = true
+	}
+	return out
+}
+
+// checkExactShape requires every struct-level member to use its canonical
+// spelling. Payload maps stay open; everything else is schema-fixed.
+func checkExactShape(data []byte) error {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return fmt.Errorf("unmarshal bundle envelope: %w", err)
+	}
+	bundleKeys := exactKeys[Bundle]()
+	for k := range top {
+		if !bundleKeys[k] {
+			return fmt.Errorf("non-canonical bundle member %q", k)
+		}
+	}
+	manifestKeys := exactKeys[Manifest]()
+	var manifest map[string]json.RawMessage
+	if raw, ok := top["manifest"]; ok {
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return fmt.Errorf("unmarshal manifest envelope: %w", err)
+		}
+		for k := range manifest {
+			if !manifestKeys[k] {
+				return fmt.Errorf("non-canonical manifest member %q", k)
+			}
+		}
+	}
+	eventKeys := exactKeys[Event]()
+	var events []json.RawMessage
+	if raw, ok := top["events"]; ok {
+		if err := json.Unmarshal(raw, &events); err != nil {
+			return fmt.Errorf("unmarshal events envelope: %w", err)
+		}
+		for i, eraw := range events {
+			var em map[string]json.RawMessage
+			if err := json.Unmarshal(eraw, &em); err != nil {
+				return fmt.Errorf("unmarshal event %d envelope: %w", i, err)
+			}
+			for k := range em {
+				if !eventKeys[k] {
+					return fmt.Errorf("non-canonical event member %q", k)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // rejectDuplicateKeys walks the raw document tracking member names per

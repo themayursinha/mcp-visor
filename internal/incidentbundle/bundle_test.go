@@ -675,3 +675,82 @@ func TestSignerMetadataBound(t *testing.T) {
 		t.Fatal("mismatched public key verified")
 	}
 }
+
+// labeledKey simulates a backend signer (e.g. vault transit) recording its
+// own Ed25519 algorithm label.
+type labeledKey struct {
+	*fixedKey
+	label string
+}
+
+func (k *labeledKey) Algorithm() string { return k.label }
+
+type labeledVerifier struct {
+	pub   ed25519.PublicKey
+	id    string
+	label string
+}
+
+func (v *labeledVerifier) Verify(data, sig []byte) error {
+	if !ed25519.Verify(v.pub, data, sig) {
+		return fmt.Errorf("signature verification failed")
+	}
+	return nil
+}
+func (v *labeledVerifier) PublicKey() crypto.PublicKey { return v.pub }
+func (v *labeledVerifier) KeyID() string               { return v.id }
+func (v *labeledVerifier) Algorithm() string           { return v.label }
+
+func TestCaseVariantMemberRejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := bytes.Replace(data, []byte(`"bundle_id"`), []byte(`"BUNDLE_ID"`), 1)
+	if bytes.Equal(forged, data) {
+		t.Skip("fixture shape changed; rewrite injection")
+	}
+	if _, err := Unmarshal(forged); err == nil {
+		t.Fatal("case-variant member accepted")
+	}
+	if _, err := Unmarshal(data); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+}
+
+func TestBackendLabelRoundTrip(t *testing.T) {
+	s := exampleSeedKey(t)
+	lk := &labeledKey{fixedKey: s, label: "ed25519-vault-transit"}
+	b := buildAllowBundle(t, s)
+	// Reseal under the backend label.
+	if err := b.Seal(lk); err != nil {
+		t.Fatal(err)
+	}
+	match := &labeledVerifier{pub: s.pub, id: s.id, label: "ed25519-vault-transit"}
+	if err := b.Verify(match); err != nil {
+		t.Fatalf("matching backend label rejected: %v", err)
+	}
+	// Non-reporting verifier only accepts plain ed25519.
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.pub)); err == nil {
+		t.Fatal("backend label accepted by plain verifier")
+	}
+	// Mismatched reporting label rejects.
+	other := &labeledVerifier{pub: s.pub, id: s.id, label: "ed25519-other"}
+	if err := b.Verify(other); err == nil {
+		t.Fatal("mismatched algorithm label verified")
+	}
+}
+
+func TestEmptyKeyIDRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildAllowBundle(t, s)
+	empty := &labeledVerifier{pub: s.pub, id: "", label: "ed25519"}
+	if err := b.Verify(empty); err == nil {
+		t.Fatal("empty verifier key id verified")
+	}
+	b.Manifest.KeyID = ""
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.pub)); err == nil {
+		t.Fatal("empty manifest key id verified")
+	}
+}
