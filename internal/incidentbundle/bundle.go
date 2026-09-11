@@ -653,6 +653,9 @@ func checkEpisode(events []Event) error {
 			if ev.Supersedes != nil {
 				return fmt.Errorf("supersedes is only valid on a confirmation upgrade")
 			}
+			if ev.Confirmation != "" && ev.Confirmation != ConfirmationConfirmed && ev.Confirmation != ConfirmationUnconfirmed {
+				return fmt.Errorf("event %d: confirmation %q is not a valid value", i, ev.Confirmation)
+			}
 			continue
 		}
 		if ev.Kind == KindExternalEffect {

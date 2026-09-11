@@ -960,3 +960,27 @@ func TestBadConfirmationRejected(t *testing.T) {
 		t.Fatal("invalid confirmation value verified")
 	}
 }
+
+func TestBadConfirmationOnAuxRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := New("exec-auxconf-001", "policy-sha256:demo", 1788000110)
+	ts := int64(1788000111)
+	mk := func(kind, confirmation string) {
+		mustAppend(t, b, kind, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": kind}
+			ev.Confirmation = confirmation
+		})
+		ts++
+	}
+	mk(KindRequestedAction, "")
+	mk(KindPolicyDecision, "")
+	mk(KindRuntimeAttempt, "")
+	mk(KindExternalEffect, ConfirmationConfirmed)
+	mk(KindPropagation, "verified")
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("invalid aux confirmation verified")
+	}
+}
