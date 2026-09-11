@@ -62,13 +62,17 @@ manifest field.
 - `Verify` checks: spec version, event count vs manifest, sequence numbers,
   chain linkage, payload bindings, required episode stages in order
   (`requested_action` → `policy_decision` → `runtime_attempt` →
-  `external_effect`; premature, repeated (non-upgrade), regressed, or
-  unknown kinds rejected; post-completion `external_effect` repeats are
-  confirmation upgrades), tip hash, signature, and no trailing bytes after
-  the bundle. Numbers decode as `json.Number`, so 64-bit integers survive
-  the marshal→parse→verify round trip. `Verify` does **not** check
-  freshness, wall-clock policy, or semantic truth of payloads — open design
-  decisions, below.
+  `external_effect`; premature, repeated, regressed, or unknown kinds
+  rejected; the sole exception is a genuine confirmation upgrade — a
+  `confirmed` repeat of an `unconfirmed` effect after completion),
+  tip hash, signature, and no trailing bytes after the bundle. External
+  effects must carry a valid confirmation. `Append` owns framing
+  (kind, seq, linkage, timestamp): the builder callback supplies content
+  fields only, so callbacks can neither retarget stages nor corrupt the
+  chain. Numbers decode as `json.Number`, so 64-bit integers survive the
+  marshal→parse→verify round trip. `Verify` does **not** check freshness,
+  wall-clock policy, or semantic truth of payloads — open design decisions,
+  below.
 
 ## Verification
 

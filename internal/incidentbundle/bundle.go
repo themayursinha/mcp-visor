@@ -146,11 +146,19 @@ func (b *Bundle) Append(kind string, timestamp int64, build func(*Event)) error 
 	if build != nil {
 		build(&ev)
 	}
-	// Re-check after the builder: it must not smuggle in an unknown kind
-	// (or rewrite timestamp/seq linkage inputs unchecked).
-	if !knownKinds[ev.Kind] {
-		return fmt.Errorf("unknown event kind %q", ev.Kind)
+	// Framing belongs to Append, not the builder: content fields
+	// (principal, payload, …) are the builder's domain, but sequence,
+	// linkage, timestamp, and the stage itself are restored so a hostile
+	// or buggy callback can neither retarget the stage nor corrupt the
+	// chain inputs. Unknown kinds are rejected outright.
+	ev.Kind = kind
+	ev.Seq = uint64(len(b.Events))
+	if n := len(b.Events); n > 0 {
+		ev.PrevHash = b.Events[n-1].Hash
+	} else {
+		ev.PrevHash = ""
 	}
+	ev.Timestamp = timestamp
 	if ev.Payload != nil {
 		sum, err := canonicalHash(ev.Payload)
 		if err != nil {
@@ -305,6 +313,7 @@ var knownKinds = map[string]bool{
 
 func checkEpisode(events []Event) error {
 	need := 0
+	lastEffect := ""
 	for _, ev := range events {
 		if !knownKinds[ev.Kind] {
 			return fmt.Errorf("unknown event kind %q", ev.Kind)
@@ -319,18 +328,28 @@ func checkEpisode(events []Event) error {
 		if rank < 0 {
 			continue
 		}
+		if ev.Kind == KindExternalEffect {
+			if ev.Confirmation != ConfirmationConfirmed && ev.Confirmation != ConfirmationUnconfirmed {
+				return fmt.Errorf("external_effect requires confirmation %q or %q", ConfirmationConfirmed, ConfirmationUnconfirmed)
+			}
+		}
 		if rank != need {
-			// Only post-completion external_effect repeats are allowed:
-			// confirmation upgrades arrive after the episode is complete.
-			// Anything else out of position — premature, repeated, or
-			// regressed — breaks proof quality.
-			if need == len(requiredStages) && ev.Kind == KindExternalEffect {
+			// Only genuine confirmation upgrades are allowed after
+			// completion: the prior effect must be unconfirmed and the
+			// repeat confirmed. Anything else out of position — premature,
+			// repeated, or regressed — breaks proof quality.
+			if need == len(requiredStages) && ev.Kind == KindExternalEffect &&
+				ev.Confirmation == ConfirmationConfirmed && lastEffect == ConfirmationUnconfirmed {
+				lastEffect = ConfirmationConfirmed
 				continue
 			}
 			if need >= len(requiredStages) {
 				return fmt.Errorf("episode already complete: unexpected %q", ev.Kind)
 			}
 			return fmt.Errorf("episode out of order: got %q, want required stage %q", ev.Kind, requiredStages[need])
+		}
+		if ev.Kind == KindExternalEffect {
+			lastEffect = ev.Confirmation
 		}
 		need++
 	}

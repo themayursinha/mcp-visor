@@ -281,6 +281,9 @@ func buildPartialBundle(t *testing.T, s *fixedKey, kinds ...string) *Bundle {
 	for _, k := range kinds {
 		mustAppend(t, b, k, ts, func(ev *Event) {
 			ev.Payload = map[string]any{"note": k}
+			if k == KindExternalEffect {
+				ev.Confirmation = ConfirmationConfirmed
+			}
 		})
 		ts++
 	}
@@ -315,10 +318,82 @@ func TestOutOfOrderEpisodeRejected(t *testing.T) {
 }
 
 func TestRepeatedEffectAccepted(t *testing.T) {
+	// Genuine upgrade: unconfirmed effect, then the confirmed record.
 	s := exampleSeedKey(t)
-	b := buildPartialBundle(t, s, KindRequestedAction, KindPolicyDecision, KindRuntimeAttempt, KindExternalEffect, KindStateDelta, KindExternalEffect)
+	b := New("exec-upgrade-001", "policy-sha256:demo", 1788000040)
+	ts := int64(1788000041)
+	stages := []struct {
+		kind         string
+		confirmation string
+	}{
+		{KindRequestedAction, ""},
+		{KindPolicyDecision, ""},
+		{KindRuntimeAttempt, ""},
+		{KindExternalEffect, ConfirmationUnconfirmed},
+		{KindStateDelta, ""},
+		{KindExternalEffect, ConfirmationConfirmed},
+	}
+	for _, st := range stages {
+		st := st
+		mustAppend(t, b, st.kind, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": st.kind}
+			ev.Confirmation = st.confirmation
+		})
+		ts++
+	}
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
 	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err != nil {
 		t.Fatalf("confirmation-upgrade episode rejected: %v", err)
+	}
+}
+
+func TestNonUpgradeRepeatRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	// confirmed effect followed by another confirmed effect: no upgrade.
+	b := buildPartialBundle(t, s, KindRequestedAction, KindPolicyDecision, KindRuntimeAttempt, KindExternalEffect, KindExternalEffect)
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("non-upgrade repeat verified")
+	}
+}
+
+func TestEmptyConfirmationRejected(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := New("exec-emptyconf-001", "policy-sha256:demo", 1788000050)
+	ts := int64(1788000051)
+	for _, k := range []string{KindRequestedAction, KindPolicyDecision, KindRuntimeAttempt} {
+		mustAppend(t, b, k, ts, func(ev *Event) {
+			ev.Payload = map[string]any{"note": k}
+		})
+		ts++
+	}
+	mustAppend(t, b, KindExternalEffect, ts, func(ev *Event) {
+		ev.Payload = map[string]any{"note": "no confirmation set"}
+	})
+	if err := b.Seal(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("empty-confirmation effect verified")
+	}
+}
+
+func TestBuilderFramingRestored(t *testing.T) {
+	b := New("x", "p", 1)
+	err := b.Append(KindRequestedAction, 42, func(ev *Event) {
+		ev.Payload = map[string]any{"a": 1}
+		ev.Kind = KindPropagation
+		ev.Seq = 99
+		ev.PrevHash = "forged"
+		ev.Timestamp = 7
+	})
+	if err != nil {
+		t.Fatalf("append with hostile builder failed: %v", err)
+	}
+	got := b.Events[0]
+	if got.Kind != KindRequestedAction || got.Seq != 0 || got.PrevHash != "" || got.Timestamp != 42 {
+		t.Fatalf("framing not restored: %+v", got)
 	}
 }
 
@@ -351,14 +426,19 @@ func TestUnknownKindInBundleRejected(t *testing.T) {
 	}
 }
 
-func TestBuilderMutatedKindRejected(t *testing.T) {
+func TestBuilderMutatedKindRestored(t *testing.T) {
+	// Unknown kinds from the builder are restored to the requested stage,
+	// not smuggled through: framing belongs to Append.
 	b := New("x", "p", 1)
 	err := b.Append(KindRequestedAction, 1, func(ev *Event) {
 		ev.Kind = "side_quest"
 		ev.Payload = map[string]any{"a": 1}
 	})
-	if err == nil {
-		t.Fatal("builder-mutated kind accepted")
+	if err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+	if b.Events[0].Kind != KindRequestedAction {
+		t.Fatalf("kind not restored: %q", b.Events[0].Kind)
 	}
 }
 
