@@ -35,6 +35,31 @@ func (s *Session) NoteDelegation() {
 	s.SpawnDepth++
 }
 
+// TryReserveDelegation atomically checks the ceiling and reserves one
+// budget unit. Check-and-reserve must be one critical section: separate
+// read and increment lets concurrent calls both pass and over-admit past
+// a hard cap. Returns the post-reserve depth and whether a unit was taken.
+func (s *Session) TryReserveDelegation(max int) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.SpawnDepth+1 > max {
+		return s.SpawnDepth, false
+	}
+	s.SpawnDepth++
+	return s.SpawnDepth, true
+}
+
+// ReleaseDelegation returns one reserved unit (floor zero). Used only when
+// a call reserved budget but then failed to commit its authorization: the
+// call never relayed, so the budget must not stay spent.
+func (s *Session) ReleaseDelegation() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.SpawnDepth > 0 {
+		s.SpawnDepth--
+	}
+}
+
 // toolDelegates reports whether the policy marks this tool as a delegation
 // (spawn) tool. Unknown tools never count: delegation is declared, not
 // guessed from names.
@@ -89,20 +114,35 @@ func checkDelegationCeiling(pol *policy.Policy, session *Session, serverName, to
 	return nil
 }
 
-// noteDelegationRelay records an authorized delegation relay. Called
-// alongside taint marking on every allow-commit path; denied calls never
-// reach it, so denials never consume budget.
-func noteDelegationRelay(pol *policy.Policy, session *Session, serverName, toolName string) {
+// tryReserveDelegation atomically checks the ceiling and reserves one
+// budget unit for an allow-bound call. Returns limited info on denial, or
+// reserved=true when a unit is held. The caller must release the unit if
+// the call never relays (durable-commit failure); every other terminal
+// path (relay, deny, approval reject) settles the reservation by
+// construction. Unenforced or non-delegating calls return neither.
+func tryReserveDelegation(pol *policy.Policy, session *Session, serverName, toolName string) (info *ceilingDenyInfo, reserved bool) {
 	if pol == nil || session == nil {
-		return
+		return nil, false
 	}
-	if pol.Settings.MaxSpawnDepth <= 0 {
-		return
+	max := pol.Settings.MaxSpawnDepth
+	if max <= 0 {
+		return nil, false
 	}
 	if !toolDelegates(pol, serverName, toolName) {
-		return
+		return nil, false
 	}
-	session.NoteDelegation()
+	depth, ok := session.TryReserveDelegation(max)
+	if !ok {
+		return &ceilingDenyInfo{
+			reason: fmt.Sprintf(
+				"delegation ceiling exceeded (depth %d at max %d): argument class DELEGATION, effect class DELEGATION, authority transition PARENT->CHILD",
+				depth, max,
+			),
+			depth: depth,
+			max:   max,
+		}, false
+	}
+	return nil, true
 }
 
 // denyDelegationCeiling responds to a ceiling denial with the full denied

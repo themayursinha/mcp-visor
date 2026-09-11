@@ -589,7 +589,10 @@ servers:
   unknown tools never count (delegation is declared, not name-guessed).
 - The counter increments only on authorized relays, alongside taint
   marking and after durable commit. Denied calls never consume budget;
-  a fresh session starts at zero.
+  a fresh session starts at zero. Check-and-reserve is atomic under
+  concurrency (one critical section); a reservation is released only if
+  the durable commit fails, so concurrent spawns cannot over-admit past
+  a hard cap.
 - A call that would exceed the ceiling denies before relay with evidence
   `argument class DELEGATION`, `effect class DELEGATION`, authority
   transition `PARENT->CHILD`, and the depth/limit numbers. The terminal

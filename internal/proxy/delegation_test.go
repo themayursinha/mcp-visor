@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
@@ -172,5 +173,81 @@ servers:
 		if _, action := spawnCall(p, out, i, "job", client); action != "forward" {
 			t.Fatalf("unenforced spawn %d must forward, got %s", i, action)
 		}
+	}
+}
+
+func TestDelegationCeilingConcurrentReserve(t *testing.T) {
+	// Eight concurrent spawns against max 1: exactly one forwards, seven
+	// deny. Proves check-and-reserve is atomic (separate read+increment
+	// would over-admit past the hard cap).
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	p := New(Config{
+		ServerName:   "orchestrator",
+		SessionID:    "sess-ceil-race",
+		ClientID:     "agent-parent",
+		AuditLogPath: auditPath,
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+settings:
+  max_spawn_depth: 1
+servers:
+  - name: "orchestrator"
+    allowed: true
+    tools:
+      - name: "spawn_agent"
+        allowed: true
+        delegates: true
+`),
+	})
+	defer p.audit.Close()
+
+	const racers = 8
+	results := make(chan string, racers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			out := &bytes.Buffer{}
+			client := mcp.NewParser(nil, out)
+			<-start
+			_, action := p.interceptAndModify(toolCallRaw(100+id, "spawn_agent", map[string]any{"task": "job"}), client)
+			results <- action
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	forwarded := 0
+	for action := range results {
+		if action == "forward" {
+			forwarded++
+		}
+	}
+	if forwarded != 1 {
+		t.Fatalf("forwarded=%d want exactly 1 (atomic reserve)", forwarded)
+	}
+	if got := p.session.DelegationDepth(); got != 1 {
+		t.Fatalf("depth=%d want 1", got)
+	}
+}
+
+func TestSessionReserveRelease(t *testing.T) {
+	s := NewSession("s", "c")
+	if _, ok := s.TryReserveDelegation(1); !ok {
+		t.Fatal("first reserve must succeed")
+	}
+	if _, ok := s.TryReserveDelegation(1); ok {
+		t.Fatal("second reserve past max must fail")
+	}
+	s.ReleaseDelegation()
+	if got := s.DelegationDepth(); got != 0 {
+		t.Fatalf("depth=%d want 0 after release", got)
+	}
+	s.ReleaseDelegation()
+	if got := s.DelegationDepth(); got != 0 {
+		t.Fatalf("release must floor at zero, depth=%d", got)
 	}
 }

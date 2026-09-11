@@ -287,15 +287,21 @@ func (p *Proxy) processToolsCall(
 			decision = policy.Decision{Action: policy.ActionRequireApproval, Reason: capPauseReason}
 		}
 	}
-	// Delegation ceiling: an allow-bound delegation call past the session
-	// budget becomes a deny here and flows through the deny path below
-	// (metrics, audit with depth fields, SIEM, release handling).
-	// Approval-bound calls are checked at grant time instead.
+	// Delegation ceiling: an allow-bound delegation call atomically checks
+	// the budget and reserves one unit here; a spent budget becomes a deny
+	// flowing through the deny path below (metrics, audit with depth
+	// fields, SIEM, release handling). The unit is released below if the
+	// durable commit fails. Approval-bound calls are checked at grant time
+	// instead.
 	var ceiling *ceilingDenyInfo
+	delegationReserved := false
 	if decision.Action == policy.ActionAllow {
-		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
-			ceiling = info
-			decision = policy.Decision{Action: policy.ActionDeny, Reason: info.reason}
+		var reserved bool
+		ceiling, reserved = tryReserveDelegation(snapshot.policy, p.session, serverName, callReq.Name)
+		if ceiling != nil {
+			decision = policy.Decision{Action: policy.ActionDeny, Reason: ceiling.reason}
+		} else {
+			delegationReserved = reserved
 		}
 	}
 
@@ -387,19 +393,24 @@ func (p *Proxy) processToolsCall(
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		// Delegation ceiling recheck: the budget may have been spent while
-		// the approval wait was outstanding.
-		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
+		// the approval wait was outstanding. Atomic reserve; released below
+		// if the commit fails.
+		if info, reserved := tryReserveDelegation(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
 			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info)
+		} else {
+			delegationReserved = reserved
 		}
 		// Durable commit before any relay: the runtime barrier is already
 		// released (approval wait happened above), so a failure here only
 		// denies; it does not touch chain/taint/metric state.
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
 			return raw, "denied"
 		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
-		noteDelegationRelay(snapshot.policy, p.session, serverName, callReq.Name)
 		p.logger.Info("approval granted", "tool", callReq.Name, "session", p.session.ID)
 		p.metrics.IncrementApproved()
 		p.forwardAudit(allowEvent)
@@ -422,12 +433,14 @@ func (p *Proxy) processToolsCall(
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
 			return raw, "denied"
 		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
-		noteDelegationRelay(snapshot.policy, p.session, serverName, callReq.Name)
 		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(allowEvent)
@@ -450,12 +463,14 @@ func (p *Proxy) processToolsCall(
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
 			release()
 			p.denyCommitFailure(req, respond, serverName, callReq.Name, risk, chainTriggered, started)
 			return raw, "denied"
 		}
 		p.markMatchingTaints(serverName, callReq, redactedArgs, risk, snapshot.policy)
-		noteDelegationRelay(snapshot.policy, p.session, serverName, callReq.Name)
 		p.metrics.IncrementAllowed()
 		release()
 		p.forwardAudit(defaultAllowEvent)
