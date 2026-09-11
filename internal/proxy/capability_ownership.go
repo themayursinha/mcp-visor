@@ -11,6 +11,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/ownership"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
+	"github.com/themayursinha/mcp-visor/internal/redaction"
 ) // Capability ownership gate (card t_02a1bc43, Architect contract). Runs
 // after ordinary policy evaluation succeeds or requires approval, before
 // egress, chain, capability-accounting, approval, durable commit, or
@@ -51,7 +52,22 @@ func (p *Proxy) checkCapabilityOwnership(
 	}
 	cap, protected := reg.Capability(serverName, callReq.Name)
 	if !protected {
-		return nil, nil
+		// Fail closed: on a listed endpoint, an undeclared tool (e.g.
+		// newly advertised under a permissive default) must not bypass
+		// ownership. Unlisted endpoints retain legacy behavior.
+		owner, listed := reg.EndpointOwner(serverName)
+		if !listed {
+			return nil, nil
+		}
+		return p.renderOwnershipDecision(pol, originalRaw, ownership.Proof{
+			Verdict:     ownership.VerdictInvalid,
+			Reason:      ownership.ReasonMissing,
+			Requester:   p.cfg.ClientID,
+			Server:      serverName,
+			Tool:        callReq.Name,
+			Owner:       owner,
+			EvaluatedAt: now.UTC(),
+		}, ownership.Capability{Server: serverName, Owner: owner, Tool: callReq.Name}, "", false)
 	}
 	req := ownership.Request{
 		Requester:   p.cfg.ClientID,
@@ -59,19 +75,35 @@ func (p *Proxy) checkCapabilityOwnership(
 		Tool:        callReq.Name,
 		EffectClass: cap.EffectClass,
 	}
+	scopeValue, hasScope := "", false
 	if cap.ScopeArgument != "" {
 		if v, ok := redactedArgs[cap.ScopeArgument]; ok {
-			if s, ok := v.(string); ok {
-				req.ScopeValue, req.HasScope = s, true
+			if str, ok := v.(string); ok {
+				scopeValue, hasScope = str, true
 			}
 		}
 	}
+	req.ScopeValue, req.HasScope = scopeValue, hasScope
 	proof := reg.Evaluate(req, now)
+	return p.renderOwnershipDecision(pol, originalRaw, proof, cap, scopeValue, hasScope)
+}
+
+// renderOwnershipDecision signs the proof receipt (when possible) and maps
+// the verdict to an allow receipt or a terminal deny. Signing failure on a
+// potential allow denies; an already-invalid decision stays denied.
+func (p *Proxy) renderOwnershipDecision(
+	pol *policy.Policy,
+	originalRaw []byte,
+	proof ownership.Proof,
+	cap ownership.Capability,
+	scopeValue string,
+	hasScope bool,
+) (*receipt.CapabilityOwnershipReceipt, *ownershipDeny) {
 	rec := &receipt.CapabilityOwnershipReceipt{
 		Schema:         "capability_ownership_v1",
-		Requester:      req.Requester,
-		Server:         req.Server,
-		Tool:           req.Tool,
+		Requester:      proof.Requester,
+		Server:         proof.Server,
+		Tool:           proof.Tool,
 		Owner:          proof.Owner,
 		EffectClass:    cap.EffectClass,
 		ScopeArgument:  cap.ScopeArgument,
@@ -85,19 +117,15 @@ func (p *Proxy) checkCapabilityOwnership(
 		EvaluatedAt:    proof.EvaluatedAt.Unix(),
 		ReasonCode:     proof.Reason,
 	}
-	if sv, ok := redactedArgs[cap.ScopeArgument]; ok {
-		if s, ok := sv.(string); ok && cap.ScopeArgument != "" {
-			sum := sha256.Sum256([]byte(s))
-			rec.ScopeValueSHA = hex.EncodeToString(sum[:])
-		}
+	if hasScope && cap.ScopeArgument != "" {
+		sum := sha256.Sum256([]byte(scopeValue))
+		rec.ScopeValueSHA = hex.EncodeToString(sum[:])
 	}
 	if proof.Verdict == ownership.VerdictValidDirect || proof.Verdict == ownership.VerdictValidDelegated {
 		rec.Verdict = "allow"
 	} else {
 		rec.Verdict = "deny"
 	}
-	// Sign when a signer exists. Failure on a potential allow denies;
-	// an already-invalid decision stays denied regardless.
 	signed := true
 	if p.approvalSigner == nil {
 		signed = false
@@ -111,6 +139,53 @@ func (p *Proxy) checkCapabilityOwnership(
 		return nil, &ownershipDeny{reason: ownershipReasonCode("mismatch"), receipt: nil}
 	}
 	return rec, nil
+}
+
+// denyOwnership responds to an ownership denial with the full denied
+// treatment: metrics, terminal audit event with the proof receipt, SIEM
+// forward, observation. Shared by the pre-egress gate and the grant-site
+// recheck; release is idempotent across both barrier states.
+func (p *Proxy) denyOwnership(
+	req mcp.Request,
+	raw json.RawMessage,
+	respond toolsCallResponder,
+	release func(),
+	serverName string,
+	callReq mcp.ToolsCallRequest,
+	redactedArgs map[string]any,
+	redactionResult redaction.Result,
+	risk policy.RiskLevel,
+	snapshot runtimeSnapshot,
+	chainTriggered bool,
+	started time.Time,
+	deny *ownershipDeny,
+) (json.RawMessage, string) {
+	p.metrics.IncrementDenied()
+	respond(req.ID, deny.reason)
+
+	deniedEvent := audit.Event{
+		EventType: audit.EventToolDenied,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    serverName,
+		Tool:      callReq.Name,
+		Arguments: redactedArgs,
+		Decision:  string(policy.ActionDeny),
+		Reason:    withRedactionNote(deny.reason, redactionResult),
+		RiskLevel: string(risk),
+	}
+	attachOwnershipReceipt(&deniedEvent, deny.receipt)
+	p.attachServerIdentity(&deniedEvent, snapshot.identity)
+	_ = p.audit.Log(deniedEvent)
+	release()
+	p.forwardAudit(deniedEvent)
+	p.logger.Warn("capability ownership denied",
+		"tool", callReq.Name,
+		"reason", deny.reason,
+		"session", p.session.ID,
+	)
+	p.observeToolCall("denied", deny.reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+	return raw, "denied"
 }
 
 // attachOwnershipReceipt binds a signed ownership proof to a terminal

@@ -191,3 +191,132 @@ func TestCapabilityOwnershipAuditCarriesReceipt(t *testing.T) {
 		t.Fatal("no read_secret deny event in audit log")
 	}
 }
+
+func TestCapabilityOwnershipUndeclaredToolDeniedUnderPermissiveDefault(t *testing.T) {
+	// Under default_action: allow, a tool with no declaration on a listed
+	// endpoint must fail closed, not bypass ownership.
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	out := &bytes.Buffer{}
+	p := New(Config{
+		ServerName:   "mcp-server-B",
+		SessionID:    "sess-permissive",
+		ClientID:     "tenant-A",
+		AuditLogPath: auditPath,
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: allow
+servers:
+  - name: "mcp-server-B"
+    allowed: true
+    tools:
+      - name: "read_secret"
+        allowed: true
+capability_ownership:
+  endpoints:
+    - server: mcp-server-B
+      owner: tenant-B
+      capabilities:
+        - tool: read_secret
+          effect_class: CREDENTIAL
+`),
+	})
+	p.nowFunc = func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) }
+	defer p.audit.Close()
+	client := mcp.NewParser(nil, out)
+
+	if _, action := p.interceptAndModify(toolCallRaw(1, "read_secret", map[string]any{}), client); action != "denied" {
+		t.Fatalf("declared tool without grant must deny, got %s", action)
+	}
+	out.Reset()
+	if _, action := p.interceptAndModify(toolCallRaw(2, "brand_new_tool", map[string]any{}), client); action != "denied" {
+		t.Fatalf("undeclared tool on owned endpoint must fail closed, got %s", action)
+	}
+	if !strings.Contains(out.String(), "capability ownership proof invalid") {
+		t.Fatalf("denial must name the invalid proof, got %s", out.String())
+	}
+}
+
+func TestCapabilityOwnershipGrantRecheckedAfterApproval(t *testing.T) {
+	// Grant valid at request time, expired mid-wait: the grant-site recheck
+	// must deny with a fresh expired verdict, never the stale pre-wait allow.
+	dir := t.TempDir()
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	out := &bytes.Buffer{}
+	p := New(Config{
+		ServerName:   "mcp-server-B",
+		SessionID:    "sess-expiry-race",
+		ClientID:     "tenant-A",
+		AuditLogPath: auditPath,
+		ApprovalDir:  dir,
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "mcp-server-B"
+    allowed: true
+    tools:
+      - name: "internal_fetch"
+        allowed: true
+        approval_required: true
+capability_ownership:
+  endpoints:
+    - server: mcp-server-B
+      owner: tenant-B
+      capabilities:
+        - tool: internal_fetch
+          effect_class: NETWORK
+          scope_argument: resource
+  delegations:
+    - id: b-to-a-fetch-x
+      owner: tenant-B
+      delegate: tenant-A
+      server: mcp-server-B
+      tool: internal_fetch
+      effect_class: NETWORK
+      resource_scope:
+        argument: resource
+        exact_values: ["X"]
+      issued_at: "2026-09-11T10:00:00Z"
+      expires_at: "2026-09-11T10:15:00Z"
+`),
+	})
+	inWindow := time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC)
+	p.nowFunc = func() time.Time { return inWindow }
+	defer p.audit.Close()
+	client := mcp.NewParser(nil, out)
+
+	done := make(chan string, 1)
+	go func() {
+		_, action := p.interceptAndModify(toolCallRaw(1, "internal_fetch", map[string]any{"resource": "X"}), client)
+		done <- action
+	}()
+	// Wait for the approval request, lapse the grant, then approve.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		matches, _ := filepath.Glob(filepath.Join(dir, "req-*.json"))
+		if len(matches) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("approval request never appeared")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	p.nowFunc = func() time.Time { return time.Date(2026, 9, 11, 10, 16, 0, 0, time.UTC) }
+	matches, _ := filepath.Glob(filepath.Join(dir, "req-*.json"))
+	base := strings.TrimSuffix(filepath.Base(matches[0]), ".json")
+	if err := os.WriteFile(filepath.Join(dir, base+".ok"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case action := <-done:
+		if action != "denied" {
+			t.Fatalf("lapsed grant must deny at grant site, got %s", action)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("call never resolved")
+	}
+	if !strings.Contains(out.String(), "expired") {
+		t.Fatalf("denial must record expiry, got %s", out.String())
+	}
+}

@@ -1,7 +1,6 @@
 package receipt
 
 import (
-	"crypto/ed25519"
 	"testing"
 )
 
@@ -46,5 +45,4 @@ func TestOwnershipReceiptMutationBreaks(t *testing.T) {
 	if err := r.Verify(other.PublicKey); err == nil {
 		t.Fatal("wrong-key receipt verified")
 	}
-	var _ ed25519.PublicKey = kp.PublicKey
 }

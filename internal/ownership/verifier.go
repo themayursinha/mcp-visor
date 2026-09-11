@@ -8,6 +8,7 @@ import (
 // Registry holds protected capabilities and exact delegation grants.
 type Registry struct {
 	capabilities map[string]Capability
+	owners       map[string]string
 	grants       []Grant
 }
 
@@ -15,12 +16,16 @@ func capKey(server, tool string) string { return server + "\x00" + tool }
 
 // NewRegistry indexes capabilities; duplicate server/tool pairs fail.
 func NewRegistry(caps []Capability) (*Registry, error) {
-	r := &Registry{capabilities: map[string]Capability{}}
+	r := &Registry{capabilities: map[string]Capability{}, owners: map[string]string{}}
 	for _, c := range caps {
 		k := capKey(c.Server, c.Tool)
 		if _, dup := r.capabilities[k]; dup {
 			return nil, fmt.Errorf("duplicate capability %s/%s", c.Server, c.Tool)
 		}
+		if prev, ok := r.owners[c.Server]; ok && prev != c.Owner {
+			return nil, fmt.Errorf("conflicting owners for %s", c.Server)
+		}
+		r.owners[c.Server] = c.Owner
 		r.capabilities[k] = c
 	}
 	return r, nil
@@ -35,6 +40,14 @@ func (r *Registry) AddGrant(g Grant) {
 func (r *Registry) Capability(server, tool string) (Capability, bool) {
 	cap, ok := r.capabilities[capKey(server, tool)]
 	return cap, ok
+}
+
+// EndpointOwner returns the owner of a listed endpoint. A listed endpoint
+// with an undeclared tool fails closed at the gate: under permissive
+// defaults an unknown tool would otherwise bypass ownership entirely.
+func (r *Registry) EndpointOwner(server string) (string, bool) {
+	owner, ok := r.owners[server]
+	return owner, ok
 }
 
 // Evaluate proves ownership for req at now. Unlisted server/tool pairs are

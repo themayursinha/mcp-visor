@@ -179,32 +179,7 @@ func (p *Proxy) processToolsCall(
 		rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.nowFunc())
 		ownReceipt = rec
 		if deny != nil {
-			p.metrics.IncrementDenied()
-			respond(req.ID, deny.reason)
-
-			deniedEvent := audit.Event{
-				EventType: audit.EventToolDenied,
-				SessionID: p.session.ID,
-				AgentID:   p.cfg.ClientID,
-				Server:    serverName,
-				Tool:      callReq.Name,
-				Arguments: redactedArgs,
-				Decision:  string(policy.ActionDeny),
-				Reason:    withRedactionNote(deny.reason, redactionResult),
-				RiskLevel: string(risk),
-			}
-			attachOwnershipReceipt(&deniedEvent, deny.receipt)
-			p.attachServerIdentity(&deniedEvent, snapshot.identity)
-			_ = p.audit.Log(deniedEvent)
-			release()
-			p.forwardAudit(deniedEvent)
-			p.logger.Warn("capability ownership denied",
-				"tool", callReq.Name,
-				"reason", deny.reason,
-				"session", p.session.ID,
-			)
-			p.observeToolCall("denied", deny.reason, serverName, callReq.Name, string(risk), chainTriggered, started)
-			return raw, "denied"
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
 		}
 	}
 
@@ -430,7 +405,15 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
-		attachOwnershipReceipt(&allowEvent, ownReceipt)
+		// Ownership recheck: a grant valid at request time may have expired
+		// during the approval wait. Fresh clock, fresh receipt; a stale
+		// pre-wait verdict never authorizes.
+		if rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.nowFunc()); deny != nil {
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
+		} else {
+			ownReceipt = rec
+			attachOwnershipReceipt(&allowEvent, ownReceipt)
+		}
 		// Delegation ceiling recheck: the budget may have been spent while
 		// the approval wait was outstanding. Atomic reserve; released below
 		// if the commit fails.
