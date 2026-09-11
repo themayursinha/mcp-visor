@@ -1,0 +1,102 @@
+package observability
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func loadBrakeFixture(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "brake-audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestContractNamesUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, m := range Contract {
+		if m.Name == "" {
+			t.Fatal("contract has an unnamed metric")
+		}
+		if seen[m.Name] {
+			t.Fatalf("duplicate metric name %q", m.Name)
+		}
+		seen[m.Name] = true
+		if m.Computability == NeedsNewField && m.Gap == "" {
+			t.Fatalf("metric %q needs a field but names no gap", m.Name)
+		}
+	}
+}
+
+func TestComputeFixture(t *testing.T) {
+	events, err := LoadEvents(bytes.NewReader(loadBrakeFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Compute(events)
+	if rep.DeniedTotal != 2 {
+		t.Fatalf("denied=%d want 2", rep.DeniedTotal)
+	}
+	wantRules := map[string]int64{"block_sensitive_egress": 1, "allow_destination": 1}
+	if !reflect.DeepEqual(rep.DeniedByRule, wantRules) {
+		t.Fatalf("by_rule=%v want %v", rep.DeniedByRule, wantRules)
+	}
+	if rep.ApprovalGates != 1 {
+		t.Fatalf("gates=%d want 1", rep.ApprovalGates)
+	}
+	if rep.ChainIntercepts != 1 {
+		t.Fatalf("chains=%d want 1", rep.ChainIntercepts)
+	}
+	if rep.TaintBlocks != 1 {
+		t.Fatalf("taint_blocks=%d want 1", rep.TaintBlocks)
+	}
+}
+
+func TestReconcileClean(t *testing.T) {
+	events, err := LoadEvents(bytes.NewReader(loadBrakeFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Reconcile(Report{}, []DecisionRef{
+		{RequestHash: "req-deny-1", Decision: "deny"},
+		{RequestHash: "req-deny-2", Decision: "deny"},
+		{RequestHash: "req-allow-1", Decision: "allow"},
+	}, events)
+	if rep.UnloggedDenials != 0 {
+		t.Fatalf("unlogged=%d (%v) want 0", rep.UnloggedDenials, rep.UnloggedDetail)
+	}
+}
+
+// TestReconcileCatchesMissingEvent is the negative case: a deny happened
+// (declared) but no event was emitted. The gap must be caught, not silent.
+func TestReconcileCatchesMissingEvent(t *testing.T) {
+	events, err := LoadEvents(bytes.NewReader(loadBrakeFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Reconcile(Report{}, []DecisionRef{
+		{RequestHash: "req-deny-1", Decision: "deny"},
+		{RequestHash: "req-vanished-9", Decision: "deny"},
+	}, events)
+	if rep.UnloggedDenials != 1 {
+		t.Fatalf("unlogged=%d want 1", rep.UnloggedDenials)
+	}
+	if len(rep.UnloggedDetail) != 1 || !strings.Contains(rep.UnloggedDetail[0], "req-vanished-9") {
+		t.Fatalf("detail names the gap: %v", rep.UnloggedDetail)
+	}
+}
+
+func TestLoadRejectsMalformed(t *testing.T) {
+	if _, err := LoadEvents(bytes.NewReader([]byte("{oops\n"))); err == nil {
+		t.Fatal("malformed line accepted")
+	}
+	if _, err := LoadEvents(bytes.NewReader([]byte("{\"timestamp\":\"x\"}\n"))); err == nil {
+		t.Fatal("event without type accepted")
+	}
+}
