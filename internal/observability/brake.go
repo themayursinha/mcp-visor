@@ -50,6 +50,9 @@ const (
 	// MetricUnloggedDenialsTotal counts declared terminal decisions with
 	// no matching audit event (reconciliation gaps).
 	MetricUnloggedDenialsTotal = "brake.unlogged_denials_total"
+	// MetricUnjoinableTotal counts declared decisions missing decision,
+	// session, or hash: unprovable either way, reported, never silent.
+	MetricUnjoinableTotal = "brake.unjoinable_total"
 )
 
 // Computability marks whether a metric derives from fields that exist.
@@ -140,6 +143,13 @@ var Contract = []MetricDef{
 		SourceField:   "decision + session_id + request_hash",
 		Computability: NeedsNewField,
 		Gap:           "Emit request_hash on all terminal deny events; without join keys the metric cannot run on production logs.",
+	},
+	{
+		Name:          MetricUnjoinableTotal,
+		Definition:    "Declared decisions missing decision, session, or request hash: reported, never silently matched or missed.",
+		SourceEvent:   "reconciliation input validation (no log event involved)",
+		SourceField:   "decision + session_id + request_hash (presence)",
+		Computability: ComputableToday,
 	},
 }
 

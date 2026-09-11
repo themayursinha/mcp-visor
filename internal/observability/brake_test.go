@@ -58,7 +58,7 @@ func TestComputeFixture(t *testing.T) {
 	for _, m := range Contract {
 		names[m.Name] = true
 	}
-	for _, want := range []string{MetricDeniedTotal, MetricDeniedByRule, MetricDeniedNoRule, MetricApprovalGatesTotal, MetricApprovalGrantsTotal, MetricApprovalOverridesTotal, MetricChainInterceptsTotal, MetricTaintBlocksTotal, MetricUnloggedDenialsTotal} {
+	for _, want := range []string{MetricDeniedTotal, MetricDeniedByRule, MetricDeniedNoRule, MetricApprovalGatesTotal, MetricApprovalGrantsTotal, MetricApprovalOverridesTotal, MetricChainInterceptsTotal, MetricTaintBlocksTotal, MetricUnloggedDenialsTotal, MetricUnjoinableTotal} {
 		if !names[want] {
 			t.Fatalf("counter %q missing from Contract", want)
 		}
@@ -377,7 +377,9 @@ func TestDocContractTableMatches(t *testing.T) {
 			t.Fatalf("row %q events %v do not match contract %v", m.Name, got, want)
 		}
 		wantStatus := map[Computability]string{ComputableToday: "computabletoday", NeedsNewField: "needsnewfield"}[m.Computability]
-		if !strings.Contains(normalizeToken(row.status), wantStatus) {
+		// Exact equality: substring matching lets "not computable today"
+		// pass as computable.
+		if normalizeToken(row.status) != wantStatus {
 			t.Fatalf("row %q status %q does not match contract %q", m.Name, row.status, m.Computability)
 		}
 		if m.SourceField == "" {
