@@ -77,7 +77,10 @@ newline-framed (`ReadBytes`, no line-length cap — production records can
 exceed 1 MiB) so missing delimiters fail closed; malformed lines, events
 without a type, and truncated tails (final record lacking its framing
 newline, per the producer's own incomplete-tail rule) fail closed at load,
-while trailing blank space of any length stays legal.
+while JSON-whitespace-only blank space of any length stays legal (other
+Unicode spaces are corruption, not blanks). A Go fuzz target
+(`FuzzLoadEvents`: no panics, byte-determinism, typed events) works the
+parse boundary continuously instead of one review round at a time.
 
 ## Links
 

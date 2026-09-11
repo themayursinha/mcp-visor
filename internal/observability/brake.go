@@ -16,7 +16,6 @@ package observability
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -155,18 +154,33 @@ type DecisionRef struct {
 	Decision    string
 }
 
+// isJSONSpace reports JSONL framing whitespace only (space, tab, CR, LF).
+// bytes.TrimSpace is deliberately not used: it also accepts vertical tab,
+// form feed, NBSP, and other Unicode spaces, which would let corrupted
+// lines pass as blank instead of failing closed.
+func isJSONSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+
+func isBlankLine(line []byte) bool {
+	for _, c := range line {
+		if !isJSONSpace(c) {
+			return false
+		}
+	}
+	return true
+}
+
 // LoadEvents parses audit JSONL with newline framing as the parse
 // primitive — one ReadBytes per record, no line-length cap (production
-// records can exceed 1 MiB). Blank lines skip. A leftover without its
-// framing newline is a torn tail and fails closed, matching the producer,
-// which terminates every record with a newline.
+// records can exceed 1 MiB). Blank lines (JSON whitespace only) skip. A
+// leftover without its framing newline is a torn tail and fails closed,
+// matching the producer, which terminates every record with a newline.
 func LoadEvents(r io.Reader) ([]audit.Event, error) {
 	var events []audit.Event
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadBytes('\n')
 		if err == io.EOF {
-			if len(bytes.TrimSpace(line)) == 0 {
+			if isBlankLine(line) {
 				return events, nil
 			}
 			return nil, fmt.Errorf("truncated tail: final record lacks terminating newline")
@@ -174,7 +188,7 @@ func LoadEvents(r io.Reader) ([]audit.Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(bytes.TrimSpace(line)) == 0 {
+		if isBlankLine(line) {
 			continue
 		}
 		var ev audit.Event

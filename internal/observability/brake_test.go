@@ -216,3 +216,17 @@ func TestLongTrailingBlankSpaceAccepted(t *testing.T) {
 		t.Fatalf("events=%d want 12", len(events))
 	}
 }
+
+func TestNonJSONWhitespaceNotBlank(t *testing.T) {
+	// Vertical tab / form feed are not JSONL framing whitespace: a
+	// corrupted line must fail closed, not skip.
+	for _, raw := range []string{"\v\n", "\f\n", "{\"a\":1}\n\v\n"} {
+		if _, err := LoadEvents(bytes.NewReader([]byte(raw))); err == nil {
+			t.Fatalf("non-JSON whitespace accepted: %q", raw)
+		}
+	}
+	// True framing whitespace stays legal.
+	if _, err := LoadEvents(bytes.NewReader([]byte(" \t\r\n"))); err != nil {
+		t.Fatalf("framing whitespace rejected: %v", err)
+	}
+}
