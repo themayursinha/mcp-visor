@@ -61,10 +61,12 @@ manifest field.
   drops, reorders, and byte mutations all fail `Verify`.
 - Manifest signature is ed25519 via `internal/signer` interfaces, same
   construction as `internal/receipt` (sign over JSON with signature
-  blanked). Appending after sealing invalidates the signature until
-  re-sealed. Decoding rejects unknown struct fields (payload maps stay
-  open), so unsigned claims cannot ride along; `supersedes` is valid only
-  on a genuine confirmation upgrade.
+  blanked). `Verify` binds the manifest's algorithm/key-id/public-key
+  claims to the verifier before checking the signature. Appending after
+  sealing invalidates the signature until re-sealed. Decoding rejects
+  unknown struct fields (payload maps stay open) and duplicate members at
+  every object level, so unsigned or ambiguous claims cannot ride along;
+  `supersedes` is valid only on a genuine confirmation upgrade.
 - `Verify` checks: spec version, event count vs manifest, sequence numbers,
   chain linkage, payload bindings, required episode stages in order
   (`requested_action` → `policy_decision` → `runtime_attempt` →

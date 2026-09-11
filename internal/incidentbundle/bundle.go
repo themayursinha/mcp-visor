@@ -270,6 +270,29 @@ func (b *Bundle) Verify(key VerifyingKey) error {
 	if key == nil {
 		return fmt.Errorf("verifying key is nil")
 	}
+	// Bind the signed metadata claims to the verifier before checking the
+	// signature itself: otherwise a valid signature gets reported under the
+	// wrong key or algorithm.
+	if b.Manifest.Algorithm != "ed25519" {
+		return fmt.Errorf("unsupported signature algorithm %q", b.Manifest.Algorithm)
+	}
+	// Algorithm is advisory on verifiers that report one; key id and bytes
+	// always bind.
+	type algorithmReporter interface{ Algorithm() string }
+	if ak, ok := key.(algorithmReporter); ok && ak.Algorithm() != "" && ak.Algorithm() != b.Manifest.Algorithm {
+		return fmt.Errorf("verifier algorithm %q does not match manifest %q", ak.Algorithm(), b.Manifest.Algorithm)
+	}
+	if key.KeyID() != "" && key.KeyID() != b.Manifest.KeyID {
+		return fmt.Errorf("verifier key id does not match manifest")
+	}
+	keyPub, ok := key.PublicKey().(ed25519.PublicKey)
+	if !ok {
+		return fmt.Errorf("verifier key is not ed25519")
+	}
+	manifestPub, err := hex.DecodeString(b.Manifest.PublicKey)
+	if err != nil || !ed25519.PublicKey(manifestPub).Equal(keyPub) {
+		return fmt.Errorf("manifest public key does not match verifier")
+	}
 	sig, err := hex.DecodeString(b.Manifest.Signature)
 	if err != nil {
 		return fmt.Errorf("decode manifest signature: %w", err)
@@ -305,7 +328,68 @@ func Unmarshal(data []byte) (*Bundle, error) {
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("trailing data after bundle")
 	}
+	// encoding/json is last-wins on duplicate members while other
+	// consumers are first-wins: reject duplicates at every object level
+	// (including open payload maps) before trusting the shape.
+	if err := rejectDuplicateKeys(data); err != nil {
+		return nil, err
+	}
 	return &b, nil
+}
+
+// rejectDuplicateKeys walks the raw document tracking member names per
+// object; any repeat fails, since signers and verifiers would otherwise
+// disagree on which value the hashes cover. Payload maps are included:
+// openness to new keys is not openness to ambiguous ones.
+func rejectDuplicateKeys(data []byte) error {
+	type frame struct {
+		object    bool
+		expectKey bool
+		keys      map[string]bool
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var stack []frame
+	// afterValue marks the parent frame's next string as a key again.
+	afterValue := func() {
+		if len(stack) > 0 && stack[len(stack)-1].object {
+			stack[len(stack)-1].expectKey = true
+		}
+	}
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("scan bundle: %w", err)
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				stack = append(stack, frame{object: true, expectKey: true, keys: map[string]bool{}})
+			case '[':
+				stack = append(stack, frame{})
+			case ']', '}':
+				stack = stack[:len(stack)-1]
+				afterValue()
+			}
+		case string:
+			if len(stack) > 0 && stack[len(stack)-1].object && stack[len(stack)-1].expectKey {
+				top := stack[len(stack)-1].keys
+				if top[t] {
+					return fmt.Errorf("duplicate member %q", t)
+				}
+				top[t] = true
+				stack[len(stack)-1].expectKey = false
+			} else {
+				afterValue()
+			}
+		default:
+			// Numbers, bools, null: complete values.
+			afterValue()
+		}
+	}
 }
 
 // requiredStages is the v0.1 episode order. A proof-quality bundle must show

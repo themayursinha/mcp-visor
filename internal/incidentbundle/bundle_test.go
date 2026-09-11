@@ -1,6 +1,7 @@
 package incidentbundle
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -617,5 +618,60 @@ func TestUnknownFieldRejected(t *testing.T) {
 	}
 	if _, err := Unmarshal(doctored); err == nil {
 		t.Fatal("unknown manifest field accepted")
+	}
+}
+
+func TestDuplicateKeysRejected(t *testing.T) {
+	b := loadFixture(t, "allow")
+	data, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Conflicting duplicate before the original: last-wins decoders keep
+	// the original while first-wins consumers read the forgery.
+	forged := bytes.Replace(data, []byte(`"decision":"allow"`), []byte(`"decision":"deny","decision":"allow"`), 1)
+	if bytes.Equal(forged, data) {
+		t.Skip("fixture shape changed; rewrite injection")
+	}
+	if _, err := Unmarshal(forged); err == nil {
+		t.Fatal("duplicate members accepted")
+	}
+	// Sanity: distinct keys with equal values are fine.
+	if _, err := Unmarshal(data); err != nil {
+		t.Fatalf("valid bundle rejected: %v", err)
+	}
+}
+
+// wrongIDKey reports a key id that does not match its bytes.
+type wrongIDKey struct {
+	*fixedKey
+	id string
+}
+
+func (k *wrongIDKey) KeyID() string { return k.id }
+
+func (k *wrongIDKey) Verify(data, sig []byte) error {
+	if !ed25519.Verify(k.pub, data, sig) {
+		return fmt.Errorf("signature verification failed")
+	}
+	return nil
+}
+
+func TestSignerMetadataBound(t *testing.T) {
+	s := exampleSeedKey(t)
+	b := buildAllowBundle(t, s)
+	v := signer.NewVerifierFromPublicKey(s.PublicKey().(ed25519.PublicKey))
+	if err := b.Verify(v); err != nil {
+		t.Fatalf("control bundle rejected: %v", err)
+	}
+	if err := b.Verify(&wrongIDKey{fixedKey: s, id: "key-deadbeef"}); err == nil {
+		t.Fatal("mismatched key id verified")
+	}
+	other, err := signer.NewApprovalSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(signer.NewVerifierFromPublicKey(other.PublicKey().(ed25519.PublicKey))); err == nil {
+		t.Fatal("mismatched public key verified")
 	}
 }
