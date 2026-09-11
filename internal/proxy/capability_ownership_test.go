@@ -120,7 +120,7 @@ func TestCapabilityOwnershipNarrowDelegationAllowed(t *testing.T) {
 		AuditLogPath: auditPath,
 		Policy:       mustLoadPolicy(t, borrowedAuthorityYAML()),
 	})
-	p.nowFunc = func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) }
+	p.setNowFunc(func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) })
 	defer p.audit.Close()
 	client := mcp.NewParser(nil, out)
 
@@ -218,7 +218,7 @@ capability_ownership:
           effect_class: CREDENTIAL
 `),
 	})
-	p.nowFunc = func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) }
+	p.setNowFunc(func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) })
 	defer p.audit.Close()
 	client := mcp.NewParser(nil, out)
 
@@ -279,7 +279,7 @@ capability_ownership:
 `),
 	})
 	inWindow := time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC)
-	p.nowFunc = func() time.Time { return inWindow }
+	p.setNowFunc(func() time.Time { return inWindow })
 	defer p.audit.Close()
 	client := mcp.NewParser(nil, out)
 
@@ -300,7 +300,7 @@ capability_ownership:
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	p.nowFunc = func() time.Time { return time.Date(2026, 9, 11, 10, 16, 0, 0, time.UTC) }
+	p.setNowFunc(func() time.Time { return time.Date(2026, 9, 11, 10, 16, 0, 0, time.UTC) })
 	matches, _ := filepath.Glob(filepath.Join(dir, "req-*.json"))
 	base := strings.TrimSuffix(filepath.Base(matches[0]), ".json")
 	if err := os.WriteFile(filepath.Join(dir, base+".ok"), []byte{}, 0o600); err != nil {
@@ -342,11 +342,62 @@ capability_ownership:
       capabilities: []
 `),
 	})
-	p.nowFunc = func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) }
+	p.setNowFunc(func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) })
 	defer p.audit.Close()
 	client := mcp.NewParser(nil, out)
 
 	if _, action := p.interceptAndModify(toolCallRaw(1, "read_secret", map[string]any{}), client); action != "denied" {
 		t.Fatalf("tool on empty owned endpoint must fail closed, got %s", action)
+	}
+}
+
+func TestCapabilityOwnershipScopeMatchedPreRedaction(t *testing.T) {
+	// The granted scope value matches a built-in redaction pattern
+	// (internal IP): the grant must match the ORIGINAL argument, not the
+	// redacted placeholder.
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	out := &bytes.Buffer{}
+	p := New(Config{
+		ServerName:   "mcp-server-B",
+		SessionID:    "sess-redact-scope",
+		ClientID:     "tenant-A",
+		AuditLogPath: auditPath,
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: deny
+servers:
+  - name: "mcp-server-B"
+    allowed: true
+    tools:
+      - name: "internal_fetch"
+        allowed: true
+capability_ownership:
+  endpoints:
+    - server: mcp-server-B
+      owner: tenant-B
+      capabilities:
+        - tool: internal_fetch
+          effect_class: NETWORK
+          scope_argument: resource
+  delegations:
+    - id: b-to-a-fetch-ip
+      owner: tenant-B
+      delegate: tenant-A
+      server: mcp-server-B
+      tool: internal_fetch
+      effect_class: NETWORK
+      resource_scope:
+        argument: resource
+        exact_values: ["10.0.0.1"]
+      issued_at: "2026-09-11T10:00:00Z"
+      expires_at: "2026-09-11T10:15:00Z"
+`),
+	})
+	p.setNowFunc(func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) })
+	defer p.audit.Close()
+	client := mcp.NewParser(nil, out)
+
+	if _, action := p.interceptAndModify(toolCallRaw(1, "internal_fetch", map[string]any{"resource": "10.0.0.1"}), client); action != "forward" {
+		t.Fatalf("exact grant on redaction-shaped value must forward, got %s; response=%s", action, out.String())
 	}
 }

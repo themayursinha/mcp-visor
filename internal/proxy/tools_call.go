@@ -176,7 +176,7 @@ func (p *Proxy) processToolsCall(
 	// durable commit, or relay. Ownership never converts a deny to allow.
 	var ownReceipt *receipt.CapabilityOwnershipReceipt
 	if decision.Action == policy.ActionAllow || decision.Action == policy.ActionRequireApproval {
-		rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.nowFunc())
+		rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now())
 		ownReceipt = rec
 		if deny != nil {
 			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
@@ -408,7 +408,7 @@ func (p *Proxy) processToolsCall(
 		// Ownership recheck: a grant valid at request time may have expired
 		// during the approval wait. Fresh clock, fresh receipt; a stale
 		// pre-wait verdict never authorizes.
-		if rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.nowFunc()); deny != nil {
+		if rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now()); deny != nil {
 			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
 		} else {
 			ownReceipt = rec

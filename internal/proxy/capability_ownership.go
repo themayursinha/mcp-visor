@@ -77,7 +77,11 @@ func (p *Proxy) checkCapabilityOwnership(
 	}
 	scopeValue, hasScope := "", false
 	if cap.ScopeArgument != "" {
-		if v, ok := redactedArgs[cap.ScopeArgument]; ok {
+		// Match against the ORIGINAL arguments, mirroring policy
+		// evaluation: redaction may rewrite values (an IP into a
+		// placeholder), and matching redacted text both breaks exact
+		// grants and collapses distinct inputs onto placeholder grants.
+		if v, ok := extractArgs(callReq.Arguments)[cap.ScopeArgument]; ok {
 			if str, ok := v.(string); ok {
 				scopeValue, hasScope = str, true
 			}
@@ -234,15 +238,17 @@ func ownershipStatus(proof ownership.Proof) string {
 	}
 }
 
-// grantBound renders grant bounds; empty unless the proof carries a grant.
+// grantBound renders grant bounds at full precision; empty unless the
+// proof carries a grant. Coarse formatting would describe a different
+// window than the hash binds.
 func grantBound(proof ownership.Proof, issued bool) string {
 	if !proof.HasGrant {
 		return ""
 	}
 	if issued {
-		return proof.GrantIssued.UTC().Format("2006-01-02T15:04:05Z")
+		return proof.GrantIssued.UTC().Format(time.RFC3339Nano)
 	}
-	return proof.GrantExpires.UTC().Format("2006-01-02T15:04:05Z")
+	return proof.GrantExpires.UTC().Format(time.RFC3339Nano)
 }
 
 // ownershipRegistryFromPolicy builds the ownership registry from validated
