@@ -51,7 +51,7 @@ func TestComputeFixture(t *testing.T) {
 		t.Fatalf("gates=%d want 1", rep.ApprovalGates)
 	}
 	if rep.ApprovalGrants != 1 {
-		t.Fatalf("grants=%d want 1", rep.ApprovalGrants)
+		t.Fatalf("grants=%d want 1 (capability-accounted allow must not count)", rep.ApprovalGrants)
 	}
 	if rep.ChainIntercepts != 1 {
 		t.Fatalf("chains=%d want 1", rep.ChainIntercepts)
@@ -121,5 +121,33 @@ func TestLoadRejectsMalformed(t *testing.T) {
 	}
 	if _, err := LoadEvents(bytes.NewReader([]byte("{\"timestamp\":\"x\"}\n"))); err == nil {
 		t.Fatal("event without type accepted")
+	}
+}
+
+func TestLoadLargeLine(t *testing.T) {
+	// Production records can exceed 1 MiB (argument limit + envelope):
+	// parsing must not cap line length.
+	big := `{"timestamp":"2026-09-11T08:00:00Z","event_type":"session_started","session_id":"` + strings.Repeat("s", 2*1024*1024) + `","agent_id":"a","policy_decision":"allow"}` + "\n"
+	events, err := LoadEvents(bytes.NewReader([]byte(big)))
+	if err != nil {
+		t.Fatalf("large line rejected: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events=%d want 1", len(events))
+	}
+}
+
+func TestReconcileConsumesMultiplicity(t *testing.T) {
+	// Two declared denials, one logged occurrence (replay): the second is unlogged.
+	events, err := LoadEvents(bytes.NewReader(loadBrakeFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Reconcile(Report{}, []DecisionRef{
+		{RequestHash: "req-deny-1", Decision: "deny"},
+		{RequestHash: "req-deny-1", Decision: "deny"},
+	}, events)
+	if rep.UnloggedDenials != 1 {
+		t.Fatalf("unlogged=%d want 1 (replay multiplicity)", rep.UnloggedDenials)
 	}
 }

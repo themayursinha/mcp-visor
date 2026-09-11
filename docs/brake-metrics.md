@@ -39,8 +39,10 @@ mapping below was checked against the producer, not the schema wish-list.
    authority-transition evidence but are never grouped as rules.
 2. **Guardrail hits** — computable today: denials plus approval holds and
    grant receipts (`brake.denied_total` + `brake.approval_gates_total` +
-   `brake.approval_grants_total`, the last joined hold→grant by
-   request hash).
+   `brake.approval_grants_total`). Grants join holds by request hash and
+   consume one hold each: capability accounting stores receipts in the
+   same receipt-hash field on ordinary allows, so receipt presence alone
+   never counts — only hold-matched grants do.
 3. **Approvals overridden** — NOT computable today. Grants are visible
    (allowed + receipt hash); bypasses and off-record decisions leave no
    outcome event. Gap: emit `tool_call_approved` /
@@ -55,7 +57,8 @@ against production logs stays a gap until they do. The proof demonstrates
 the mechanism on joinable records; hashless declared decisions report as
 unjoinable, never silently as matched or missing. Reconciliation indexes
 denials only — holds share hashes with their eventual denials and must
-never satisfy a denial lookup.
+never satisfy a denial lookup — and consumes one logged occurrence per
+declaration, so replayed requests cannot hide a missing second event.
 
 ## Negative case
 
@@ -69,8 +72,9 @@ by `request_hash`; every unmatched deny increments
 
 Same fixture in, same numbers out: no sampling, no estimation, no
 model-produced scores. Inputs are append-only sink records outside the
-agent's write scope; the proof asserts exact expected values. Malformed
-lines and events without a type fail closed at load.
+agent's write scope; the proof asserts exact expected values. Parsing is
+streaming with no line-length cap (production records can exceed 1 MiB);
+malformed lines and events without a type fail closed at load.
 
 ## Links
 

@@ -15,8 +15,6 @@
 package observability
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -95,7 +93,7 @@ var Contract = []MetricDef{
 	},
 	{
 		Name:          MetricApprovalGrantsTotal,
-		Definition:    "Holds resolved by human grant: tool_call_allowed carrying an approval receipt, joined to the hold by request hash.",
+		Definition:    "Holds resolved by human grant: allowed with a receipt hash whose request hash matches a preceding hold (capability-accounted allows share the receipt field and never count); each hold satisfies one grant.",
 		SourceEvent:   string(audit.EventToolAllowed),
 		SourceField:   "approval_receipt_hash",
 		Computability: ComputableToday,
@@ -155,32 +153,26 @@ type DecisionRef struct {
 	Decision    string
 }
 
-// LoadEvents parses audit JSONL (one audit.Event per line, blank lines
-// skipped). Unknown trailing structure fails closed.
+// LoadEvents parses audit JSONL via a streaming decoder: no line-length cap
+// (production records can exceed 1 MiB), blank space skipped natively.
+// Unknown trailing structure fails closed.
 func LoadEvents(r io.Reader) ([]audit.Event, error) {
 	var events []audit.Event
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
-	line := 0
-	for sc.Scan() {
-		line++
-		raw := sc.Bytes()
-		if len(bytes.TrimSpace(raw)) == 0 {
-			continue
-		}
+	dec := json.NewDecoder(r)
+	for {
 		var ev audit.Event
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			return nil, fmt.Errorf("line %d: %w", line, err)
+		err := dec.Decode(&ev)
+		if err == io.EOF {
+			return events, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("offset %d: %w", dec.InputOffset(), err)
 		}
 		if ev.EventType == "" {
-			return nil, fmt.Errorf("line %d: missing event_type", line)
+			return nil, fmt.Errorf("offset %d: missing event_type", dec.InputOffset())
 		}
 		events = append(events, ev)
 	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
-	return events, nil
 }
 
 // unattributedRule labels denials recorded without a policy rule. Free-form
@@ -188,9 +180,14 @@ func LoadEvents(r io.Reader) ([]audit.Event, error) {
 // across many groups and merge unrelated rules.
 const unattributedRule = "unattributed"
 
-// Compute derives today's computable metrics from parsed events.
+// Compute derives today's computable metrics from parsed events, in log
+// order. Approval grants join holds: an allow counts only when its request
+// hash matches a preceding approval hold, because capability accounting
+// stores receipts in the same receipt-hash field on ordinary allows. Each
+// hold satisfies one grant; replays beyond that do not count.
 func Compute(events []audit.Event) Report {
 	rep := Report{DeniedByRule: map[string]int64{}}
+	holds := map[string]int{}
 	for _, ev := range events {
 		switch ev.EventType {
 		case audit.EventToolDenied:
@@ -204,10 +201,14 @@ func Compute(events []audit.Event) Report {
 				rep.TaintBlocks++
 			}
 		case audit.EventToolAllowed:
-			if ev.ApprovalReceiptHash != "" {
+			if ev.ApprovalReceiptHash != "" && ev.RequestHash != "" && holds[ev.RequestHash] > 0 {
+				holds[ev.RequestHash]--
 				rep.ApprovalGrants++
 			}
 		case audit.EventToolApprovalRequired:
+			if ev.RequestHash != "" {
+				holds[ev.RequestHash]++
+			}
 			rep.ApprovalGates++
 		case audit.EventToolChainDetected:
 			rep.ChainIntercepts++
@@ -222,7 +223,9 @@ func Compute(events []audit.Event) Report {
 // satisfy the lookup. Decision refs without a hash are unjoinable, never
 // silently counted either way. A deny with no event is the negative case.
 func Reconcile(rep Report, decisions []DecisionRef, events []audit.Event) Report {
-	byHash := map[string]bool{}
+	// Multiplicity matters: identical replayed requests share a hash, so
+	// each declared decision consumes one logged occurrence.
+	byHash := map[string]int{}
 	for _, ev := range events {
 		if ev.EventType != audit.EventToolDenied {
 			continue
@@ -230,7 +233,7 @@ func Reconcile(rep Report, decisions []DecisionRef, events []audit.Event) Report
 		if ev.RequestHash == "" {
 			continue
 		}
-		byHash[ev.RequestHash] = true
+		byHash[ev.RequestHash]++
 	}
 	for _, d := range decisions {
 		if d.Decision != "deny" {
@@ -240,10 +243,12 @@ func Reconcile(rep Report, decisions []DecisionRef, events []audit.Event) Report
 			rep.Unjoinable++
 			continue
 		}
-		if !byHash[d.RequestHash] {
+		if byHash[d.RequestHash] == 0 {
 			rep.UnloggedDenials++
 			rep.UnloggedDetail = append(rep.UnloggedDetail, d.RequestHash)
+			continue
 		}
+		byHash[d.RequestHash]--
 	}
 	sort.Strings(rep.UnloggedDetail)
 	return rep
