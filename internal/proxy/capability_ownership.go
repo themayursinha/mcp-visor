@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -204,8 +205,13 @@ func attachOwnershipReceipt(event *audit.Event, rec *receipt.CapabilityOwnership
 	}
 	sum := sha256.Sum256(data)
 	event.OwnershipReceiptHash = hex.EncodeToString(sum[:])
+	// Decode with UseNumber: unix-nano integers exceed float64's exact
+	// range, and a float64 round trip would rewrite the signed bytes and
+	// break the embedded receipt hash.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var recMap map[string]any
-	if err := json.Unmarshal(data, &recMap); err == nil {
+	if err := dec.Decode(&recMap); err == nil {
 		event.OwnershipReceipt = recMap
 	}
 }

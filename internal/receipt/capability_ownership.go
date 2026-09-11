@@ -1,6 +1,7 @@
 package receipt
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -106,10 +107,14 @@ func (r *CapabilityOwnershipReceipt) Marshal() ([]byte, error) {
 	return json.Marshal(r)
 }
 
-// UnmarshalOwnershipReceipt parses a receipt. Call Verify afterwards.
+// UnmarshalOwnershipReceipt parses a receipt. Numbers decode via
+// UseNumber so 64-bit integers (unix-nano evaluated_at) survive exactly;
+// a float64 round trip would rewrite them. Call Verify afterwards.
 func UnmarshalOwnershipReceipt(data []byte) (*CapabilityOwnershipReceipt, error) {
 	var r CapabilityOwnershipReceipt
-	if err := json.Unmarshal(data, &r); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&r); err != nil {
 		return nil, fmt.Errorf("unmarshal ownership receipt: %w", err)
 	}
 	return &r, nil

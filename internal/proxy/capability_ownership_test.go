@@ -11,6 +11,7 @@ import (
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
+	"github.com/themayursinha/mcp-visor/internal/receipt"
 )
 
 // Borrowed-authority fixture: tenant-A (calculator) and tenant-B
@@ -399,5 +400,43 @@ capability_ownership:
 
 	if _, action := p.interceptAndModify(toolCallRaw(1, "internal_fetch", map[string]any{"resource": "10.0.0.1"}), client); action != "forward" {
 		t.Fatalf("exact grant on redaction-shaped value must forward, got %s; response=%s", action, out.String())
+	}
+}
+
+func TestOwnershipReceiptNanosSurviveEmbed(t *testing.T) {
+	// Unix-nano integers exceed float64 exact range: attach must preserve
+	// digits so the embedded receipt still verifies.
+	kp, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &receipt.CapabilityOwnershipReceipt{
+		Schema: "capability_ownership_v1", Requester: "tenant-A",
+		Server: "mcp-server-B", Tool: "internal_fetch", Owner: "tenant-B",
+		EffectClass: "NETWORK", Status: receipt.OwnershipStatusMatched,
+		Verdict:     "allow",
+		EvaluatedAt: time.Date(2026, 9, 11, 10, 15, 0, 500000000, time.UTC).UnixNano(),
+	}
+	if err := rec.Sign(kp); err != nil {
+		t.Fatal(err)
+	}
+	ev := audit.Event{EventType: audit.EventToolAllowed}
+	attachOwnershipReceipt(&ev, rec)
+	if ev.OwnershipReceiptHash == "" || ev.OwnershipReceipt == nil {
+		t.Fatal("receipt not attached")
+	}
+	embedded, err := json.Marshal(ev.OwnershipReceipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := receipt.UnmarshalOwnershipReceipt(embedded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.EvaluatedAt != rec.EvaluatedAt {
+		t.Fatalf("nanos mangled: %d != %d", rt.EvaluatedAt, rec.EvaluatedAt)
+	}
+	if err := rt.Verify(kp.PublicKey); err != nil {
+		t.Fatalf("embedded receipt fails verify: %v", err)
 	}
 }
