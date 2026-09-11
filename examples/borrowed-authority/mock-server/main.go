@@ -76,7 +76,10 @@ func main() {
 					obs["request_id"] = int(id)
 				}
 				if data, err := json.Marshal(obs); err == nil {
-					obsFile.Write(append(data, '\n'))
+					if _, err := obsFile.Write(append(data, '\n')); err != nil {
+						fmt.Fprintf(os.Stderr, "mock-server: write observation: %v\n", err)
+						os.Exit(1)
+					}
 				}
 			}
 			response = mustMarshal(map[string]any{
@@ -93,8 +96,14 @@ func main() {
 				"error": map[string]any{"code": -32601, "message": "method not found"},
 			})
 		}
-		out.Write(append(response, '\n'))
-		out.Flush()
+		if _, err := out.Write(append(response, '\n')); err != nil {
+			fmt.Fprintf(os.Stderr, "mock-server: write response: %v\n", err)
+			os.Exit(1)
+		}
+		if err := out.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "mock-server: flush: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 

@@ -31,6 +31,17 @@ func NewRegistry(caps []Capability) (*Registry, error) {
 	return r, nil
 }
 
+// RegisterOwner records an endpoint owner independently of capabilities,
+// so endpoints with zero declarations still fail closed on undeclared
+// tools. Conflicting owners fail.
+func (r *Registry) RegisterOwner(server, owner string) error {
+	if prev, ok := r.owners[server]; ok && prev != owner {
+		return fmt.Errorf("conflicting owners for %s", server)
+	}
+	r.owners[server] = owner
+	return nil
+}
+
 // AddGrant appends one exact grant.
 func (r *Registry) AddGrant(g Grant) {
 	r.grants = append(r.grants, g)

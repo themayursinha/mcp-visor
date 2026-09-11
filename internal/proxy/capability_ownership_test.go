@@ -208,9 +208,7 @@ default_action: allow
 servers:
   - name: "mcp-server-B"
     allowed: true
-    tools:
-      - name: "read_secret"
-        allowed: true
+    tools: []
 capability_ownership:
   endpoints:
     - server: mcp-server-B
@@ -318,5 +316,37 @@ capability_ownership:
 	}
 	if !strings.Contains(out.String(), "expired") {
 		t.Fatalf("denial must record expiry, got %s", out.String())
+	}
+}
+
+func TestCapabilityOwnershipEmptyEndpointFailsClosed(t *testing.T) {
+	// Listed endpoint with zero capabilities: any tool there denies.
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	out := &bytes.Buffer{}
+	p := New(Config{
+		ServerName:   "mcp-server-B",
+		SessionID:    "sess-empty-ep",
+		ClientID:     "tenant-A",
+		AuditLogPath: auditPath,
+		Policy: mustLoadPolicy(t, `
+version: "1.0"
+default_action: allow
+servers:
+  - name: "mcp-server-B"
+    allowed: true
+    tools: []
+capability_ownership:
+  endpoints:
+    - server: mcp-server-B
+      owner: tenant-B
+      capabilities: []
+`),
+	})
+	p.nowFunc = func() time.Time { return time.Date(2026, 9, 11, 10, 5, 0, 0, time.UTC) }
+	defer p.audit.Close()
+	client := mcp.NewParser(nil, out)
+
+	if _, action := p.interceptAndModify(toolCallRaw(1, "read_secret", map[string]any{}), client); action != "denied" {
+		t.Fatalf("tool on empty owned endpoint must fail closed, got %s", action)
 	}
 }

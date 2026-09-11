@@ -266,6 +266,11 @@ func ownershipRegistryFromPolicy(pol *policy.Policy) (*ownership.Registry, error
 	if err != nil {
 		return nil, err
 	}
+	for _, ep := range oc.Endpoints {
+		if err := reg.RegisterOwner(ep.Server, ep.Owner); err != nil {
+			return nil, err
+		}
+	}
 	for _, g := range oc.Delegations {
 		issued, err := time.Parse(time.RFC3339, g.IssuedAt)
 		if err != nil {
