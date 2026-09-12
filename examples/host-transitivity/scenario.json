@@ -1,0 +1,18 @@
+{
+  "hosts": ["host-origin", "host-replica"],
+  "principals": ["principal-a", "replica-b"],
+  "domains": ["domain-origin", "domain-replica"],
+  "grants": ["grant:principal-a:host-origin", "grant:replica-b:host-replica", "grant:declared-transfer"],
+  "effects": ["TRANSFER", "CREDENTIAL_READ", "REMOTE_EXEC", "BULK_EGRESS", "PACKAGE_INSTALL", "PERSISTENT_LISTENER", "REPLICA_BOOTSTRAP"],
+  "credential_path": "/srv/origin/credential",
+  "egress_path": "/srv/origin/export",
+  "attack_action_id": "action:replica-bootstrap",
+  "transfer_action_id": "action:declared-transfer",
+  "claimed_inherited_grant": "grant:principal-a:host-origin",
+  "claimed_replica_principal": "replica-b",
+  "claimed_host_authorized": true,
+  "claimed_grant_valid": true,
+  "claimed_proof_valid": true,
+  "claimed_authorized": true,
+  "host_authority_enabled": true
+}
