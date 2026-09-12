@@ -114,6 +114,12 @@ internal/
     emitter.go                  Async HTTP delivery with HMAC + retry
   siem/                        SIEM event export
     siem.go                     Syslog/JSON/CEF formats over TCP/UDP/file
+  instructionauthority/        PCA island (H32): instruction continuity; not on tools/call
+  causalauthority/             PCA island (H33): causal source vs mandate; not on tools/call
+  principalderivation/         PCA island (H34): localhost is not identity; not on tools/call
+  resourceidentity/            PCA island (H35): path is not resource identity; not on tools/call
+  controlplaneintegrity/       PCA island (H36): policy ALLOW is not substrate integrity; not on tools/call
+  swarmbudget/                 PCA island (H37): swarm intent is not authority; not on tools/call
 examples/
   demo-mcp-server/              Mock MCP server for testing/demos
   demo-runner/                  Interactive demo walkthrough
@@ -370,3 +376,7 @@ HashiCorp Vault Transit secrets engine provides cryptographic signing without ex
 - Vault client supports token auth, TLS/mTLS, namespace (Enterprise), and health checks
 - Public key is retrieved from Vault Transit key metadata at initialization
 - Configure via `--vault-addr`, `--vault-token`, `--vault-key-name` CLI flags
+
+## Proof-carrying autonomy islands
+
+Packages `instructionauthority`, `causalauthority`, `principalderivation`, `resourceidentity`, `controlplaneintegrity`, and `swarmbudget` are **not** stages in the decision pipeline above. They are stdlib-only evaluators with scripted demos. `Authorize` ignores untrusted presentation and is not called from `internal/proxy`. Treat them as research proofs (H32–H37), not as current `tools/call` enforcement.
