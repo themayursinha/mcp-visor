@@ -260,3 +260,44 @@ func TestEmitterApproveRequiredEvent(t *testing.T) {
 		t.Error("timeout waiting for webhook")
 	}
 }
+
+func TestEmitterOwnershipReceipt(t *testing.T) {
+	received := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+		received <- payload
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.URLs = []string{server.URL}
+	e := NewEmitter(cfg)
+	defer e.Close()
+
+	event := audit.Event{
+		Timestamp: "2026-09-11T10:00:00Z", EventType: audit.EventToolDenied,
+		SessionID: "s", AgentID: "a", Server: "mcp-server-B", Tool: "read_secret",
+		Decision: "deny", Reason: "ownership",
+		OwnershipReceiptHash: "deadbeef",
+		OwnershipReceipt:     json.RawMessage(`{"schema":"capability_ownership_v1"}`),
+	}
+	if err := e.EmitDirect(event); err != nil {
+		t.Fatalf("EmitDirect: %v", err)
+	}
+	select {
+	case payload := <-received:
+		if payload["ownership_receipt_hash"] != "deadbeef" {
+			t.Fatalf("hash missing: %v", payload)
+		}
+		rec, ok := payload["ownership_receipt"].(map[string]any)
+		if !ok || rec["schema"] != "capability_ownership_v1" {
+			t.Fatalf("receipt missing or mangled: %v", payload)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no payload received")
+	}
+}

@@ -234,3 +234,36 @@ func TestApprovalRequiredSyslog(t *testing.T) {
 		t.Errorf("syslog should contain tool: %s", output)
 	}
 }
+
+func TestJSONFormatOwnershipReceipt(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Format = FormatJSON
+	exp := &Exporter{format: cfg.Format, hostname: "h", appName: "a"}
+	event := audit.Event{
+		Timestamp: "2026-09-11T10:00:00Z", EventType: audit.EventToolDenied,
+		SessionID: "s", AgentID: "a", Server: "mcp-server-B", Tool: "read_secret",
+		Decision: "deny", Reason: "ownership",
+		OwnershipReceiptHash: "deadbeef",
+		OwnershipReceipt:     json.RawMessage(`{"schema":"capability_ownership_v1"}`),
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(exp.formatJSON(event), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope["ownership_receipt_hash"] != "deadbeef" {
+		t.Fatalf("hash missing: %v", envelope)
+	}
+	rec, ok := envelope["ownership_receipt"].(map[string]any)
+	if !ok || rec["schema"] != "capability_ownership_v1" {
+		t.Fatalf("receipt missing or mangled: %v", envelope)
+	}
+	// Absent proofs stay absent (reduced contract preserved).
+	plain := audit.Event{EventType: audit.EventToolAllowed}
+	var envelope2 map[string]any
+	if err := json.Unmarshal(exp.formatJSON(plain), &envelope2); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := envelope2["ownership_receipt_hash"]; ok {
+		t.Fatal("empty proof fields must stay omitted")
+	}
+}

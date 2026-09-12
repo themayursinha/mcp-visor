@@ -206,6 +206,15 @@ func (e *Exporter) formatJSON(event audit.Event) []byte {
 		"hostname":   e.hostname,
 		"app":        e.appName,
 	}
+	// Ownership proof evidence travels with the decision when present
+	// (card t_02a1bc43); absence omits the keys. Raw bytes: identical to
+	// the audit-log embedding.
+	if event.OwnershipReceiptHash != "" {
+		envelope["ownership_receipt_hash"] = event.OwnershipReceiptHash
+	}
+	if len(event.OwnershipReceipt) > 0 {
+		envelope["ownership_receipt"] = event.OwnershipReceipt
+	}
 
 	data, _ := json.Marshal(envelope)
 	return data
