@@ -1,0 +1,35 @@
+{
+  "task_id": "T-AUTHORITY-CONTINUITY-001",
+  "invariant_ids": ["H32"],
+  "security_sensitive": true,
+  "security_problem": "Harness context reconstruction destroys instruction-hierarchy provenance: MCP output laundered through summary, memory, goals, and agent handoff arrives in a USER slot and executes. Transformation must never increase the originating principal's authority without explicit higher-authority endorsement. Trusted: fixture text, transformer names, endorsement registry. Untrusted: MCP content, visible roles, representations.",
+  "required_behavior": "Instruction-bearing objects carry immutable origin plus ordered derivations; output authority <= input authority without a valid endorsement; requested increases record attempted, clamp, and fail continuity (sticky); valid registry-backed endorsements permit exactly their bound promotion; denied instructions stay available as untrusted observations with instruction_eligible=false; authorization needs continuity!=FAILED and authority>=USER. No model calls.",
+  "failure_behavior": "Without the check, the scripted baseline trusting the USER slot executes. With it, the identical fixture denies with lineage evidence and zero protected executions.",
+  "allowed_paths": [
+    "harness/tasks/T-AUTHORITY-CONTINUITY-001.json",
+    "internal/instructionauthority/model.go",
+    "internal/instructionauthority/evaluator.go",
+    "internal/instructionauthority/evaluator_test.go",
+    "examples/authority-continuity/scenario.json",
+    "examples/authority-continuity/main.go",
+    "tests/integration/authority_continuity_demo_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./internal/instructionauthority", "-run", "TestRedLaunderedMCPOutputNeverBecomesUserInstruction", "-count=1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/instructionauthority", "-count=1"]},
+    {"name": "race", "expect": "pass", "argv": ["go", "test", "-race", "./internal/instructionauthority", "-count=1"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": ["model calls", "natural-language classification", "proxy/policy/audit/receipt changes", "runtime proxy integration", "persistent wire formats", "cryptographic promoter authentication", "autonomous merge", "tag", "release", "dependency addition"],
+  "attack_classes": [
+    {"id": "summary-laundering", "failure_class": "summary-laundering", "expected": "MCP output summarized into agent context stays DATA_ONLY"},
+    {"id": "memory-goal-persistence", "failure_class": "memory-goal-persistence", "expected": "persisted goals retain origin and failed continuity"},
+    {"id": "role-confusion", "failure_class": "role-confusion", "expected": "USER-slot presentation never confers USER authority"},
+    {"id": "endorsement-forgery", "failure_class": "endorsement-forgery", "expected": "absent/unknown/insufficient/mismatched endorsements deny"},
+    {"id": "continuity-washing", "failure_class": "continuity-washing", "expected": "later transformations cannot clear failed lineage"}
+  ]
+}
