@@ -190,3 +190,62 @@ func TestDeniedInstructionRemainsUntrustedObservation(t *testing.T) {
 		t.Fatalf("observation authority=%s want DATA_ONLY", obj.Provenance.Authority)
 	}
 }
+
+func TestOverbroadGrantDenied(t *testing.T) {
+	// SYSTEM grant for a USER request is not narrowly bound: deny.
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, registry)
+	childDigest := digest("upgraded")
+	_ = childDigest
+	upgraded := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: summaryText},
+		&Endorsement{
+			ID: "e-wide", Promoter: "op:marina", GrantAuthority: AuthoritySystem,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(summaryText),
+			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
+		}, registry)
+	if execute, _ := Authorize(upgraded); execute {
+		t.Fatal("overbroad grant authorized")
+	}
+	if upgraded.Provenance.Promotion.Continuity != ContinuityFailed {
+		t.Fatal("overbroad grant must fail continuity")
+	}
+}
+
+func TestLaterAttemptRecorded(t *testing.T) {
+	obj := launder(t, nil, nil)
+	next := ApplyTransform(obj, Transform{Transformer: "fresh_rewrite", To: ReprAgentSummary, RequestedAuthority: AuthoritySystem, NewContent: "clean text"}, nil, nil)
+	if next.Provenance.Promotion.RequestedAuthority != AuthoritySystem {
+		t.Fatalf("later attempt hidden: %q", next.Provenance.Promotion.RequestedAuthority)
+	}
+	if next.Provenance.Promotion.Continuity != ContinuityFailed {
+		t.Fatal("sticky failure must hold")
+	}
+	evidence := strings.Join(DenyEvidence(next), "\n")
+	if !strings.Contains(evidence, "authority transition DATA_ONLY->SYSTEM") {
+		t.Fatalf("evidence hides the escalation:\n%s", evidence)
+	}
+}
+
+func TestDenyEvidenceDerivedFromObject(t *testing.T) {
+	obj := NewOriginObject(
+		"fetch status",
+		Origin{Principal: "agent:dev", TrustClass: TrustTrustedDeveloper},
+		ReprMCPOutput, "NETWORK", true,
+	)
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthoritySystem, NewContent: "fetch status"}, nil, nil)
+	evidence := strings.Join(DenyEvidence(obj), "\n")
+	for _, frag := range []string{
+		"effect class NETWORK",
+		"original principal trusted developer",
+		"authority transition DEVELOPER->SYSTEM",
+	} {
+		if !strings.Contains(evidence, frag) {
+			t.Fatalf("evidence missing derived %q:\n%s", frag, evidence)
+		}
+	}
+	if strings.Contains(evidence, "untrusted MCP response") {
+		t.Fatalf("evidence leaks fixture literals:\n%s", evidence)
+	}
+}

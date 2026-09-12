@@ -63,9 +63,14 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 		},
 		InstructionEligible: false,
 	}
-	// Sticky failure: an already-failed lineage cannot wash clean.
+	// Sticky failure: an already-failed lineage cannot wash clean. Later
+	// attempts are still recorded (requested authority updated) so the
+	// evidence never hides an escalation that followed the first failure.
 	if obj.Provenance.Promotion.Continuity == ContinuityFailed {
-		next.Provenance.Promotion.Attempted = next.Provenance.Promotion.Attempted || t.RequestedAuthority != ""
+		if t.RequestedAuthority != "" {
+			next.Provenance.Promotion.Attempted = true
+			next.Provenance.Promotion.RequestedAuthority = t.RequestedAuthority
+		}
 		return next
 	}
 	if t.RequestedAuthority == "" {
@@ -88,9 +93,13 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 }
 
 // validEndorsement checks an endorsement against the registry and both
-// object states. Every binding must match exactly.
+// object states. Every binding must match exactly, including the requested
+// authority: a SYSTEM grant for a USER request is not a narrow endorsement.
 func validEndorsement(e Endorsement, parent, child InstructionObject, t Transform, registry map[string]TrustedPrincipal) bool {
 	if e.ID == "" || e.Promoter == "" || e.GrantAuthority == "" {
+		return false
+	}
+	if t.RequestedAuthority == "" || e.GrantAuthority != t.RequestedAuthority {
 		return false
 	}
 	promoter, ok := registry[e.Promoter]
@@ -183,13 +192,30 @@ func DenyEvidence(obj InstructionObject) []string {
 	return []string{
 		"policy_decision=deny  policy_rule=instruction_authority_continuity",
 		"reason=authority-expanding instruction",
-		"argument class INSTRUCTION  effect class PROCESS",
-		fmt.Sprintf("visible role %s  original principal untrusted MCP response", p.VisibleRole),
+		fmt.Sprintf("argument class INSTRUCTION  effect class %s", obj.EffectClass),
+		fmt.Sprintf("visible role %s  original principal %s", p.VisibleRole, describeOrigin(p.Origin)),
 		fmt.Sprintf("authority transition %s->%s", from, to),
 		"lineage " + lineage,
 		"attempted promotion " + attempted + "  authorized promoter " + promoter,
 		"continuity " + p.Promotion.Continuity,
-		"observation preserved  authority DATA_ONLY",
+		fmt.Sprintf("observation preserved  authority %s", p.Authority),
 		"result NOT_EXECUTED",
+	}
+}
+
+// describeOrigin renders the origin for evidence. The fixture phrase for
+// the canonical untrusted-MCP case is preserved verbatim.
+func describeOrigin(o Origin) string {
+	switch o.TrustClass {
+	case TrustUntrustedMCPResponse:
+		return "untrusted MCP response"
+	case TrustTrustedUser:
+		return "trusted user"
+	case TrustTrustedDeveloper:
+		return "trusted developer"
+	case TrustTrustedSystem:
+		return "trusted system"
+	default:
+		return o.Principal + " (" + o.TrustClass + ")"
 	}
 }
