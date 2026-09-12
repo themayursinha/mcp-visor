@@ -15,6 +15,12 @@ import (
 // SchemaVersion is the instruction-object schema implemented here.
 const SchemaVersion = 1
 
+// MaxHistoryHops is the cardinality bound on untrusted History. The
+// supported laundering path is a handful of representation hops; longer
+// decoded logs are not in the model. Evaluation, verification, evidence,
+// and ApplyTransform fail closed at this bound without walking extra hops.
+const MaxHistoryHops = 8
+
 // Authority levels, fixed total order. Roles, representations, storage
 // locations, and message slots are NOT authority: moving content into a
 // USER slot never confers USER authority.
@@ -130,8 +136,8 @@ type Provenance struct {
 // EvaluationRoot is the only caller-supplied trust root. Evaluation
 // reads origin, instruction-bearing, effect class, and genesis content
 // digest from here — never from the corresponding InstructionObject
-// fields. From the object it reads only History and Content.
-// Provenance is fold output. Promoter MACs are a declared non-goal.
+// fields. From the object it reads only History (≤ MaxHistoryHops) and
+// Content. Provenance is fold output. Promoter MACs are a declared non-goal.
 type EvaluationRoot struct {
 	Origin             Origin
 	InstructionBearing bool
@@ -141,8 +147,9 @@ type EvaluationRoot struct {
 
 // InstructionObject is one materialized instruction-bearing object.
 // InstructionBearing and EffectClass are fixture-supplied, never inferred.
-// History is the append-only derivation log; Provenance is the fold's
-// read-only view over Origin and History (see fold in evaluator.go).
+// History is the append-only derivation log, bounded at MaxHistoryHops;
+// Provenance is the fold's read-only view over Origin and History
+// (see fold in evaluator.go).
 type InstructionObject struct {
 	SchemaVersion       int        `json:"schema_version"`
 	Content             string     `json:"content"`

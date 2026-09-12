@@ -843,16 +843,72 @@ func TestFoldTraceParentAuthorityMatchesPrefixes(t *testing.T) {
 	}
 }
 
-func TestVerifyLongEndorsedHistoryCompletes(t *testing.T) {
+func rejectedHistory(hops int) InstructionObject {
 	obj := maliciousOrigin()
-	for i := 0; i < 64; i++ {
+	for i := 0; i < hops; i++ {
 		next := obj.Content + string(rune('a'+i%26))
 		obj = ApplyTransform(obj, Transform{
 			Transformer: "stage", To: ReprAgentSummary,
 			RequestedAuthority: AuthorityUser, NewContent: next,
 		}, &Endorsement{ID: "e", Promoter: "ghost", GrantAuthority: AuthorityUser}, nil)
 	}
+	return obj
+}
+
+func TestHistoryAtBoundVerifies(t *testing.T) {
+	obj := rejectedHistory(MaxHistoryHops)
+	if len(obj.History) != MaxHistoryHops {
+		t.Fatalf("history=%d want %d", len(obj.History), MaxHistoryHops)
+	}
 	if err := VerifyProvenance(obj, mustRoot(obj), map[string]TrustedPrincipal{}); err != nil {
-		t.Fatalf("long rejected-endorsement history: %v", err)
+		t.Fatalf("at-bound rejected-endorsement history: %v", err)
+	}
+	evidence := strings.Join(DenyEvidence(obj, mustRoot(obj)), "\n")
+	wantLineage := "lineage " + strings.Join(obj.Provenance.Lineage, "->")
+	if !strings.Contains(evidence, wantLineage) {
+		t.Fatalf("evidence missing joined lineage %q:\n%s", wantLineage, evidence)
+	}
+}
+
+func TestHistoryOverBoundFailsClosed(t *testing.T) {
+	obj := rejectedHistory(MaxHistoryHops)
+	extra := obj.History[len(obj.History)-1]
+	obj.History = append(append([]Hop{}, obj.History...), extra)
+	root := mustRoot(obj)
+	if err := VerifyProvenance(obj, root, map[string]TrustedPrincipal{}); err == nil {
+		t.Fatal("over-bound history verified")
+	}
+	execute, reason := Authorize(obj, root)
+	if execute {
+		t.Fatal("over-bound history authorized")
+	}
+	if reason != reasonHistoryExceedsBound {
+		t.Fatalf("reason=%q want %q", reason, reasonHistoryExceedsBound)
+	}
+	evidence := strings.Join(DenyEvidence(obj, root), "\n")
+	if !strings.Contains(evidence, "reason="+reasonHistoryExceedsBound) {
+		t.Fatalf("evidence missing bound reason:\n%s", evidence)
+	}
+	if strings.Count(evidence, "DATA_ONLY->") >= MaxHistoryHops {
+		t.Fatalf("evidence rendered attacker lineage:\n%s", evidence)
+	}
+}
+
+func TestApplyTransformStopsAtBound(t *testing.T) {
+	obj := rejectedHistory(MaxHistoryHops)
+	next := ApplyTransform(obj, Transform{
+		Transformer: "stage", To: ReprAgentSummary, NewContent: obj.Content + "z",
+	}, nil, nil)
+	if len(next.History) != MaxHistoryHops {
+		t.Fatalf("history grew past bound: %d", len(next.History))
+	}
+	if next.Content != obj.Content {
+		t.Fatalf("over-bound transform replaced content")
+	}
+	if next.Provenance.Promotion.Continuity != ContinuityFailed || !next.Provenance.Promotion.DigestFailure {
+		t.Fatalf("over-bound transform not poisoned: %+v", next.Provenance.Promotion)
+	}
+	if execute, _ := Authorize(next, mustRoot(next)); execute {
+		t.Fatal("poisoned at-bound object authorized")
 	}
 }

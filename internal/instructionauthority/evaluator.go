@@ -2,6 +2,7 @@ package instructionauthority
 
 import (
 	"fmt"
+	"strings"
 )
 
 // Transform describes one context-construction hop.
@@ -21,11 +22,22 @@ type Transform struct {
 	NewContent string
 }
 
+const reasonHistoryExceedsBound = "history exceeds bound"
+
 // ApplyTransform returns the object after one transformation. It appends
 // one hop record and recomputes Provenance from scratch via fold: no
 // derived field is ever mutated piecemeal, so authority, lineage,
 // promotion outcomes, digests, and representations cannot drift apart.
+// A History already at MaxHistoryHops is poisoned in place: no further
+// hop is appended, and continuity fails closed.
 func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, registry map[string]TrustedPrincipal) InstructionObject {
+	if len(obj.History) >= MaxHistoryHops {
+		poisoned := obj
+		poisoned.InstructionEligible = false
+		poisoned.Provenance.Promotion.Continuity = ContinuityFailed
+		poisoned.Provenance.Promotion.DigestFailure = true
+		return poisoned
+	}
 	parentDigest := digest(obj.Content)
 	parentHop := parentDigest
 	if n := len(obj.History); n > 0 {
@@ -88,6 +100,9 @@ func fold(origin Origin, originRepr string, hops []Hop) Provenance {
 }
 
 func foldTrace(origin Origin, originRepr string, hops []Hop) (Provenance, []string) {
+	if len(hops) > MaxHistoryHops {
+		return boundExceededProvenance(origin, originRepr), nil
+	}
 	prov := Provenance{
 		Origin:                origin,
 		DerivedBy:             []Derivation{},
@@ -249,6 +264,9 @@ func validEndorsement(e Endorsement, parentDigest, parentAuthority, childDigest,
 // digest, representation, or derivation fails. Untrusted bytes must pass
 // through here before Authorize.
 func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[string]TrustedPrincipal) error {
+	if len(obj.History) > MaxHistoryHops {
+		return fmt.Errorf("history exceeds %d hops", MaxHistoryHops)
+	}
 	// History-free origin objects verify against genesis state directly.
 	// Content is bound to the held root digest, not to whatever bytes
 	// currently sit on the object.
@@ -368,9 +386,25 @@ func contentChainBroken(root EvaluationRoot, content string, hops []Hop) bool {
 	return digest(content) != hops[len(hops)-1].ContentDigest
 }
 
+func boundExceededProvenance(origin Origin, originRepr string) Provenance {
+	return Provenance{
+		Origin:                origin,
+		DerivedBy:             []Derivation{},
+		CurrentRepresentation: originRepr,
+		VisibleRole:           RoleNone,
+		Authority:             ceilingForTrust(origin.TrustClass),
+		Lineage:               []string{},
+		ContentSHA256:         "",
+		Promotion:             Promotion{Continuity: ContinuityFailed, DigestFailure: true},
+	}
+}
+
 func derivedProvenance(obj InstructionObject, root EvaluationRoot) Provenance {
 	// Object copies of origin, bearing, effect class, and provenance are
 	// not inputs. The content chain is bound to the held genesis digest.
+	if len(obj.History) > MaxHistoryHops {
+		return boundExceededProvenance(root.Origin, "")
+	}
 	if len(obj.History) == 0 {
 		p := Provenance{
 			Origin:        root.Origin,
@@ -399,7 +433,13 @@ func derivedProvenance(obj InstructionObject, root EvaluationRoot) Provenance {
 func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason string) {
 	// Reasons are the DenyEvidence literals. DenyEvidence formats this
 	// return value; it never infers a second, competing check.
-	p := derivedProvenance(obj, root)
+	if len(obj.History) > MaxHistoryHops {
+		return false, reasonHistoryExceedsBound
+	}
+	return decide(derivedProvenance(obj, root), root)
+}
+
+func decide(p Provenance, root EvaluationRoot) (execute bool, reason string) {
 	if !root.InstructionBearing {
 		return false, "not instruction-bearing content"
 	}
@@ -427,14 +467,19 @@ func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason
 // Transition endpoints derive from the object's own lineage and requested
 // authority (contract §12 fixes their literal form for the fixture).
 func DenyEvidence(obj InstructionObject, root EvaluationRoot) []string {
-	p := derivedProvenance(obj, root)
-	lineage := ""
-	for i, a := range p.Lineage {
-		if i > 0 {
-			lineage += "->"
+	var p Provenance
+	var denyReason string
+	if len(obj.History) > MaxHistoryHops {
+		p = boundExceededProvenance(root.Origin, "")
+		denyReason = reasonHistoryExceedsBound
+	} else {
+		p = derivedProvenance(obj, root)
+		_, denyReason = decide(p, root)
+		if denyReason == "authorized" {
+			denyReason = "insufficient authority"
 		}
-		lineage += a
 	}
+	lineage := strings.Join(p.Lineage, "->")
 	from := p.Authority
 	if len(p.Lineage) > 0 {
 		// Immediate pre-attempt authority: the entry this hop appended,
@@ -457,10 +502,6 @@ func DenyEvidence(obj InstructionObject, root EvaluationRoot) []string {
 	argClass := "INSTRUCTION"
 	if !root.InstructionBearing {
 		argClass = "DATA"
-	}
-	_, denyReason := Authorize(obj, root)
-	if denyReason == "authorized" {
-		denyReason = "insufficient authority"
 	}
 	return []string{
 		"policy_decision=deny  policy_rule=instruction_authority_continuity",
