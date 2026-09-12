@@ -1,0 +1,51 @@
+{
+  "task_id": "T-PRINCIPAL-DERIVATION-001",
+  "invariant_ids": ["H34"],
+  "security_sensitive": true,
+  "security_problem": "Network locality is not principal identity. Localhost, loopback, Unix sockets, DNS results, Host, Origin, and forwarded headers cannot establish caller authority.",
+  "required_behavior": "Authorize ignores ObservedArtifact and returns EvaluatePrincipalDerivationProof(EvaluationRoot). Principal Derivation Proof is VALID only for the complete attested transport-to-session-to-agent-to-mandate path. ALLOW additionally requires tool capability. Evidence is the fixed eight-element array carried by Decision.",
+  "failure_behavior": "The scripted conventional localhost path fires its callback. Visor denies the same attack root with caller authority ZERO and does not fire the callback. Unknown enums, incomplete bindings, identity mismatches, absent delegation, invalid mandate authority, mandate-target mismatch, and unavailable capability deny.",
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-PRINCIPAL-DERIVATION-001.json",
+    "internal/principalderivation/model.go",
+    "internal/principalderivation/evaluator.go",
+    "internal/principalderivation/evaluator_test.go",
+    "examples/principal-derivation/scenario.json",
+    "examples/principal-derivation/main.go",
+    "tests/integration/principal_derivation_demo_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./internal/principalderivation", "-run", "TestRedLocalhostDoesNotConferPrincipalAuthority", "-count=1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/principalderivation", "-count=1"]},
+    {"name": "race", "expect": "pass", "argv": ["go", "test", "-race", "./internal/principalderivation", "-count=1"]},
+    {"name": "demo", "expect": "pass", "argv": ["go", "test", "./tests/integration", "-run", "TestPrincipalDerivationDemo", "-count=1"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "Real DNS rebinding",
+    "Real browsers or MCP servers",
+    "Real network, HTTP, loopback, Unix, or TCP sockets",
+    "HMACs, signatures, MACs, TLS client certificates, or cryptographic attestation",
+    "Proxy or tools/call integration",
+    "Reverse proxies, sidecars, service meshes, or container host networking",
+    "Natural-language parsing, classifiers, model calls, embeddings, or NLP",
+    "Graphs, histories, provenance stores, or multi-hop delegation",
+    "TOCTOU analysis",
+    "Control-plane receipts",
+    "Policy, audit, receipt, CLI, instructionauthority, or causalauthority imports",
+    "Autonomous merge, tag, or release",
+    "New dependencies"
+  ],
+  "attack_classes": [
+    {"id": "dns-rebinding", "failure_class": "network-locality-as-identity", "expected": "localhost destination and loopback DNS answer do not derive a principal"},
+    {"id": "forwarded-header-spoofing", "failure_class": "protocol-metadata-as-identity", "expected": "Host, Origin, and X-Forwarded metadata do not derive a principal"},
+    {"id": "unix-socket-relay", "failure_class": "socket-locality-as-identity", "expected": "Unix-socket transport does not derive a principal"},
+    {"id": "stored-proof-smashing", "failure_class": "untrusted-proof-replay", "expected": "claimed VALID and ALLOW fields cannot authorize an invalid root"},
+    {"id": "principal-confusion", "failure_class": "identity-mismatch", "expected": "every identity transition requires exact principal equality"}
+  ]
+}
