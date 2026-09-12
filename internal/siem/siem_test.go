@@ -267,3 +267,32 @@ func TestJSONFormatOwnershipReceipt(t *testing.T) {
 		t.Fatal("empty proof fields must stay omitted")
 	}
 }
+
+func TestSyslogCEFCarryOwnershipHash(t *testing.T) {
+	mkExp := func(format Format) *Exporter {
+		return &Exporter{format: format, hostname: "h", appName: "a"}
+	}
+	event := audit.Event{
+		Timestamp: "2026-09-11T10:00:00Z", EventType: audit.EventToolDenied,
+		SessionID: "s", AgentID: "a", Server: "mcp-server-B", Tool: "read_secret",
+		Decision: "deny", Reason: "ownership",
+		OwnershipReceiptHash: "deadbeef",
+		OwnershipReceipt:     json.RawMessage(`{"schema":"capability_ownership_v1"}`),
+	}
+	syslog := string(mkExp(FormatSyslog5424).formatSyslog5424(event))
+	if !strings.Contains(syslog, `ownership_receipt_hash="deadbeef"`) {
+		t.Fatalf("syslog missing proof hash: %s", syslog)
+	}
+	cef := string(mkExp(FormatCEF).formatCEF(event))
+	if !strings.Contains(cef, "cs2=deadbeef cs2Label=OwnershipReceiptHash") {
+		t.Fatalf("cef missing proof hash: %s", cef)
+	}
+	// Absent proofs leave both formats byte-stable (no empty fields).
+	plain := audit.Event{EventType: audit.EventToolAllowed, Decision: "allow"}
+	if strings.Contains(string(mkExp(FormatSyslog5424).formatSyslog5424(plain)), "ownership") {
+		t.Fatal("syslog must omit absent proof")
+	}
+	if strings.Contains(string(mkExp(FormatCEF).formatCEF(plain)), "cs2=") {
+		t.Fatal("cef must omit absent proof")
+	}
+}

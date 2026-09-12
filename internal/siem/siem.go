@@ -184,12 +184,20 @@ func (e *Exporter) formatSyslog5424(event audit.Event) []byte {
 	header := fmt.Sprintf("<%d>1 %s %s %s %d mcp_visor [mcp-visor@1 session_id=\"%s\" agent_id=\"%s\"]",
 		pri, ts, e.hostname, e.appName, os.Getpid(), event.SessionID, event.AgentID)
 
+	// Ownership proof hash travels as structured data when present (card
+	// t_02a1bc43): 64 hex chars fit the line budget; the full receipt stays
+	// in JSONL/JSON/webhook sinks. Hex needs no SD escaping.
+	sd := ""
+	if event.OwnershipReceiptHash != "" {
+		sd = fmt.Sprintf(" [mcp-visor-proof@1 ownership_receipt_hash=\"%s\"]", event.OwnershipReceiptHash)
+	}
+
 	msg := fmt.Sprintf(" %s: %s", event.Decision, event.Reason)
 	if event.Tool != "" {
 		msg = fmt.Sprintf(" tool=%s server=%s %s: %s", event.Tool, event.Server, event.Decision, event.Reason)
 	}
 
-	return []byte(header + msg)
+	return []byte(header + sd + msg)
 }
 
 func (e *Exporter) formatJSON(event audit.Event) []byte {
@@ -226,6 +234,11 @@ func (e *Exporter) formatCEF(event audit.Event) []byte {
 
 	extensions := fmt.Sprintf("suser=%s duser=%s request=%s act=%s reason=%s cs1=%s cs1Label=RiskLevel",
 		event.SessionID, event.AgentID, event.Tool, event.Decision, event.Reason, event.RiskLevel)
+	// Ownership proof hash in a labeled custom field when present (card
+	// t_02a1bc43); the full receipt stays in JSONL/JSON/webhook sinks.
+	if event.OwnershipReceiptHash != "" {
+		extensions += fmt.Sprintf(" cs2=%s cs2Label=OwnershipReceiptHash", event.OwnershipReceiptHash)
+	}
 
 	cef := fmt.Sprintf("CEF:0|MCP|mcp-visor|1.0|%s|%s|%d|%s",
 		name, event.Decision, severity, extensions)
