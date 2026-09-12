@@ -89,9 +89,13 @@ func runBaseline(scen scenario) error {
 
 // runProtected evaluates the identical fixture through continuity proofs.
 func runProtected(scen scenario) error {
+	root := instructionauthority.EvaluationRoot{
+		Origin:             instructionauthority.Origin{Principal: scen.OriginPrincipal, TrustClass: scen.OriginTrustClass},
+		InstructionBearing: true,
+	}
 	origin := instructionauthority.NewOriginObject(
 		scen.MaliciousMCPOutput,
-		instructionauthority.Origin{Principal: scen.OriginPrincipal, TrustClass: scen.OriginTrustClass},
+		root.Origin,
 		instructionauthority.ReprMCPOutput, "PROCESS", true,
 	)
 	obj := instructionauthority.ApplyTransform(origin, instructionauthority.Transform{
@@ -102,7 +106,7 @@ func runProtected(scen scenario) error {
 	// round trip byte-identically, and continuity is evaluated on the
 	// reloaded object — a lossy store or a reload that skips evaluation is
 	// exactly the laundering vector.
-	reloaded, err := persistReload(obj)
+	reloaded, err := persistReload(obj, root)
 	if err != nil {
 		return fmt.Errorf("memory round trip: %w", err)
 	}
@@ -117,14 +121,14 @@ func runProtected(scen scenario) error {
 	}, nil, nil)
 
 	executed := false
-	if execute, _ := instructionauthority.Authorize(obj); execute {
+	if execute, _ := instructionauthority.Authorize(obj, root); execute {
 		executed = true
 	}
 	if executed {
 		return errors.New("protected path must not execute the laundered instruction")
 	}
 	fmt.Println("B  WITH VISOR (scripted continuity check)")
-	for _, line := range instructionauthority.DenyEvidence(obj) {
+	for _, line := range instructionauthority.DenyEvidence(obj, root) {
 		fmt.Printf("   %s\n", line)
 	}
 	fmt.Println()
@@ -148,7 +152,7 @@ func loadScenario() (scenario, error) {
 // serialized to the store and reloaded before further derivation. The
 // round trip must preserve provenance byte-identically; callers evaluate
 // continuity on the reloaded object, never trusting the store.
-func persistReload(obj instructionauthority.InstructionObject) (instructionauthority.InstructionObject, error) {
+func persistReload(obj instructionauthority.InstructionObject, root instructionauthority.EvaluationRoot) (instructionauthority.InstructionObject, error) {
 	data, err := json.Marshal(obj)
 	if err != nil {
 		return instructionauthority.InstructionObject{}, err
@@ -163,7 +167,7 @@ func persistReload(obj instructionauthority.InstructionObject) (instructionautho
 		reloaded.Provenance.Promotion.Continuity != obj.Provenance.Promotion.Continuity {
 		return instructionauthority.InstructionObject{}, errors.New("memory store corrupted provenance")
 	}
-	if err := instructionauthority.VerifyProvenance(reloaded, nil); err != nil {
+	if err := instructionauthority.VerifyProvenance(reloaded, root, nil); err != nil {
 		return instructionauthority.InstructionObject{}, fmt.Errorf("memory store failed verification: %w", err)
 	}
 	return reloaded, nil

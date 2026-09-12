@@ -22,6 +22,17 @@ func maliciousOrigin() InstructionObject {
 	)
 }
 
+func mustRoot(obj InstructionObject) EvaluationRoot {
+	return EvaluationRoot{Origin: obj.Provenance.Origin, InstructionBearing: obj.InstructionBearing}
+}
+
+func maliciousRoot() EvaluationRoot {
+	return EvaluationRoot{
+		Origin:             Origin{Principal: "mcp:malicious-server", TrustClass: TrustUntrustedMCPResponse},
+		InstructionBearing: true,
+	}
+}
+
 func launder(t *testing.T, endorse *Endorsement, registry map[string]TrustedPrincipal) InstructionObject {
 	t.Helper()
 	obj := maliciousOrigin()
@@ -94,10 +105,10 @@ func TestRedLaunderedMCPOutputNeverBecomesUserInstruction(t *testing.T) {
 	if obj.Provenance.Promotion.Continuity != ContinuityFailed {
 		t.Fatal("continuity must be FAILED")
 	}
-	if execute, _ := Authorize(obj); execute {
+	if execute, _ := Authorize(obj, mustRoot(obj)); execute {
 		t.Fatal("laundered instruction must not execute")
 	}
-	evidence := strings.Join(DenyEvidence(obj), "\n")
+	evidence := strings.Join(DenyEvidence(obj, mustRoot(obj)), "\n")
 	for _, frag := range []string{
 		"policy_decision=deny  policy_rule=instruction_authority_continuity",
 		"reason=authority-expanding instruction",
@@ -127,7 +138,7 @@ func TestExplicitHigherAuthorityEndorsementIsNarrowlyBound(t *testing.T) {
 			ChildContentSHA:  digest(summaryText),
 			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
 		}, registry)
-	if execute, _ := Authorize(upgraded); !execute {
+	if execute, _ := Authorize(upgraded, mustRoot(upgraded)); !execute {
 		t.Fatal("exact registry-backed endorsement must authorize")
 	}
 	if upgraded.Provenance.Promotion.AuthorizedPromoter != "op:marina" {
@@ -141,7 +152,7 @@ func TestExplicitHigherAuthorityEndorsementIsNarrowlyBound(t *testing.T) {
 			ChildContentSHA:  digest(summaryText),
 			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
 		}, registry)
-	if execute, _ := Authorize(other); execute {
+	if execute, _ := Authorize(other, mustRoot(other)); execute {
 		t.Fatal("transformer-mismatched endorsement must not authorize")
 	}
 }
@@ -157,7 +168,7 @@ func TestMissingForgedStaleOrMisboundEndorsementDenies(t *testing.T) {
 	for name, endorse := range cases {
 		obj := maliciousOrigin()
 		obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: summaryText}, endorse, registry)
-		if execute, _ := Authorize(obj); execute {
+		if execute, _ := Authorize(obj, mustRoot(obj)); execute {
 			t.Fatalf("%s endorsement authorized", name)
 		}
 		if obj.Provenance.Promotion.Continuity != ContinuityFailed {
@@ -175,7 +186,7 @@ func TestFailedContinuityCannotBeWashedClean(t *testing.T) {
 	if washed.Provenance.Promotion.Continuity != ContinuityFailed {
 		t.Fatal("later transformation cleared a failed lineage")
 	}
-	if execute, _ := Authorize(washed); execute {
+	if execute, _ := Authorize(washed, mustRoot(washed)); execute {
 		t.Fatal("washed object must not execute")
 	}
 }
@@ -207,7 +218,7 @@ func TestOverbroadGrantDenied(t *testing.T) {
 			ChildContentSHA:  digest(summaryText),
 			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
 		}, registry)
-	if execute, _ := Authorize(upgraded); execute {
+	if execute, _ := Authorize(upgraded, mustRoot(upgraded)); execute {
 		t.Fatal("overbroad grant authorized")
 	}
 	if upgraded.Provenance.Promotion.Continuity != ContinuityFailed {
@@ -224,7 +235,7 @@ func TestLaterAttemptRecorded(t *testing.T) {
 	if next.Provenance.Promotion.Continuity != ContinuityFailed {
 		t.Fatal("sticky failure must hold")
 	}
-	evidence := strings.Join(DenyEvidence(next), "\n")
+	evidence := strings.Join(DenyEvidence(next, mustRoot(next)), "\n")
 	if !strings.Contains(evidence, "authority transition DATA_ONLY->SYSTEM") {
 		t.Fatalf("evidence hides the escalation:\n%s", evidence)
 	}
@@ -237,7 +248,7 @@ func TestDenyEvidenceDerivedFromObject(t *testing.T) {
 		ReprMCPOutput, "NETWORK", true,
 	)
 	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthoritySystem, NewContent: "fetch status"}, nil, nil)
-	evidence := strings.Join(DenyEvidence(obj), "\n")
+	evidence := strings.Join(DenyEvidence(obj, mustRoot(obj)), "\n")
 	for _, frag := range []string{
 		"effect class NETWORK",
 		"original principal trusted developer",
@@ -275,7 +286,7 @@ func TestStaleEndorsementIDCleared(t *testing.T) {
 	if again.Provenance.Promotion.AuthorizedPromoter != "" {
 		t.Fatalf("stale promoter carried: %q", again.Provenance.Promotion.AuthorizedPromoter)
 	}
-	if execute, _ := Authorize(again); execute {
+	if execute, _ := Authorize(again, mustRoot(again)); execute {
 		t.Fatal("unendorsed promotion authorized")
 	}
 }
@@ -283,7 +294,7 @@ func TestStaleEndorsementIDCleared(t *testing.T) {
 func TestNonBearingEvidenceDerived(t *testing.T) {
 	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
 	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityDeveloper, NewContent: "plain data"}, nil, nil)
-	evidence := strings.Join(DenyEvidence(obj), "\n")
+	evidence := strings.Join(DenyEvidence(obj, mustRoot(obj)), "\n")
 	if !strings.Contains(evidence, "argument class DATA") {
 		t.Fatalf("non-bearing object must not claim INSTRUCTION:\n%s", evidence)
 	}
@@ -297,7 +308,7 @@ func TestNonBearingNeverAuthorizes(t *testing.T) {
 	// an instruction: executing it would mistake data for orders.
 	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
 	obj.Provenance.Authority = AuthorityUser
-	if execute, _ := Authorize(obj); execute {
+	if execute, _ := Authorize(obj, mustRoot(obj)); execute {
 		t.Fatal("non-bearing content authorized as instruction")
 	}
 }
@@ -305,7 +316,7 @@ func TestNonBearingNeverAuthorizes(t *testing.T) {
 func TestDenyReasonDerivedFromState(t *testing.T) {
 	// No promotion attempted: reason must not claim an expansion.
 	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
-	evidence := strings.Join(DenyEvidence(obj), "\n")
+	evidence := strings.Join(DenyEvidence(obj, mustRoot(obj)), "\n")
 	if !strings.Contains(evidence, "reason=insufficient authority") {
 		t.Fatalf("unattempted denial mislabeled:\n%s", evidence)
 	}
@@ -314,7 +325,7 @@ func TestDenyReasonDerivedFromState(t *testing.T) {
 	}
 	// Attempted promotion keeps the contracted literal.
 	laundered := launder(t, nil, nil)
-	evidence = strings.Join(DenyEvidence(laundered), "\n")
+	evidence = strings.Join(DenyEvidence(laundered, mustRoot(laundered)), "\n")
 	if !strings.Contains(evidence, "reason=authority-expanding instruction") {
 		t.Fatalf("attempted denial mislabeled:\n%s", evidence)
 	}
@@ -324,7 +335,7 @@ func TestDenyReasonMatchesDenyingCheck(t *testing.T) {
 	// Non-bearing USER content: Authorize denies on bearing, so evidence
 	// must say so — not "insufficient authority" for a USER object.
 	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
-	evidence := strings.Join(DenyEvidence(obj), "\n")
+	evidence := strings.Join(DenyEvidence(obj, mustRoot(obj)), "\n")
 	if !strings.Contains(evidence, "reason=not instruction-bearing content") {
 		t.Fatalf("wrong check reported:\n%s", evidence)
 	}
@@ -346,7 +357,7 @@ func TestMemoryPersistencePreservesProvenance(t *testing.T) {
 	if !reflect.DeepEqual(reloaded.Provenance, obj.Provenance) {
 		t.Fatal("provenance mutated across memory persistence")
 	}
-	if execute, _ := Authorize(reloaded); execute {
+	if execute, _ := Authorize(reloaded, mustRoot(reloaded)); execute {
 		t.Fatal("reloaded object authorized")
 	}
 	if reloaded.Provenance.Promotion.Continuity != ContinuityFailed {
@@ -357,11 +368,11 @@ func TestMemoryPersistencePreservesProvenance(t *testing.T) {
 func TestVerifyProvenanceAcceptsHonestObjects(t *testing.T) {
 	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
 	obj := launder(t, nil, nil)
-	if err := VerifyProvenance(obj, registry); err != nil {
+	if err := VerifyProvenance(obj, mustRoot(obj), registry); err != nil {
 		t.Fatalf("honest object rejected: %v", err)
 	}
 	obj2 := maliciousOriginObjectForVerify(t, registry)
-	if err := VerifyProvenance(obj2, registry); err != nil {
+	if err := VerifyProvenance(obj2, mustRoot(obj2), registry); err != nil {
 		t.Fatalf("honest endorsed object rejected: %v", err)
 	}
 }
@@ -393,7 +404,7 @@ func TestVerifyProvenanceDetectsTampering(t *testing.T) {
 	} {
 		obj := launder(t, nil, nil)
 		mutate.fn(&obj)
-		if err := VerifyProvenance(obj, registry); err == nil {
+		if err := VerifyProvenance(obj, mustRoot(obj), registry); err == nil {
 			t.Fatalf("%s tampering undetected", mutate.name)
 		}
 	}
@@ -423,11 +434,11 @@ func TestMultiPromotionDenialNamesImmediateAuthority(t *testing.T) {
 		t.Fatalf("precondition: second promotion failed: %s", obj.Provenance.Authority)
 	}
 	obj = ApplyTransform(obj, Transform{Transformer: "promote", To: ReprAgentSummary, RequestedAuthority: AuthoritySystem, NewContent: obj.Content + AuthoritySystem}, nil, registry)
-	evidence := strings.Join(DenyEvidence(obj), "\n")
+	evidence := strings.Join(DenyEvidence(obj, mustRoot(obj)), "\n")
 	if !strings.Contains(evidence, "authority transition DEVELOPER->SYSTEM") {
 		t.Fatalf("wrong pre-attempt authority:\n%s", evidence)
 	}
-	if err := VerifyProvenance(obj, registry); err != nil {
+	if err := VerifyProvenance(obj, mustRoot(obj), registry); err != nil {
 		t.Fatalf("honest multi-promotion object rejected: %v", err)
 	}
 }
@@ -437,7 +448,7 @@ func TestRegistryDriftFailsClosedBothWays(t *testing.T) {
 	empty := map[string]TrustedPrincipal{}
 	// Accepted under full registry, promoter later removed: must fail.
 	accepted := maliciousOriginObjectForVerify(t, full)
-	if err := VerifyProvenance(accepted, map[string]TrustedPrincipal{}); err == nil {
+	if err := VerifyProvenance(accepted, mustRoot(accepted), map[string]TrustedPrincipal{}); err == nil {
 		_ = empty
 		t.Fatal("revoked promoter still verifies")
 	}
@@ -451,7 +462,7 @@ func TestRegistryDriftFailsClosedBothWays(t *testing.T) {
 			ChildContentSHA:  digest(summaryText),
 			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
 		}, empty)
-	if err := VerifyProvenance(repudiated, full); err == nil {
+	if err := VerifyProvenance(repudiated, mustRoot(repudiated), full); err == nil {
 		t.Fatal("stale rejection revived by registry upgrade")
 	}
 }
@@ -460,19 +471,19 @@ func TestHopContentTamperDetected(t *testing.T) {
 	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
 	obj := launder(t, nil, nil)
 	obj.History[1].Content = "rewritten memory"
-	if err := VerifyProvenance(obj, registry); err == nil {
+	if err := VerifyProvenance(obj, mustRoot(obj), registry); err == nil {
 		t.Fatal("rewritten hop content undetected")
 	}
 }
 
 func TestEmptyOriginVerifies(t *testing.T) {
 	obj := NewOriginObject("hello", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "PROCESS", true)
-	if err := VerifyProvenance(obj, map[string]TrustedPrincipal{}); err != nil {
+	if err := VerifyProvenance(obj, mustRoot(obj), map[string]TrustedPrincipal{}); err != nil {
 		t.Fatalf("fresh origin rejected: %v", err)
 	}
 	bad := obj
 	bad.Provenance.Authority = AuthoritySystem
-	if err := VerifyProvenance(bad, map[string]TrustedPrincipal{}); err == nil {
+	if err := VerifyProvenance(bad, mustRoot(bad), map[string]TrustedPrincipal{}); err == nil {
 		t.Fatal("inflated origin authority verified")
 	}
 }
@@ -480,7 +491,7 @@ func TestEmptyOriginVerifies(t *testing.T) {
 func TestDigestFailureReason(t *testing.T) {
 	obj := launder(t, nil, nil)
 	obj.History[2].ParentDigest = "sha256:dead"
-	if err := VerifyProvenance(obj, map[string]TrustedPrincipal{}); err == nil {
+	if err := VerifyProvenance(obj, mustRoot(obj), map[string]TrustedPrincipal{}); err == nil {
 		t.Fatal("tampered digest chain verified")
 	}
 	// Fold the tampered log directly to observe the reason mapping.
@@ -488,11 +499,12 @@ func TestDigestFailureReason(t *testing.T) {
 	if !fresh.Promotion.DigestFailure {
 		t.Fatal("digest break must mark DigestFailure")
 	}
-	evidence := strings.Join(DenyEvidence(InstructionObject{
+	folded := InstructionObject{
 		SchemaVersion: obj.SchemaVersion, Content: obj.Content,
 		InstructionBearing: obj.InstructionBearing, EffectClass: obj.EffectClass,
 		Provenance: fresh, History: obj.History,
-	}), "\n")
+	}
+	evidence := strings.Join(DenyEvidence(folded, mustRoot(folded)), "\n")
 	if !strings.Contains(evidence, "reason=digest linkage broken") {
 		t.Fatalf("wrong reason:\n%s", evidence)
 	}
@@ -516,18 +528,19 @@ func TestFlippedVerdictBreaksHopDigest(t *testing.T) {
 		t.Fatal("precondition: hop must be a recorded rejection")
 	}
 	rejected.History[1].EndorsementValid = true
-	if err := VerifyProvenance(rejected, full); err == nil {
+	if err := VerifyProvenance(rejected, mustRoot(rejected), full); err == nil {
 		t.Fatal("flipped endorsement verdict verified")
 	}
 	fresh := fold(rejected.Provenance.Origin, rejected.History[0].Derivation.FromRepresentation, rejected.History)
 	if fresh.Promotion.Continuity != ContinuityFailed || !fresh.Promotion.DigestFailure {
 		t.Fatal("flipped verdict must fail the hop digest, not grant")
 	}
-	if execute, _ := Authorize(InstructionObject{
+	folded := InstructionObject{
 		SchemaVersion: rejected.SchemaVersion, Content: rejected.Content,
 		InstructionBearing: true, EffectClass: rejected.EffectClass,
 		Provenance: fresh, History: rejected.History,
-	}); execute {
+	}
+	if execute, _ := Authorize(folded, maliciousRoot()); execute {
 		t.Fatal("flipped verdict authorized")
 	}
 }
@@ -537,15 +550,16 @@ func TestValidVerdictWithoutEndorsementFailsClosed(t *testing.T) {
 	obj.History[2].EndorsementValid = true
 	obj.History[2].Endorsement = nil
 	obj.History[2].HopDigest = hopDigest(obj.History[2])
-	if err := VerifyProvenance(obj, map[string]TrustedPrincipal{}); err == nil {
+	if err := VerifyProvenance(obj, mustRoot(obj), map[string]TrustedPrincipal{}); err == nil {
 		t.Fatal("valid verdict without endorsement verified")
 	}
 	fresh := fold(obj.Provenance.Origin, obj.History[0].Derivation.FromRepresentation, obj.History)
-	if execute, _ := Authorize(InstructionObject{
+	folded := InstructionObject{
 		SchemaVersion: obj.SchemaVersion, Content: obj.Content,
 		InstructionBearing: true, EffectClass: obj.EffectClass,
 		Provenance: fresh, History: obj.History,
-	}); execute {
+	}
+	if execute, _ := Authorize(folded, maliciousRoot()); execute {
 		t.Fatal("nil endorsement panic-or-grant")
 	}
 }
@@ -558,7 +572,7 @@ func TestRefoldedDigestFailureStillFailsVerify(t *testing.T) {
 	if !broken.Provenance.Promotion.DigestFailure {
 		t.Fatal("precondition: refold must mark digest failure")
 	}
-	if err := VerifyProvenance(broken, registry); err == nil {
+	if err := VerifyProvenance(broken, mustRoot(broken), registry); err == nil {
 		t.Fatal("known-broken digest chain verified after refold")
 	}
 }
@@ -589,13 +603,39 @@ func TestDigestFailedAttemptClearsPriorPromoter(t *testing.T) {
 	if fresh.Promotion.RequestedAuthority != AuthorityDeveloper {
 		t.Fatalf("digest-failed attempt hid request: %q", fresh.Promotion.RequestedAuthority)
 	}
-	evidence := strings.Join(DenyEvidence(InstructionObject{
+	folded := InstructionObject{
 		SchemaVersion: next.SchemaVersion, Content: next.Content,
 		InstructionBearing: true, EffectClass: next.EffectClass,
 		Provenance: fresh, History: next.History,
-	}), "\n")
+	}
+	evidence := strings.Join(DenyEvidence(folded, maliciousRoot()), "\n")
 	if strings.Contains(evidence, "authorized promoter op:marina") {
 		t.Fatalf("evidence attributed digest failure to prior promoter:\n%s", evidence)
+	}
+}
+
+func TestHeldRootRejectsOriginUpgrade(t *testing.T) {
+	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
+	root := mustRoot(obj)
+	obj.Provenance.Origin.TrustClass = TrustTrustedSystem
+	obj.Provenance.Authority = AuthoritySystem
+	if err := VerifyProvenance(obj, root, map[string]TrustedPrincipal{}); err == nil {
+		t.Fatal("upgraded origin verified against the held untrusted root")
+	}
+	if execute, _ := Authorize(obj, root); execute {
+		t.Fatal("upgraded origin authorized against the held untrusted root")
+	}
+}
+
+func TestHeldRootRejectsBearingFlip(t *testing.T) {
+	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
+	root := mustRoot(obj)
+	obj.InstructionBearing = true
+	if err := VerifyProvenance(obj, root, map[string]TrustedPrincipal{}); err == nil {
+		t.Fatal("flipped instruction-bearing verified against the held data root")
+	}
+	if execute, _ := Authorize(obj, root); execute {
+		t.Fatal("flipped instruction-bearing authorized against the held data root")
 	}
 }
 
@@ -610,11 +650,11 @@ func TestDenyEvidenceUsesAuthorizeReason(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, reason := Authorize(tc.obj)
+			_, reason := Authorize(tc.obj, mustRoot(tc.obj))
 			if reason != tc.want {
 				t.Fatalf("Authorize=%q want %q", reason, tc.want)
 			}
-			evidence := strings.Join(DenyEvidence(tc.obj), "\n")
+			evidence := strings.Join(DenyEvidence(tc.obj, mustRoot(tc.obj)), "\n")
 			if !strings.Contains(evidence, "reason="+tc.want) {
 				t.Fatalf("DenyEvidence diverged from Authorize:\n%s", evidence)
 			}

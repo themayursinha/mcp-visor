@@ -241,16 +241,21 @@ func validEndorsement(e Endorsement, parentDigest, parentAuthority, childDigest,
 // reports divergence: any hand-edited Authority, Lineage, Promotion,
 // digest, representation, or derivation fails. Untrusted bytes must pass
 // through here before Authorize.
-func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipal) error {
+func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[string]TrustedPrincipal) error {
+	if err := matchRoot(obj, root); err != nil {
+		return err
+	}
 	// History-free origin objects verify against genesis state directly:
-	// fold over zero hops carries no content digest of its own.
+	// fold over zero hops carries no content digest of its own. Authority
+	// is the caller's origin ceiling, never a trust class edited into the
+	// object.
 	if len(obj.History) == 0 {
 		want := Provenance{
-			Origin:                obj.Provenance.Origin,
+			Origin:                root.Origin,
 			DerivedBy:             []Derivation{},
 			CurrentRepresentation: obj.Provenance.CurrentRepresentation,
 			VisibleRole:           RoleNone,
-			Authority:             ceilingForTrust(obj.Provenance.Origin.TrustClass),
+			Authority:             ceilingForTrust(root.Origin.TrustClass),
 			Lineage:               []string{},
 			ContentSHA256:         digest(obj.Content),
 			Promotion:             Promotion{Continuity: ContinuityPass},
@@ -272,7 +277,7 @@ func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipa
 			return fmt.Errorf("hop %d hop digest mismatch", i)
 		}
 	}
-	fresh := fold(obj.Provenance.Origin, originRepr, obj.History)
+	fresh := fold(root.Origin, originRepr, obj.History)
 	if fresh.Promotion.DigestFailure {
 		return fmt.Errorf("digest chain broken")
 	}
@@ -293,11 +298,11 @@ func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipa
 		}
 		parentAuthority := ""
 		if i == 0 {
-			parentAuthority = ceilingForTrust(obj.Provenance.Origin.TrustClass)
+			parentAuthority = ceilingForTrust(root.Origin.TrustClass)
 		} else {
 			// Authority before this hop is not stored per hop; recompute
 			// the prefix fold and read it.
-			prefix := fold(obj.Provenance.Origin, originRepr, obj.History[:i])
+			prefix := fold(root.Origin, originRepr, obj.History[:i])
 			parentAuthority = prefix.Authority
 		}
 		live := validEndorsement(*hop.Endorsement, hop.ParentDigest, parentAuthority, hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry)
@@ -348,10 +353,23 @@ func provenanceEqual(a, b Provenance) bool {
 // Requires continuity!=FAILED and effective authority at least USER.
 // Failure never invokes the executor: content returns as an untrusted
 // observation (instruction_eligible=false).
-func Authorize(obj InstructionObject) (execute bool, reason string) {
+func matchRoot(obj InstructionObject, root EvaluationRoot) error {
+	if obj.Provenance.Origin != root.Origin {
+		return fmt.Errorf("origin does not match evaluation root")
+	}
+	if obj.InstructionBearing != root.InstructionBearing {
+		return fmt.Errorf("instruction-bearing does not match evaluation root")
+	}
+	return nil
+}
+
+func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason string) {
 	// Reasons are the DenyEvidence literals. DenyEvidence formats this
 	// return value; it never infers a second, competing check.
-	if !obj.InstructionBearing {
+	if err := matchRoot(obj, root); err != nil {
+		return false, "evaluation root mismatch"
+	}
+	if !root.InstructionBearing {
 		return false, "not instruction-bearing content"
 	}
 	if obj.Provenance.Promotion.DigestFailure {
@@ -377,7 +395,7 @@ func Authorize(obj InstructionObject) (execute bool, reason string) {
 // DenyEvidence renders the stable denial fragments for protected output.
 // Transition endpoints derive from the object's own lineage and requested
 // authority (contract §12 fixes their literal form for the fixture).
-func DenyEvidence(obj InstructionObject) []string {
+func DenyEvidence(obj InstructionObject, root EvaluationRoot) []string {
 	p := obj.Provenance
 	lineage := ""
 	for i, a := range p.Lineage {
@@ -406,10 +424,10 @@ func DenyEvidence(obj InstructionObject) []string {
 		promoter = "NONE"
 	}
 	argClass := "INSTRUCTION"
-	if !obj.InstructionBearing {
+	if !root.InstructionBearing {
 		argClass = "DATA"
 	}
-	_, denyReason := Authorize(obj)
+	_, denyReason := Authorize(obj, root)
 	if denyReason == "authorized" {
 		denyReason = "insufficient authority"
 	}
