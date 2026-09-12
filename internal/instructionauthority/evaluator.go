@@ -264,6 +264,9 @@ func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[s
 		}
 		return nil
 	}
+	if contentChainBroken(root, obj.Content, obj.History) {
+		return fmt.Errorf("content chain does not match evaluation root")
+	}
 	originRepr := obj.History[0].Derivation.FromRepresentation
 	for i, hop := range obj.History {
 		if hop.EndorsementValid && hop.Endorsement == nil {
@@ -352,10 +355,27 @@ func provenanceEqual(a, b Provenance) bool {
 // Requires continuity!=FAILED and effective authority at least USER.
 // Failure never invokes the executor: content returns as an untrusted
 // observation (instruction_eligible=false).
+// contentChainBroken is the full evaluation transcript:
+// root.ContentSHA256 -> hop[0] -> ... -> hop[n] -> obj.Content.
+// Zero hops bind content to the held genesis digest. Non-zero hops
+// must start at that digest (first ParentDigest and ParentHopDigest)
+// and end at obj.Content. Hop-to-hop linkage is fold's job.
+func contentChainBroken(root EvaluationRoot, content string, hops []Hop) bool {
+	if root.ContentSHA256 == "" {
+		return true
+	}
+	if len(hops) == 0 {
+		return digest(content) != root.ContentSHA256
+	}
+	if hops[0].ParentDigest != root.ContentSHA256 || hops[0].ParentHopDigest != root.ContentSHA256 {
+		return true
+	}
+	return digest(content) != hops[len(hops)-1].ContentDigest
+}
+
 func derivedProvenance(obj InstructionObject, root EvaluationRoot) Provenance {
 	// Object copies of origin, bearing, effect class, and provenance are
-	// not inputs. Zero-hop content is bound to root.ContentSHA256; later
-	// hops bind content to the hop log.
+	// not inputs. The content chain is bound to the held genesis digest.
 	if len(obj.History) == 0 {
 		p := Provenance{
 			Origin:        root.Origin,
@@ -366,7 +386,7 @@ func derivedProvenance(obj InstructionObject, root EvaluationRoot) Provenance {
 			ContentSHA256: root.ContentSHA256,
 			Promotion:     Promotion{Continuity: ContinuityPass},
 		}
-		if root.ContentSHA256 == "" || digest(obj.Content) != root.ContentSHA256 {
+		if contentChainBroken(root, obj.Content, obj.History) {
 			p.Promotion.Continuity = ContinuityFailed
 			p.Promotion.DigestFailure = true
 		}
@@ -374,7 +394,7 @@ func derivedProvenance(obj InstructionObject, root EvaluationRoot) Provenance {
 	}
 	originRepr := obj.History[0].Derivation.FromRepresentation
 	p := fold(root.Origin, originRepr, obj.History)
-	if digest(obj.Content) != p.ContentSHA256 {
+	if contentChainBroken(root, obj.Content, obj.History) {
 		p.Promotion.Continuity = ContinuityFailed
 		p.Promotion.DigestFailure = true
 	}

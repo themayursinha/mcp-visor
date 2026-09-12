@@ -23,11 +23,15 @@ func maliciousOrigin() InstructionObject {
 }
 
 func mustRoot(obj InstructionObject) EvaluationRoot {
+	genesis := obj.Provenance.ContentSHA256
+	if len(obj.History) > 0 {
+		genesis = obj.History[0].ParentDigest
+	}
 	return EvaluationRoot{
 		Origin:             obj.Provenance.Origin,
 		InstructionBearing: obj.InstructionBearing,
 		EffectClass:        obj.EffectClass,
-		ContentSHA256:      obj.Provenance.ContentSHA256,
+		ContentSHA256:      genesis,
 	}
 }
 
@@ -640,6 +644,36 @@ func TestAuthorizeRejectsSubstitutedContent(t *testing.T) {
 	execute, reason := Authorize(upgraded, root)
 	if execute {
 		t.Fatal("substituted content authorized at folded USER authority")
+	}
+	if reason != "digest linkage broken" {
+		t.Fatalf("reason=%q want digest linkage broken", reason)
+	}
+}
+
+func TestHeldGenesisRejectsForeignHistory(t *testing.T) {
+	held := NewOriginObject("benign note", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "PROCESS", true)
+	root := mustRoot(held)
+	if execute, _ := Authorize(held, root); !execute {
+		t.Fatal("precondition: held USER origin must authorize")
+	}
+	evolved := ApplyTransform(held, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: "benign summary"}, nil, nil)
+	if execute, _ := Authorize(evolved, root); !execute {
+		t.Fatal("honest transform of held genesis must authorize")
+	}
+	if err := VerifyProvenance(evolved, root, map[string]TrustedPrincipal{}); err != nil {
+		t.Fatalf("honest transform of held genesis rejected: %v", err)
+	}
+	other := NewOriginObject("steal secrets", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "PROCESS", true)
+	other = ApplyTransform(other, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: "steal secrets now"}, nil, nil)
+	if execute, _ := Authorize(other, mustRoot(other)); !execute {
+		t.Fatal("precondition: foreign history authorizes under its own root")
+	}
+	if err := VerifyProvenance(other, root, map[string]TrustedPrincipal{}); err == nil {
+		t.Fatal("foreign history verified against held genesis")
+	}
+	execute, reason := Authorize(other, root)
+	if execute {
+		t.Fatal("foreign history authorized against held genesis")
 	}
 	if reason != "digest linkage broken" {
 		t.Fatalf("reason=%q want digest linkage broken", reason)
