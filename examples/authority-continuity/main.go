@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -96,7 +97,16 @@ func runProtected(scen scenario) error {
 	obj := instructionauthority.ApplyTransform(origin, instructionauthority.Transform{
 		Transformer: "agent_summarizer", To: instructionauthority.ReprAgentSummary, NewContent: scen.AgentSummary,
 	}, nil, nil)
-	obj = instructionauthority.ApplyTransform(obj, instructionauthority.Transform{
+	// Memory boundary: the summary rests in the session store (serialized)
+	// and is reloaded before goal formation. Provenance must survive the
+	// round trip byte-identically, and continuity is evaluated on the
+	// reloaded object — a lossy store or a reload that skips evaluation is
+	// exactly the laundering vector.
+	reloaded, err := persistReload(obj)
+	if err != nil {
+		return fmt.Errorf("memory round trip: %w", err)
+	}
+	obj = instructionauthority.ApplyTransform(reloaded, instructionauthority.Transform{
 		Transformer: "memory_goal_persistor", To: instructionauthority.ReprPersistentGoal,
 		Via: instructionauthority.ReprSessionMemory, NewContent: scen.PersistentGoal,
 	}, nil, nil)
@@ -132,4 +142,26 @@ func loadScenario() (scenario, error) {
 		return scen, errors.New("scenario is missing the attack input")
 	}
 	return scen, nil
+}
+
+// persistReload simulates the session-memory boundary: the object is
+// serialized to the store and reloaded before further derivation. The
+// round trip must preserve provenance byte-identically; callers evaluate
+// continuity on the reloaded object, never trusting the store.
+func persistReload(obj instructionauthority.InstructionObject) (instructionauthority.InstructionObject, error) {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return instructionauthority.InstructionObject{}, err
+	}
+	var reloaded instructionauthority.InstructionObject
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&reloaded); err != nil {
+		return instructionauthority.InstructionObject{}, err
+	}
+	if reloaded.Provenance.ContentSHA256 != obj.Provenance.ContentSHA256 ||
+		reloaded.Provenance.Origin != obj.Provenance.Origin ||
+		reloaded.Provenance.Promotion.Continuity != obj.Provenance.Promotion.Continuity {
+		return instructionauthority.InstructionObject{}, errors.New("memory store corrupted provenance")
+	}
+	return reloaded, nil
 }

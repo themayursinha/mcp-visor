@@ -1,6 +1,8 @@
 package instructionauthority
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -325,5 +327,29 @@ func TestDenyReasonMatchesDenyingCheck(t *testing.T) {
 	evidence := strings.Join(DenyEvidence(obj), "\n")
 	if !strings.Contains(evidence, "reason=not instruction-bearing content") {
 		t.Fatalf("wrong check reported:\n%s", evidence)
+	}
+}
+
+func TestMemoryPersistencePreservesProvenance(t *testing.T) {
+	// The session-memory boundary is a serialize/store/load cycle: origin,
+	// derivations, digests, and continuity must survive byte-identically,
+	// and evaluation on the reloaded object must still deny.
+	obj := launder(t, nil, nil)
+	data, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reloaded InstructionObject
+	if err := json.Unmarshal(data, &reloaded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded.Provenance, obj.Provenance) {
+		t.Fatal("provenance mutated across memory persistence")
+	}
+	if execute, _ := Authorize(reloaded); execute {
+		t.Fatal("reloaded object authorized")
+	}
+	if reloaded.Provenance.Promotion.Continuity != ContinuityFailed {
+		t.Fatal("continuity lost across persistence")
 	}
 }
