@@ -89,16 +89,17 @@ func runBaseline(scen scenario) error {
 
 // runProtected evaluates the identical fixture through continuity proofs.
 func runProtected(scen scenario) error {
-	root := instructionauthority.EvaluationRoot{
-		Origin:             instructionauthority.Origin{Principal: scen.OriginPrincipal, TrustClass: scen.OriginTrustClass},
-		InstructionBearing: true,
-		EffectClass:        "PROCESS",
-	}
 	origin := instructionauthority.NewOriginObject(
 		scen.MaliciousMCPOutput,
-		root.Origin,
+		instructionauthority.Origin{Principal: scen.OriginPrincipal, TrustClass: scen.OriginTrustClass},
 		instructionauthority.ReprMCPOutput, "PROCESS", true,
 	)
+	root := instructionauthority.EvaluationRoot{
+		Origin:             origin.Provenance.Origin,
+		InstructionBearing: true,
+		EffectClass:        "PROCESS",
+		ContentSHA256:      origin.Provenance.ContentSHA256,
+	}
 	obj := instructionauthority.ApplyTransform(origin, instructionauthority.Transform{
 		Transformer: "agent_summarizer", To: instructionauthority.ReprAgentSummary, NewContent: scen.AgentSummary,
 	}, nil, nil)

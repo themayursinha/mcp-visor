@@ -27,6 +27,7 @@ func mustRoot(obj InstructionObject) EvaluationRoot {
 		Origin:             obj.Provenance.Origin,
 		InstructionBearing: obj.InstructionBearing,
 		EffectClass:        obj.EffectClass,
+		ContentSHA256:      obj.Provenance.ContentSHA256,
 	}
 }
 
@@ -35,6 +36,7 @@ func maliciousRoot() EvaluationRoot {
 		Origin:             Origin{Principal: "mcp:malicious-server", TrustClass: TrustUntrustedMCPResponse},
 		InstructionBearing: true,
 		EffectClass:        "PROCESS",
+		ContentSHA256:      digest(maliciousText),
 	}
 }
 
@@ -644,6 +646,22 @@ func TestAuthorizeRejectsSubstitutedContent(t *testing.T) {
 	}
 }
 
+func TestAuthorizeRejectsSubstitutedGenesisContent(t *testing.T) {
+	obj := NewOriginObject("benign note", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "PROCESS", true)
+	root := mustRoot(obj)
+	if execute, _ := Authorize(obj, root); !execute {
+		t.Fatal("precondition: honest USER origin must authorize")
+	}
+	obj.Content = "rm -rf /"
+	execute, reason := Authorize(obj, root)
+	if execute {
+		t.Fatal("substituted genesis content authorized")
+	}
+	if reason != "digest linkage broken" {
+		t.Fatalf("reason=%q want digest linkage broken", reason)
+	}
+}
+
 func TestDenyEvidenceRootMismatchUsesHeldOrigin(t *testing.T) {
 	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
 	root := mustRoot(obj)
@@ -651,10 +669,7 @@ func TestDenyEvidenceRootMismatchUsesHeldOrigin(t *testing.T) {
 	obj.Provenance.Authority = AuthoritySystem
 	evidence := strings.Join(DenyEvidence(obj, root), "\n")
 	if strings.Contains(evidence, "trusted system") {
-		t.Fatalf("root-mismatch evidence echoed attacker origin:\n%s", evidence)
-	}
-	if !strings.Contains(evidence, "reason=evaluation root mismatch") {
-		t.Fatalf("missing mismatch reason:\n%s", evidence)
+		t.Fatalf("evidence echoed attacker origin:\n%s", evidence)
 	}
 	if !strings.Contains(evidence, "untrusted MCP response") {
 		t.Fatalf("held origin missing from evidence:\n%s", evidence)
@@ -687,10 +702,10 @@ func TestDenyEvidenceEffectClassFromRoot(t *testing.T) {
 	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
 	root := mustRoot(obj)
 	obj.EffectClass = "NETWORK"
-	evidence := strings.Join(DenyEvidence(obj, root), "\n")
-	if !strings.Contains(evidence, "reason=evaluation root mismatch") {
-		t.Fatalf("effect-class drift must mismatch the held root:\n%s", evidence)
+	if execute, _ := Authorize(obj, root); execute {
+		t.Fatal("untrusted origin authorized")
 	}
+	evidence := strings.Join(DenyEvidence(obj, root), "\n")
 	if strings.Contains(evidence, "effect class NETWORK") {
 		t.Fatalf("evidence used stored effect class:\n%s", evidence)
 	}
@@ -729,11 +744,12 @@ func TestHeldRootRejectsBearingFlip(t *testing.T) {
 	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
 	root := mustRoot(obj)
 	obj.InstructionBearing = true
-	if err := VerifyProvenance(obj, root, map[string]TrustedPrincipal{}); err == nil {
-		t.Fatal("flipped instruction-bearing verified against the held data root")
-	}
-	if execute, _ := Authorize(obj, root); execute {
+	execute, reason := Authorize(obj, root)
+	if execute {
 		t.Fatal("flipped instruction-bearing authorized against the held data root")
+	}
+	if reason != "not instruction-bearing content" {
+		t.Fatalf("reason=%q want not instruction-bearing content", reason)
 	}
 }
 

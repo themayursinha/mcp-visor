@@ -242,14 +242,13 @@ func validEndorsement(e Endorsement, parentDigest, parentAuthority, childDigest,
 // digest, representation, or derivation fails. Untrusted bytes must pass
 // through here before Authorize.
 func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[string]TrustedPrincipal) error {
-	if err := matchRoot(obj, root); err != nil {
-		return err
-	}
-	// History-free origin objects verify against genesis state directly:
-	// fold over zero hops carries no content digest of its own. Authority
-	// is the caller's origin ceiling, never a trust class edited into the
-	// object.
+	// History-free origin objects verify against genesis state directly.
+	// Content is bound to the held root digest, not to whatever bytes
+	// currently sit on the object.
 	if len(obj.History) == 0 {
+		if root.ContentSHA256 == "" || digest(obj.Content) != root.ContentSHA256 {
+			return fmt.Errorf("content does not match evaluation root")
+		}
 		want := Provenance{
 			Origin:                root.Origin,
 			DerivedBy:             []Derivation{},
@@ -257,7 +256,7 @@ func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[s
 			VisibleRole:           RoleNone,
 			Authority:             ceilingForTrust(root.Origin.TrustClass),
 			Lineage:               []string{},
-			ContentSHA256:         digest(obj.Content),
+			ContentSHA256:         root.ContentSHA256,
 			Promotion:             Promotion{Continuity: ContinuityPass},
 		}
 		if !provenanceEqual(want, obj.Provenance) {
@@ -315,7 +314,7 @@ func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[s
 	if len(obj.History) > 0 {
 		want = obj.History[len(obj.History)-1].ContentDigest
 	} else {
-		want = digest(obj.Content)
+		want = root.ContentSHA256
 	}
 	if obj.Provenance.ContentSHA256 != want {
 		return fmt.Errorf("content digest does not match history")
@@ -353,68 +352,39 @@ func provenanceEqual(a, b Provenance) bool {
 // Requires continuity!=FAILED and effective authority at least USER.
 // Failure never invokes the executor: content returns as an untrusted
 // observation (instruction_eligible=false).
-func matchRoot(obj InstructionObject, root EvaluationRoot) error {
-	if obj.Provenance.Origin != root.Origin {
-		return fmt.Errorf("origin does not match evaluation root")
-	}
-	if obj.InstructionBearing != root.InstructionBearing {
-		return fmt.Errorf("instruction-bearing does not match evaluation root")
-	}
-	if obj.EffectClass != root.EffectClass {
-		return fmt.Errorf("effect class does not match evaluation root")
-	}
-	return nil
-}
-
-func heldRootProvenance(root EvaluationRoot) Provenance {
-	return Provenance{
-		Origin:      root.Origin,
-		DerivedBy:   []Derivation{},
-		VisibleRole: RoleNone,
-		Authority:   ceilingForTrust(root.Origin.TrustClass),
-		Lineage:     []string{},
-		Promotion:   Promotion{Continuity: ContinuityPass},
-	}
-}
-
-func derivedProvenance(obj InstructionObject, root EvaluationRoot) (Provenance, error) {
-	if err := matchRoot(obj, root); err != nil {
-		return Provenance{}, err
-	}
+func derivedProvenance(obj InstructionObject, root EvaluationRoot) Provenance {
+	// Object copies of origin, bearing, effect class, and provenance are
+	// not inputs. Zero-hop content is bound to root.ContentSHA256; later
+	// hops bind content to the hop log.
 	if len(obj.History) == 0 {
-		return Provenance{
-			Origin:                root.Origin,
-			DerivedBy:             []Derivation{},
-			CurrentRepresentation: obj.Provenance.CurrentRepresentation,
-			VisibleRole:           RoleNone,
-			Authority:             ceilingForTrust(root.Origin.TrustClass),
-			Lineage:               []string{},
-			ContentSHA256:         digest(obj.Content),
-			Promotion:             Promotion{Continuity: ContinuityPass},
-		}, nil
+		p := Provenance{
+			Origin:        root.Origin,
+			DerivedBy:     []Derivation{},
+			VisibleRole:   RoleNone,
+			Authority:     ceilingForTrust(root.Origin.TrustClass),
+			Lineage:       []string{},
+			ContentSHA256: root.ContentSHA256,
+			Promotion:     Promotion{Continuity: ContinuityPass},
+		}
+		if root.ContentSHA256 == "" || digest(obj.Content) != root.ContentSHA256 {
+			p.Promotion.Continuity = ContinuityFailed
+			p.Promotion.DigestFailure = true
+		}
+		return p
 	}
 	originRepr := obj.History[0].Derivation.FromRepresentation
 	p := fold(root.Origin, originRepr, obj.History)
-	// Top-level content must be the hop log's final bytes. Substituting
-	// obj.Content after a legitimate promotion would otherwise execute
-	// uncommitted text at the folded authority.
 	if digest(obj.Content) != p.ContentSHA256 {
 		p.Promotion.Continuity = ContinuityFailed
 		p.Promotion.DigestFailure = true
 	}
-	return p, nil
+	return p
 }
 
 func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason string) {
 	// Reasons are the DenyEvidence literals. DenyEvidence formats this
 	// return value; it never infers a second, competing check.
-	// Derived authority, continuity, and digest state are recomputed from
-	// the held root and hop log. Stored Provenance.Authority is never
-	// the authorization input.
-	p, err := derivedProvenance(obj, root)
-	if err != nil {
-		return false, "evaluation root mismatch"
-	}
+	p := derivedProvenance(obj, root)
 	if !root.InstructionBearing {
 		return false, "not instruction-bearing content"
 	}
@@ -442,10 +412,7 @@ func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason
 // Transition endpoints derive from the object's own lineage and requested
 // authority (contract §12 fixes their literal form for the fixture).
 func DenyEvidence(obj InstructionObject, root EvaluationRoot) []string {
-	p, err := derivedProvenance(obj, root)
-	if err != nil {
-		p = heldRootProvenance(root)
-	}
+	p := derivedProvenance(obj, root)
 	lineage := ""
 	for i, a := range p.Lineage {
 		if i > 0 {

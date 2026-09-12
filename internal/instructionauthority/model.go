@@ -127,15 +127,16 @@ type Provenance struct {
 	Promotion             Promotion    `json:"promotion"`
 }
 
-// EvaluationRoot is the only caller-supplied trust root. Authorize and
-// DenyEvidence take origin, instruction-bearing, and effect class from
-// here, never from InstructionObject fields. History and Content are
-// the only other evaluation inputs; Provenance is fold output.
-// Promoter signatures and MACs are a declared non-goal.
+// EvaluationRoot is the only caller-supplied trust root. Evaluation
+// reads origin, instruction-bearing, effect class, and genesis content
+// digest from here — never from the corresponding InstructionObject
+// fields. From the object it reads only History and Content.
+// Provenance is fold output. Promoter MACs are a declared non-goal.
 type EvaluationRoot struct {
 	Origin             Origin
 	InstructionBearing bool
 	EffectClass        string
+	ContentSHA256      string
 }
 
 // InstructionObject is one materialized instruction-bearing object.
