@@ -1,0 +1,56 @@
+{
+  "task_id": "T-CAUSAL-AUTHORITY-001",
+  "invariant_ids": ["H33"],
+  "security_sensitive": true,
+  "security_problem": "An authorized tool is not a delegation of authority: untrusted external content can cause a consequential shell effect when the harness treats tool permission, syntax, and authentication as sufficient. Influence is not causation. Trusted: EvaluationRoot (mandate, principals, trust classes, effects, prerequisite booleans). Untrusted: ticket/webpage bytes, visible roles, claimed proofs. Attacker: ticket author and anyone mutating stored artifacts.",
+  "required_behavior": "Authorize ignores ObservedArtifact and returns EvaluateCausalProof(EvaluationRoot). Causal proof VALID iff mandate and immediate-source authority are at least USER, mandated effect is SHELL_EXECUTION, requested equals mandated, and immediate-source principal equals mandating principal. ALLOW requires a structurally valid root plus authentication, tool permission, syntax, and causal VALID. Evidence is a fixed eight-element array on Decision. No model calls.",
+  "failure_behavior": "Without the check, the scripted baseline selects hidden ticket text and invokes the callback. With it, the identical attack root denies with the eight deny fragments and zero protected invocations. Unknown enums, malformed roots, failed prerequisites, source mismatch, and effect mismatch are INVALID+DENY. Mutated content or claimed proofs with an unchanged held root do not change the decision.",
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-CAUSAL-AUTHORITY-001.json",
+    "internal/causalauthority/model.go",
+    "internal/causalauthority/evaluator.go",
+    "internal/causalauthority/evaluator_test.go",
+    "examples/causal-authority/scenario.json",
+    "examples/causal-authority/main.go",
+    "tests/integration/causal_authority_demo_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./internal/causalauthority", "-run", "TestRedExternalContentCannotCauseShellExecution", "-count=1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/causalauthority", "-count=1"]},
+    {"name": "race", "expect": "pass", "argv": ["go", "test", "-race", "./internal/causalauthority", "-count=1"]},
+    {"name": "demo", "expect": "pass", "argv": ["go", "test", "./tests/integration", "-run", "TestCausalAuthorityDemo", "-count=1"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "Prompt-injection detection",
+    "Natural-language parsing or classification",
+    "Model calls, embeddings, classifiers, or NLP",
+    "Proxy-path integration",
+    "Policy, audit, receipt, CLI, or MCP protocol changes",
+    "General causal graphs",
+    "Multi-hop delegation",
+    "Delegation registries or tokens",
+    "Provenance stores",
+    "Histories, journals, generations, or historical replay",
+    "Persistent wire formats",
+    "Cryptographic source authenticity, signatures, HMACs, or MACs",
+    "Content hashes or content binding",
+    "Shell parsing beyond the caller-supplied syntax boolean",
+    "Real shell, DNS, process, or network execution",
+    "Autonomous merge, tag, or release",
+    "New dependencies"
+  ],
+  "attack_classes": [
+    {"id": "blind-prompt-injection", "failure_class": "blind-prompt-injection", "expected": "ticket/webpage content cannot cause SHELL_EXECUTION"},
+    {"id": "tool-permission-confusion", "failure_class": "tool-permission-confusion", "expected": "valid tool permission does not confer causal authority"},
+    {"id": "stored-proof-smashing", "failure_class": "stored-proof-smashing", "expected": "claimed ALLOW/VALID proof cannot authorize an attack root"},
+    {"id": "foreign-proof-replay", "failure_class": "foreign-proof-replay", "expected": "copied legitimate ClaimedProof cannot authorize a foreign attack root"},
+    {"id": "content-substitution", "failure_class": "content-substitution", "expected": "replacing ticket/webpage bytes does not change the held causal source"},
+    {"id": "causal-source-confusion", "failure_class": "causal-source-confusion", "expected": "immediate source must exactly equal the mandating principal"}
+  ]
+}
