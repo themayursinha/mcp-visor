@@ -614,6 +614,19 @@ func TestDigestFailedAttemptClearsPriorPromoter(t *testing.T) {
 	}
 }
 
+func TestAuthorizeIgnoresInflatedAuthority(t *testing.T) {
+	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
+	root := mustRoot(obj)
+	obj.Provenance.Authority = AuthorityUser
+	execute, reason := Authorize(obj, root)
+	if execute {
+		t.Fatal("Authorize trusted stored Provenance.Authority")
+	}
+	if reason != "insufficient authority" {
+		t.Fatalf("reason=%q want insufficient authority", reason)
+	}
+}
+
 func TestHeldRootRejectsOriginUpgrade(t *testing.T) {
 	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
 	root := mustRoot(obj)

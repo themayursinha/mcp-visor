@@ -363,25 +363,49 @@ func matchRoot(obj InstructionObject, root EvaluationRoot) error {
 	return nil
 }
 
+func derivedProvenance(obj InstructionObject, root EvaluationRoot) (Provenance, error) {
+	if err := matchRoot(obj, root); err != nil {
+		return Provenance{}, err
+	}
+	if len(obj.History) == 0 {
+		return Provenance{
+			Origin:                root.Origin,
+			DerivedBy:             []Derivation{},
+			CurrentRepresentation: obj.Provenance.CurrentRepresentation,
+			VisibleRole:           RoleNone,
+			Authority:             ceilingForTrust(root.Origin.TrustClass),
+			Lineage:               []string{},
+			ContentSHA256:         digest(obj.Content),
+			Promotion:             Promotion{Continuity: ContinuityPass},
+		}, nil
+	}
+	originRepr := obj.History[0].Derivation.FromRepresentation
+	return fold(root.Origin, originRepr, obj.History), nil
+}
+
 func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason string) {
 	// Reasons are the DenyEvidence literals. DenyEvidence formats this
 	// return value; it never infers a second, competing check.
-	if err := matchRoot(obj, root); err != nil {
+	// Derived authority, continuity, and digest state are recomputed from
+	// the held root and hop log. Stored Provenance.Authority is never
+	// the authorization input.
+	p, err := derivedProvenance(obj, root)
+	if err != nil {
 		return false, "evaluation root mismatch"
 	}
 	if !root.InstructionBearing {
 		return false, "not instruction-bearing content"
 	}
-	if obj.Provenance.Promotion.DigestFailure {
+	if p.Promotion.DigestFailure {
 		return false, "digest linkage broken"
 	}
-	if obj.Provenance.Promotion.Continuity == ContinuityFailed {
-		if obj.Provenance.Promotion.Attempted {
+	if p.Promotion.Continuity == ContinuityFailed {
+		if p.Promotion.Attempted {
 			return false, "authority-expanding instruction"
 		}
 		return false, "continuity FAILED"
 	}
-	rank, err := authorityRank(obj.Provenance.Authority)
+	rank, err := authorityRank(p.Authority)
 	if err != nil {
 		return false, "unknown authority"
 	}
@@ -396,7 +420,10 @@ func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason
 // Transition endpoints derive from the object's own lineage and requested
 // authority (contract §12 fixes their literal form for the fixture).
 func DenyEvidence(obj InstructionObject, root EvaluationRoot) []string {
-	p := obj.Provenance
+	p, err := derivedProvenance(obj, root)
+	if err != nil {
+		p = obj.Provenance
+	}
 	lineage := ""
 	for i, a := range p.Lineage {
 		if i > 0 {
