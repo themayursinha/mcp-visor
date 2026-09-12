@@ -184,12 +184,13 @@ func (e *Exporter) formatSyslog5424(event audit.Event) []byte {
 	header := fmt.Sprintf("<%d>1 %s %s %s %d mcp_visor [mcp-visor@1 session_id=\"%s\" agent_id=\"%s\"]",
 		pri, ts, e.hostname, e.appName, os.Getpid(), event.SessionID, event.AgentID)
 
-	// Ownership proof hash travels as structured data when present (card
-	// t_02a1bc43): 64 hex chars fit the line budget; the full receipt stays
-	// in JSONL/JSON/webhook sinks. Hex needs no SD escaping.
+	// Ownership proof hash travels as a second structured-data element
+	// when present (card t_02a1bc43): 64 hex chars need no SD escaping.
+	// Contiguous with the first element per RFC 5424 (no separating
+	// space); the full receipt stays in JSONL/JSON/webhook sinks.
 	sd := ""
 	if event.OwnershipReceiptHash != "" {
-		sd = fmt.Sprintf(" [mcp-visor-proof@1 ownership_receipt_hash=\"%s\"]", event.OwnershipReceiptHash)
+		sd = fmt.Sprintf("[mcp-visor-proof@1 ownership_receipt_hash=\"%s\"]", event.OwnershipReceiptHash)
 	}
 
 	msg := fmt.Sprintf(" %s: %s", event.Decision, event.Reason)
