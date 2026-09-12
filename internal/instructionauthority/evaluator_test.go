@@ -249,3 +249,43 @@ func TestDenyEvidenceDerivedFromObject(t *testing.T) {
 		t.Fatalf("evidence leaks fixture literals:\n%s", evidence)
 	}
 }
+
+func TestStaleEndorsementIDCleared(t *testing.T) {
+	// Endorse successfully, then attempt again without endorsement: the new
+	// failure must not carry the old endorsement ID.
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthorityDeveloper}}
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, registry)
+	upgraded := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: summaryText},
+		&Endorsement{
+			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(summaryText),
+			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
+		}, registry)
+	if upgraded.Provenance.Promotion.EndorsementID != "e-1" {
+		t.Fatal("precondition: endorsement recorded")
+	}
+	again := ApplyTransform(upgraded, Transform{Transformer: "goal_handoff", To: ReprSecondAgentMessage, RequestedAuthority: AuthorityDeveloper, NewContent: goalText}, nil, registry)
+	if again.Provenance.Promotion.EndorsementID != "" {
+		t.Fatalf("stale endorsement id carried: %q", again.Provenance.Promotion.EndorsementID)
+	}
+	if again.Provenance.Promotion.AuthorizedPromoter != "" {
+		t.Fatalf("stale promoter carried: %q", again.Provenance.Promotion.AuthorizedPromoter)
+	}
+	if execute, _ := Authorize(again); execute {
+		t.Fatal("unendorsed promotion authorized")
+	}
+}
+
+func TestNonBearingEvidenceDerived(t *testing.T) {
+	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityDeveloper, NewContent: "plain data"}, nil, nil)
+	evidence := strings.Join(DenyEvidence(obj), "\n")
+	if !strings.Contains(evidence, "argument class DATA") {
+		t.Fatalf("non-bearing object must not claim INSTRUCTION:\n%s", evidence)
+	}
+	if strings.Contains(evidence, "argument class INSTRUCTION") {
+		t.Fatalf("contradicts serialized instruction_bearing:false:\n%s", evidence)
+	}
+}

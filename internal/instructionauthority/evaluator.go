@@ -63,21 +63,25 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 		},
 		InstructionEligible: false,
 	}
+	// A new promotion attempt starts from clean attempt state: inherited
+	// endorsement IDs and promoters belong to a past attempt and must not
+	// ride along, whether this attempt succeeds, fails, or lands on an
+	// already-failed lineage.
+	if t.RequestedAuthority != "" {
+		next.Provenance.Promotion.Attempted = true
+		next.Provenance.Promotion.RequestedAuthority = t.RequestedAuthority
+		next.Provenance.Promotion.EndorsementID = ""
+		next.Provenance.Promotion.AuthorizedPromoter = ""
+	}
 	// Sticky failure: an already-failed lineage cannot wash clean. Later
 	// attempts are still recorded (requested authority updated) so the
 	// evidence never hides an escalation that followed the first failure.
 	if obj.Provenance.Promotion.Continuity == ContinuityFailed {
-		if t.RequestedAuthority != "" {
-			next.Provenance.Promotion.Attempted = true
-			next.Provenance.Promotion.RequestedAuthority = t.RequestedAuthority
-		}
 		return next
 	}
 	if t.RequestedAuthority == "" {
 		return next
 	}
-	next.Provenance.Promotion.Attempted = true
-	next.Provenance.Promotion.RequestedAuthority = t.RequestedAuthority
 	if endorse != nil && validEndorsement(*endorse, obj, next, t, registry) {
 		next.Provenance.Authority = endorse.GrantAuthority
 		next.Provenance.Promotion.AuthorizedPromoter = endorse.Promoter
@@ -87,7 +91,6 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 		return next
 	}
 	// Clamp to input authority and fail continuity.
-	next.Provenance.Promotion.AuthorizedPromoter = "NONE"
 	next.Provenance.Promotion.Continuity = ContinuityFailed
 	return next
 }
@@ -189,10 +192,14 @@ func DenyEvidence(obj InstructionObject) []string {
 	if promoter == "" {
 		promoter = "NONE"
 	}
+	argClass := "INSTRUCTION"
+	if !obj.InstructionBearing {
+		argClass = "DATA"
+	}
 	return []string{
 		"policy_decision=deny  policy_rule=instruction_authority_continuity",
 		"reason=authority-expanding instruction",
-		fmt.Sprintf("argument class INSTRUCTION  effect class %s", obj.EffectClass),
+		fmt.Sprintf("argument class %s  effect class %s", argClass, obj.EffectClass),
 		fmt.Sprintf("visible role %s  original principal %s", p.VisibleRole, describeOrigin(p.Origin)),
 		fmt.Sprintf("authority transition %s->%s", from, to),
 		"lineage " + lineage,
