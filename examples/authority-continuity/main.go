@@ -163,5 +163,8 @@ func persistReload(obj instructionauthority.InstructionObject) (instructionautho
 		reloaded.Provenance.Promotion.Continuity != obj.Provenance.Promotion.Continuity {
 		return instructionauthority.InstructionObject{}, errors.New("memory store corrupted provenance")
 	}
+	if err := instructionauthority.VerifyProvenance(reloaded, nil); err != nil {
+		return instructionauthority.InstructionObject{}, fmt.Errorf("memory store failed verification: %w", err)
+	}
 	return reloaded, nil
 }

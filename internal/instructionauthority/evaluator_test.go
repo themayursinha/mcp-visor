@@ -120,7 +120,6 @@ func TestExplicitHigherAuthorityEndorsementIsNarrowlyBound(t *testing.T) {
 	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthorityDeveloper}}
 	obj := maliciousOrigin()
 	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, registry)
-	println("DEBUG test: obj.Content before call2 = " + obj.Content)
 	upgraded := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, VisibleRole: RoleUser, RequestedAuthority: AuthorityUser, NewContent: summaryText},
 		&Endorsement{
 			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
@@ -496,5 +495,129 @@ func TestDigestFailureReason(t *testing.T) {
 	}), "\n")
 	if !strings.Contains(evidence, "reason=digest linkage broken") {
 		t.Fatalf("wrong reason:\n%s", evidence)
+	}
+}
+
+func TestFlippedVerdictBreaksHopDigest(t *testing.T) {
+	// A stored endorsement_valid bit is bound into HopDigest. Flipping it
+	// without rewriting the digest chain is tampering, not a grant.
+	empty := map[string]TrustedPrincipal{}
+	full := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, empty)
+	rejected := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: summaryText},
+		&Endorsement{
+			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(summaryText),
+			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
+		}, empty)
+	if rejected.History[1].EndorsementValid {
+		t.Fatal("precondition: hop must be a recorded rejection")
+	}
+	rejected.History[1].EndorsementValid = true
+	if err := VerifyProvenance(rejected, full); err == nil {
+		t.Fatal("flipped endorsement verdict verified")
+	}
+	fresh := fold(rejected.Provenance.Origin, rejected.History[0].Derivation.FromRepresentation, rejected.History)
+	if fresh.Promotion.Continuity != ContinuityFailed || !fresh.Promotion.DigestFailure {
+		t.Fatal("flipped verdict must fail the hop digest, not grant")
+	}
+	if execute, _ := Authorize(InstructionObject{
+		SchemaVersion: rejected.SchemaVersion, Content: rejected.Content,
+		InstructionBearing: true, EffectClass: rejected.EffectClass,
+		Provenance: fresh, History: rejected.History,
+	}); execute {
+		t.Fatal("flipped verdict authorized")
+	}
+}
+
+func TestValidVerdictWithoutEndorsementFailsClosed(t *testing.T) {
+	obj := launder(t, nil, nil)
+	obj.History[2].EndorsementValid = true
+	obj.History[2].Endorsement = nil
+	obj.History[2].HopDigest = hopDigest(obj.History[2])
+	if err := VerifyProvenance(obj, map[string]TrustedPrincipal{}); err == nil {
+		t.Fatal("valid verdict without endorsement verified")
+	}
+	fresh := fold(obj.Provenance.Origin, obj.History[0].Derivation.FromRepresentation, obj.History)
+	if execute, _ := Authorize(InstructionObject{
+		SchemaVersion: obj.SchemaVersion, Content: obj.Content,
+		InstructionBearing: true, EffectClass: obj.EffectClass,
+		Provenance: fresh, History: obj.History,
+	}); execute {
+		t.Fatal("nil endorsement panic-or-grant")
+	}
+}
+
+func TestRefoldedDigestFailureStillFailsVerify(t *testing.T) {
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	obj := launder(t, nil, nil)
+	obj.History[1].Content = "rewritten memory"
+	broken := ApplyTransform(obj, Transform{Transformer: "fresh_rewrite", To: ReprAgentSummary, NewContent: "later"}, nil, registry)
+	if !broken.Provenance.Promotion.DigestFailure {
+		t.Fatal("precondition: refold must mark digest failure")
+	}
+	if err := VerifyProvenance(broken, registry); err == nil {
+		t.Fatal("known-broken digest chain verified after refold")
+	}
+}
+
+func TestDigestFailedAttemptClearsPriorPromoter(t *testing.T) {
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, registry)
+	upgraded := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: summaryText},
+		&Endorsement{
+			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(summaryText),
+			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
+		}, registry)
+	if upgraded.Provenance.Promotion.AuthorizedPromoter != "op:marina" {
+		t.Fatal("precondition: promoter recorded")
+	}
+	next := ApplyTransform(upgraded, Transform{Transformer: "goal_handoff", To: ReprSecondAgentMessage, RequestedAuthority: AuthorityDeveloper, NewContent: goalText}, nil, registry)
+	next.History[len(next.History)-1].Content = "tampered"
+	fresh := fold(next.Provenance.Origin, next.History[0].Derivation.FromRepresentation, next.History)
+	if fresh.Promotion.AuthorizedPromoter != "" {
+		t.Fatalf("digest-failed attempt kept prior promoter %q", fresh.Promotion.AuthorizedPromoter)
+	}
+	if fresh.Promotion.EndorsementID != "" {
+		t.Fatalf("digest-failed attempt kept prior endorsement %q", fresh.Promotion.EndorsementID)
+	}
+	if fresh.Promotion.RequestedAuthority != AuthorityDeveloper {
+		t.Fatalf("digest-failed attempt hid request: %q", fresh.Promotion.RequestedAuthority)
+	}
+	evidence := strings.Join(DenyEvidence(InstructionObject{
+		SchemaVersion: next.SchemaVersion, Content: next.Content,
+		InstructionBearing: true, EffectClass: next.EffectClass,
+		Provenance: fresh, History: next.History,
+	}), "\n")
+	if strings.Contains(evidence, "authorized promoter op:marina") {
+		t.Fatalf("evidence attributed digest failure to prior promoter:\n%s", evidence)
+	}
+}
+
+func TestDenyEvidenceUsesAuthorizeReason(t *testing.T) {
+	cases := []struct {
+		name string
+		obj  InstructionObject
+		want string
+	}{
+		{"non-bearing", NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false), "not instruction-bearing content"},
+		{"insufficient", NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true), "insufficient authority"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, reason := Authorize(tc.obj)
+			if reason != tc.want {
+				t.Fatalf("Authorize=%q want %q", reason, tc.want)
+			}
+			evidence := strings.Join(DenyEvidence(tc.obj), "\n")
+			if !strings.Contains(evidence, "reason="+tc.want) {
+				t.Fatalf("DenyEvidence diverged from Authorize:\n%s", evidence)
+			}
+		})
 	}
 }

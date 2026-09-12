@@ -27,10 +27,20 @@ type Transform struct {
 // promotion outcomes, digests, and representations cannot drift apart.
 func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, registry map[string]TrustedPrincipal) InstructionObject {
 	parentDigest := digest(obj.Content)
+	parentHop := parentDigest
+	if n := len(obj.History); n > 0 {
+		parentHop = obj.History[n-1].HopDigest
+	}
 	var endorsed *Endorsement
 	if endorse != nil {
 		copied := *endorse
 		endorsed = &copied
+	}
+	observedCeiling := ""
+	if endorsed != nil {
+		if p, ok := registry[endorsed.Promoter]; ok {
+			observedCeiling = p.Ceiling
+		}
 	}
 	hop := Hop{
 		Derivation: Derivation{
@@ -45,14 +55,16 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 		VisibleRole:        t.VisibleRole,
 		RequestedAuthority: t.RequestedAuthority,
 		Endorsement:        endorsed,
+		ObservedCeiling:    observedCeiling,
+		ParentHopDigest:    parentHop,
 	}
-	// The verdict is computed here, at append time, against the current
-	// registry — and stored with the hop. Later refolds honor the recorded
-	// verdict instead of re-validating, so registry additions or upgrades
-	// can never retroactively revive a rejection (or silently revoke an
-	// acceptance; VerifyProvenance cross-checks drift loudly instead).
+	// Verdict is computed at append against the current registry and bound
+	// into HopDigest. Later refolds honor the recorded verdict, so a
+	// registry upgrade cannot revive a rejection; flipping the boolean
+	// without the matching digest is a digest failure.
 	hop.EndorsementValid = endorse != nil && t.RequestedAuthority != "" &&
 		validEndorsement(*endorsed, hop.ParentDigest, obj.Provenance.Authority, hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry)
+	hop.HopDigest = hopDigest(hop)
 	next := InstructionObject{
 		SchemaVersion:       obj.SchemaVersion,
 		Content:             t.NewContent,
@@ -82,79 +94,97 @@ func fold(origin Origin, originRepr string, hops []Hop) Provenance {
 		Promotion:             Promotion{Continuity: ContinuityPass},
 	}
 	runningDigest := ""
+	runningHop := ""
 	if len(hops) > 0 {
 		runningDigest = hops[0].ParentDigest
+		runningHop = hops[0].ParentHopDigest
 	}
-	for _, hop := range hops {
-		// Digest linkage: each hop must chain to the previous content.
-		// A break fails continuity: the log no longer describes one
-		// object's history.
-		if hop.ParentDigest != runningDigest && runningDigest != "" {
-			prov.Promotion.Attempted = prov.Promotion.Attempted || hop.RequestedAuthority != ""
-			if hop.RequestedAuthority != "" {
-				prov.Promotion.RequestedAuthority = hop.RequestedAuthority
-			}
-			prov.Promotion.Continuity = ContinuityFailed
-			prov.Promotion.DigestFailure = true
-			prov.Lineage = append(prov.Lineage, prov.Authority)
-			prov.DerivedBy = append(prov.DerivedBy, hop.Derivation)
-			prov.CurrentRepresentation = hop.Derivation.ToRepresentation
-			prov.VisibleRole = hop.VisibleRole
-			prov.ContentSHA256 = hop.ContentDigest
-			continue
+	for i, hop := range hops {
+		// Record the hop first, including a clean attempt state. Digest
+		// failures, sticky failures, and grants all share this writer so
+		// a later attempt cannot keep a prior promoter or endorsement ID.
+		beginHop(&prov, hop, runningDigest)
+		digestBroken := (runningDigest != "" && hop.ParentDigest != runningDigest) ||
+			(runningHop != "" && hop.ParentHopDigest != runningHop) ||
+			digest(hop.Content) != hop.ContentDigest ||
+			hop.HopDigest != hopDigest(hop) ||
+			(hop.EndorsementValid && hop.Endorsement == nil) ||
+			(i == 0 && hop.ParentHopDigest != hop.ParentDigest)
+		if hop.ContentDigest != "" {
+			runningDigest = hop.ContentDigest
 		}
-		prov.DerivedBy = append(prov.DerivedBy, hop.Derivation)
-		prov.Lineage = append(prov.Lineage, prov.Authority)
-		prov.CurrentRepresentation = hop.Derivation.ToRepresentation
-		prov.VisibleRole = hop.VisibleRole
-		prov.ParentContentSHA256 = runningDigest
-		prov.ContentSHA256 = hop.ContentDigest
-		runningDigest = hop.ContentDigest
-		// Content binding: the hop's recorded digest must match its
-		// content. Rewriting content while keeping digests fails here,
-		// not silently downstream.
-		if digest(hop.Content) != hop.ContentDigest {
-			prov.Promotion.Attempted = prov.Promotion.Attempted || hop.RequestedAuthority != ""
-			if hop.RequestedAuthority != "" {
-				prov.Promotion.RequestedAuthority = hop.RequestedAuthority
-			}
+		if hop.HopDigest != "" {
+			runningHop = hop.HopDigest
+		} else {
+			runningHop = hopDigest(hop)
+		}
+		if digestBroken {
 			prov.Promotion.Continuity = ContinuityFailed
 			prov.Promotion.DigestFailure = true
 			continue
 		}
-		// A new promotion attempt starts from clean attempt state:
-		// inherited endorsement IDs and promoters belong to a past
-		// attempt and must not ride along.
-		if hop.RequestedAuthority != "" {
-			prov.Promotion.Attempted = true
-			prov.Promotion.RequestedAuthority = hop.RequestedAuthority
-			prov.Promotion.EndorsementID = ""
-			prov.Promotion.AuthorizedPromoter = ""
-		}
-		// Sticky failure: an already-failed lineage cannot wash clean.
-		// Attempts are still recorded above so evidence never hides a
-		// later escalation.
 		if prov.Promotion.Continuity == ContinuityFailed {
 			continue
 		}
 		if hop.RequestedAuthority == "" {
 			continue
 		}
-		// The verdict travels with the hop, recorded at append time: later
-		// registry changes can neither revive a rejection nor revoke an
-		// acceptance silently (VerifyProvenance cross-checks instead).
-		if hop.RequestedAuthority != "" && hop.EndorsementValid {
-			prov.Authority = hop.Endorsement.GrantAuthority
-			prov.Promotion.AuthorizedPromoter = hop.Endorsement.Promoter
-			prov.Promotion.EndorsementID = hop.Endorsement.ID
-			prov.Promotion.Continuity = ContinuityPass
-			prov.Lineage[len(prov.Lineage)-1] = hop.Endorsement.GrantAuthority
-			continue
+		if !grantFromHop(&prov, hop) {
+			prov.Promotion.Continuity = ContinuityFailed
 		}
-		// Clamp to input authority and fail continuity.
-		prov.Promotion.Continuity = ContinuityFailed
 	}
 	return prov
+}
+
+// beginHop is the only writer of per-hop presentation, lineage, and
+// attempt fields. Attempt-specific promoter data is cleared whenever a
+// hop requests a promotion, including hops that later fail their digest.
+func beginHop(prov *Provenance, hop Hop, runningDigest string) {
+	prov.DerivedBy = append(prov.DerivedBy, hop.Derivation)
+	prov.Lineage = append(prov.Lineage, prov.Authority)
+	prov.CurrentRepresentation = hop.Derivation.ToRepresentation
+	prov.VisibleRole = hop.VisibleRole
+	if runningDigest != "" {
+		prov.ParentContentSHA256 = runningDigest
+	}
+	prov.ContentSHA256 = hop.ContentDigest
+	if hop.RequestedAuthority != "" {
+		prov.Promotion.Attempted = true
+		prov.Promotion.RequestedAuthority = hop.RequestedAuthority
+		prov.Promotion.EndorsementID = ""
+		prov.Promotion.AuthorizedPromoter = ""
+	}
+}
+
+// grantFromHop applies a recorded endorsement. The stored boolean is
+// never enough: the endorsement pointer, grant/request equality, and the
+// append-time observed ceiling must all hold. Returns false to fail
+// continuity without granting.
+func grantFromHop(prov *Provenance, hop Hop) bool {
+	if !hop.EndorsementValid || hop.Endorsement == nil {
+		return false
+	}
+	e := hop.Endorsement
+	if e.GrantAuthority != hop.RequestedAuthority {
+		return false
+	}
+	grantRank, err := authorityRank(e.GrantAuthority)
+	if err != nil {
+		return false
+	}
+	ceilRank, err := authorityRank(hop.ObservedCeiling)
+	if err != nil {
+		return false
+	}
+	if grantRank > ceilRank {
+		return false
+	}
+	prov.Authority = e.GrantAuthority
+	prov.Promotion.AuthorizedPromoter = e.Promoter
+	prov.Promotion.EndorsementID = e.ID
+	prov.Promotion.Continuity = ContinuityPass
+	prov.Lineage[len(prov.Lineage)-1] = e.GrantAuthority
+	return true
 }
 
 // validEndorsement checks an endorsement against the registry and the hop's
@@ -231,7 +261,21 @@ func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipa
 		return nil
 	}
 	originRepr := obj.History[0].Derivation.FromRepresentation
+	for i, hop := range obj.History {
+		if hop.EndorsementValid && hop.Endorsement == nil {
+			return fmt.Errorf("hop %d claims a valid endorsement without an endorsement", i)
+		}
+		if digest(hop.Content) != hop.ContentDigest {
+			return fmt.Errorf("hop %d content does not match content digest", i)
+		}
+		if hop.HopDigest != hopDigest(hop) {
+			return fmt.Errorf("hop %d hop digest mismatch", i)
+		}
+	}
 	fresh := fold(obj.Provenance.Origin, originRepr, obj.History)
+	if fresh.Promotion.DigestFailure {
+		return fmt.Errorf("digest chain broken")
+	}
 	if !provenanceEqual(fresh, obj.Provenance) {
 		return fmt.Errorf("provenance does not match history")
 	}
@@ -242,6 +286,9 @@ func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipa
 	// while their basis stands.
 	for i, hop := range obj.History {
 		if hop.Endorsement == nil {
+			if hop.EndorsementValid {
+				return fmt.Errorf("hop %d claims a valid endorsement without an endorsement", i)
+			}
 			continue
 		}
 		parentAuthority := ""
@@ -302,10 +349,18 @@ func provenanceEqual(a, b Provenance) bool {
 // Failure never invokes the executor: content returns as an untrusted
 // observation (instruction_eligible=false).
 func Authorize(obj InstructionObject) (execute bool, reason string) {
+	// Reasons are the DenyEvidence literals. DenyEvidence formats this
+	// return value; it never infers a second, competing check.
 	if !obj.InstructionBearing {
-		return false, "not instruction-bearing"
+		return false, "not instruction-bearing content"
+	}
+	if obj.Provenance.Promotion.DigestFailure {
+		return false, "digest linkage broken"
 	}
 	if obj.Provenance.Promotion.Continuity == ContinuityFailed {
+		if obj.Provenance.Promotion.Attempted {
+			return false, "authority-expanding instruction"
+		}
 		return false, "continuity FAILED"
 	}
 	rank, err := authorityRank(obj.Provenance.Authority)
@@ -314,7 +369,7 @@ func Authorize(obj InstructionObject) (execute bool, reason string) {
 	}
 	userRank, _ := authorityRank(AuthorityUser)
 	if rank < userRank {
-		return false, "authority below USER"
+		return false, "insufficient authority"
 	}
 	return true, "authorized"
 }
@@ -354,16 +409,9 @@ func DenyEvidence(obj InstructionObject) []string {
 	if !obj.InstructionBearing {
 		argClass = "DATA"
 	}
-	// The reason mirrors the Authorize decision tree: non-bearing content,
-	// attempted expansions, then authority shortfall. Each denial path
-	// reports its own check, never another's.
-	denyReason := "insufficient authority"
-	if !obj.InstructionBearing {
-		denyReason = "not instruction-bearing content"
-	} else if p.Promotion.DigestFailure {
-		denyReason = "digest linkage broken"
-	} else if p.Promotion.Attempted {
-		denyReason = "authority-expanding instruction"
+	_, denyReason := Authorize(obj)
+	if denyReason == "authorized" {
+		denyReason = "insufficient authority"
 	}
 	return []string{
 		"policy_decision=deny  policy_rule=instruction_authority_continuity",

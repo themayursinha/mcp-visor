@@ -7,6 +7,7 @@ package instructionauthority
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 )
@@ -162,6 +163,13 @@ type TrustedPrincipal struct {
 // is never edited in place. The fold derives all state (authority,
 // lineage, promotion outcomes, digests, representations) from Origin plus
 // the hop log, so derived fields cannot go stale relative to each other.
+//
+// HopDigest is an injective commitment to every security-relevant field
+// on the hop, including the append-time endorsement verdict and the
+// promoter ceiling observed at append. ParentHopDigest chains those
+// commitments. Fold and VerifyProvenance recompute the digest; a flipped
+// verdict, rewritten endorsement, or swapped ceiling without a matching
+// digest is a digest failure, not a promotion.
 type Hop struct {
 	Derivation         Derivation   `json:"derivation"`
 	Content            string       `json:"content"`
@@ -170,16 +178,69 @@ type Hop struct {
 	VisibleRole        string       `json:"visible_role"`
 	RequestedAuthority string       `json:"requested_authority,omitempty"`
 	Endorsement        *Endorsement `json:"endorsement,omitempty"`
-	// EndorsementValid records the append-time validation verdict. Fold
-	// honors it; VerifyProvenance cross-checks it against the live
-	// registry so drift fails loudly instead of flipping silently.
+	// EndorsementValid records the append-time validation verdict. It is
+	// not independently trusted: hopDigest binds it, and fold refuses a
+	// grant unless the endorsement pointer, observed ceiling, and digest
+	// all agree with that verdict.
 	EndorsementValid bool `json:"endorsement_valid"`
+	// ObservedCeiling is the promoter's registry ceiling at append time
+	// (empty if the promoter was absent). Bound into HopDigest so a later
+	// registry upgrade cannot be copied into history without breaking the
+	// hop chain.
+	ObservedCeiling string `json:"observed_ceiling,omitempty"`
+	// ParentHopDigest is the previous hop's HopDigest, or the origin
+	// content digest for the first hop.
+	ParentHopDigest string `json:"parent_hop_digest"`
+	// HopDigest is hopDigest(this hop) computed at append.
+	HopDigest string `json:"hop_digest"`
 }
 
 // digest binds content bytes.
 func digest(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// hopDigest injectively binds one hop's security-relevant fields. Every
+// field is length-prefixed so concatenations cannot collide. HopDigest
+// itself is the output, never an input.
+func hopDigest(hop Hop) string {
+	h := sha256.New()
+	write := func(s string) {
+		var buf [binary.MaxVarintLen64]byte
+		n := binary.PutUvarint(buf[:], uint64(len(s)))
+		h.Write(buf[:n])
+		h.Write([]byte(s))
+	}
+	write(hop.ParentDigest)
+	write(hop.ContentDigest)
+	write(hop.Content)
+	write(hop.VisibleRole)
+	write(hop.RequestedAuthority)
+	write(hop.ParentHopDigest)
+	write(hop.ObservedCeiling)
+	if hop.EndorsementValid {
+		write("1")
+	} else {
+		write("0")
+	}
+	if hop.Endorsement == nil {
+		write("0")
+	} else {
+		write("1")
+		write(hop.Endorsement.ID)
+		write(hop.Endorsement.Promoter)
+		write(hop.Endorsement.GrantAuthority)
+		write(hop.Endorsement.ParentContentSHA)
+		write(hop.Endorsement.ChildContentSHA)
+		write(hop.Endorsement.Transformer)
+		write(hop.Endorsement.TargetRepresentation)
+	}
+	write(hop.Derivation.Transformer)
+	write(hop.Derivation.FromRepresentation)
+	write(hop.Derivation.ViaRepresentation)
+	write(hop.Derivation.ToRepresentation)
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // NewOriginObject materializes an origin object: authority is the trust
