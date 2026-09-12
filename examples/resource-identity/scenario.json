@@ -1,0 +1,12 @@
+{
+  "requested_path": "/workspace/output/result.txt",
+  "allowed_path": "/workspace/output/**",
+  "mandating_principal": "user:operator",
+  "mandating_trust_class": "TRUSTED_USER",
+  "mandated_identity": "object:workspace-output-result-A",
+  "authorized_identity": "object:workspace-output-result-A",
+  "swapped_identity": "object:outside-mandate-B",
+  "legitimate_identity": "object:workspace-output-result-A",
+  "path_permission_valid": true,
+  "effect_class_write": true
+}

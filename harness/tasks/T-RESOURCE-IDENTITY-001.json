@@ -1,0 +1,56 @@
+{
+  "task_id": "T-RESOURCE-IDENTITY-001",
+  "invariant_ids": ["H35"],
+  "security_sensitive": true,
+  "security_problem": "A path-permission check authorizes a mutable name, not the resource that receives the WRITE. After authorization, a swapped identity (symlink/alias claim) can redirect the effect outside the mandate. Trusted: EvaluationRoot identities, mandate, prerequisite booleans. Untrusted: requested/resolved paths, symlink flags, presentation names, claimed proofs.",
+  "required_behavior": "Authorize ignores ObservedArtifact and returns EvaluateResourceIdentityProof(EvaluationRoot). Proof VALID iff authorized and effect-time identities are non-empty and equal, a USER-or-higher mandate names that effect-time identity. ALLOW additionally requires path permission and WRITE. Evidence is the fixed eight-element array on Decision.",
+  "failure_behavior": "The scripted path-only baseline fires its callback. Visor denies the swapped root with identity continuity FAILED and does not fire. Unknown enums, missing identities, continuity mismatch, mandate mismatch, and failed prerequisites deny.",
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-RESOURCE-IDENTITY-001.json",
+    "internal/resourceidentity/model.go",
+    "internal/resourceidentity/evaluator.go",
+    "internal/resourceidentity/evaluator_test.go",
+    "examples/resource-identity/scenario.json",
+    "examples/resource-identity/main.go",
+    "tests/integration/resource_identity_demo_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./internal/resourceidentity", "-run", "TestRedMutablePathCannotAuthorizeSwappedResource", "-count=1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/resourceidentity", "-count=1"]},
+    {"name": "race", "expect": "pass", "argv": ["go", "test", "-race", "./internal/resourceidentity", "-count=1"]},
+    {"name": "demo", "expect": "pass", "argv": ["go", "test", "./tests/integration", "-run", "TestResourceIdentityDemo", "-count=1"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "Real symlink races or TOCTOU timing",
+    "Real filesystem reads, writes, opens, renames, links, or stats",
+    "inotify, fanotify, inode syscalls, file descriptors, locks, or hostile namespaces",
+    "Device, mount, filesystem, container, or kernel identity inspection",
+    "HMACs, MACs, signatures, certificates, or cryptographic attestation",
+    "Content hashes as identity or trust",
+    "Path canonicalization or symlink resolution",
+    "Proxy, tools/call, policy, audit, receipt, or CLI integration",
+    "Control-plane receipts or persistent proof formats",
+    "MCP servers or network services",
+    "NLP, model calls, classifiers, embeddings, or prompt parsing",
+    "Graphs, provenance stores, histories, journals, or replay systems",
+    "Importing instructionauthority, causalauthority, or principalderivation",
+    "Remote identity implementations for ARN, commit SHA, Kubernetes UID, DNS, or SaaS resources",
+    "New dependencies",
+    "Autonomous merge, tag, or release"
+  ],
+  "attack_classes": [
+    {"id": "authority-swap", "failure_class": "authority-swap", "expected": "authorized identity A differs from effect-time identity B"},
+    {"id": "mutable-name-confusion", "failure_class": "mutable-name-confusion", "expected": "an allowed requested path cannot stand in for object identity"},
+    {"id": "symlink-claim-confusion", "failure_class": "symlink-claim-confusion", "expected": "symlink flags and targets cannot affect authorization"},
+    {"id": "stored-proof-smashing", "failure_class": "stored-proof-smashing", "expected": "claimed VALID/ALLOW fields cannot authorize an invalid root"},
+    {"id": "foreign-proof-replay", "failure_class": "foreign-proof-replay", "expected": "copied legitimate identity claims cannot authorize a swapped root"},
+    {"id": "mandate-identity-confusion", "failure_class": "mandate-identity-confusion", "expected": "mandate for A cannot authorize effect on B"},
+    {"id": "unknown-enum-fail-open", "failure_class": "unknown-enum-fail-open", "expected": "unknown trust classes produce INVALID and DENY"}
+  ]
+}
