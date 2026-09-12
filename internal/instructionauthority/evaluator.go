@@ -363,6 +363,17 @@ func matchRoot(obj InstructionObject, root EvaluationRoot) error {
 	return nil
 }
 
+func heldRootProvenance(root EvaluationRoot) Provenance {
+	return Provenance{
+		Origin:      root.Origin,
+		DerivedBy:   []Derivation{},
+		VisibleRole: RoleNone,
+		Authority:   ceilingForTrust(root.Origin.TrustClass),
+		Lineage:     []string{},
+		Promotion:   Promotion{Continuity: ContinuityPass},
+	}
+}
+
 func derivedProvenance(obj InstructionObject, root EvaluationRoot) (Provenance, error) {
 	if err := matchRoot(obj, root); err != nil {
 		return Provenance{}, err
@@ -380,7 +391,15 @@ func derivedProvenance(obj InstructionObject, root EvaluationRoot) (Provenance, 
 		}, nil
 	}
 	originRepr := obj.History[0].Derivation.FromRepresentation
-	return fold(root.Origin, originRepr, obj.History), nil
+	p := fold(root.Origin, originRepr, obj.History)
+	// Top-level content must be the hop log's final bytes. Substituting
+	// obj.Content after a legitimate promotion would otherwise execute
+	// uncommitted text at the folded authority.
+	if digest(obj.Content) != p.ContentSHA256 {
+		p.Promotion.Continuity = ContinuityFailed
+		p.Promotion.DigestFailure = true
+	}
+	return p, nil
 }
 
 func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason string) {
@@ -422,7 +441,7 @@ func Authorize(obj InstructionObject, root EvaluationRoot) (execute bool, reason
 func DenyEvidence(obj InstructionObject, root EvaluationRoot) []string {
 	p, err := derivedProvenance(obj, root)
 	if err != nil {
-		p = obj.Provenance
+		p = heldRootProvenance(root)
 	}
 	lineage := ""
 	for i, a := range p.Lineage {

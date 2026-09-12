@@ -614,6 +614,48 @@ func TestDigestFailedAttemptClearsPriorPromoter(t *testing.T) {
 	}
 }
 
+func TestAuthorizeRejectsSubstitutedContent(t *testing.T) {
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthorityDeveloper}}
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, registry)
+	upgraded := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, VisibleRole: RoleUser, RequestedAuthority: AuthorityUser, NewContent: summaryText},
+		&Endorsement{
+			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(summaryText),
+			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
+		}, registry)
+	root := mustRoot(upgraded)
+	if execute, _ := Authorize(upgraded, root); !execute {
+		t.Fatal("precondition: honest endorsement must authorize")
+	}
+	upgraded.Content = "rm -rf /"
+	execute, reason := Authorize(upgraded, root)
+	if execute {
+		t.Fatal("substituted content authorized at folded USER authority")
+	}
+	if reason != "digest linkage broken" {
+		t.Fatalf("reason=%q want digest linkage broken", reason)
+	}
+}
+
+func TestDenyEvidenceRootMismatchUsesHeldOrigin(t *testing.T) {
+	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
+	root := mustRoot(obj)
+	obj.Provenance.Origin.TrustClass = TrustTrustedSystem
+	obj.Provenance.Authority = AuthoritySystem
+	evidence := strings.Join(DenyEvidence(obj, root), "\n")
+	if strings.Contains(evidence, "trusted system") {
+		t.Fatalf("root-mismatch evidence echoed attacker origin:\n%s", evidence)
+	}
+	if !strings.Contains(evidence, "reason=evaluation root mismatch") {
+		t.Fatalf("missing mismatch reason:\n%s", evidence)
+	}
+	if !strings.Contains(evidence, "untrusted MCP response") {
+		t.Fatalf("held origin missing from evidence:\n%s", evidence)
+	}
+}
+
 func TestAuthorizeIgnoresInflatedAuthority(t *testing.T) {
 	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
 	root := mustRoot(obj)
