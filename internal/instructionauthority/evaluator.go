@@ -46,6 +46,13 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 		RequestedAuthority: t.RequestedAuthority,
 		Endorsement:        endorsed,
 	}
+	// The verdict is computed here, at append time, against the current
+	// registry — and stored with the hop. Later refolds honor the recorded
+	// verdict instead of re-validating, so registry additions or upgrades
+	// can never retroactively revive a rejection (or silently revoke an
+	// acceptance; VerifyProvenance cross-checks drift loudly instead).
+	hop.EndorsementValid = endorse != nil && t.RequestedAuthority != "" &&
+		validEndorsement(*endorsed, hop.ParentDigest, obj.Provenance.Authority, hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry)
 	next := InstructionObject{
 		SchemaVersion:       obj.SchemaVersion,
 		Content:             t.NewContent,
@@ -54,7 +61,7 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 		History:             append(append([]Hop{}, obj.History...), hop),
 		InstructionEligible: false,
 	}
-	next.Provenance = fold(obj.Provenance.Origin, obj.Provenance.CurrentRepresentation, next.History, registry)
+	next.Provenance = fold(obj.Provenance.Origin, obj.Provenance.CurrentRepresentation, next.History)
 	return next
 }
 
@@ -63,7 +70,7 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 // same inputs in the same order, so field-level staleness (stale IDs,
 // hidden escalations, misattributed reasons, phantom depths) is
 // structurally impossible.
-func fold(origin Origin, originRepr string, hops []Hop, registry map[string]TrustedPrincipal) Provenance {
+func fold(origin Origin, originRepr string, hops []Hop) Provenance {
 	prov := Provenance{
 		Origin:                origin,
 		DerivedBy:             []Derivation{},
@@ -78,11 +85,7 @@ func fold(origin Origin, originRepr string, hops []Hop, registry map[string]Trus
 	if len(hops) > 0 {
 		runningDigest = hops[0].ParentDigest
 	}
-	for hi, hop := range hops {
-		if hop.Endorsement != nil {
-		} else {
-		}
-		_ = hi
+	for _, hop := range hops {
 		// Digest linkage: each hop must chain to the previous content.
 		// A break fails continuity: the log no longer describes one
 		// object's history.
@@ -92,6 +95,7 @@ func fold(origin Origin, originRepr string, hops []Hop, registry map[string]Trus
 				prov.Promotion.RequestedAuthority = hop.RequestedAuthority
 			}
 			prov.Promotion.Continuity = ContinuityFailed
+			prov.Promotion.DigestFailure = true
 			prov.Lineage = append(prov.Lineage, prov.Authority)
 			prov.DerivedBy = append(prov.DerivedBy, hop.Derivation)
 			prov.CurrentRepresentation = hop.Derivation.ToRepresentation
@@ -106,6 +110,18 @@ func fold(origin Origin, originRepr string, hops []Hop, registry map[string]Trus
 		prov.ParentContentSHA256 = runningDigest
 		prov.ContentSHA256 = hop.ContentDigest
 		runningDigest = hop.ContentDigest
+		// Content binding: the hop's recorded digest must match its
+		// content. Rewriting content while keeping digests fails here,
+		// not silently downstream.
+		if digest(hop.Content) != hop.ContentDigest {
+			prov.Promotion.Attempted = prov.Promotion.Attempted || hop.RequestedAuthority != ""
+			if hop.RequestedAuthority != "" {
+				prov.Promotion.RequestedAuthority = hop.RequestedAuthority
+			}
+			prov.Promotion.Continuity = ContinuityFailed
+			prov.Promotion.DigestFailure = true
+			continue
+		}
 		// A new promotion attempt starts from clean attempt state:
 		// inherited endorsement IDs and promoters belong to a past
 		// attempt and must not ride along.
@@ -124,9 +140,10 @@ func fold(origin Origin, originRepr string, hops []Hop, registry map[string]Trus
 		if hop.RequestedAuthority == "" {
 			continue
 		}
-		if hop.Endorsement != nil {
-		}
-		if hop.Endorsement != nil && validEndorsement(*hop.Endorsement, hop.ParentDigest, prov.Authority, hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry) {
+		// The verdict travels with the hop, recorded at append time: later
+		// registry changes can neither revive a rejection nor revoke an
+		// acceptance silently (VerifyProvenance cross-checks instead).
+		if hop.RequestedAuthority != "" && hop.EndorsementValid {
 			prov.Authority = hop.Endorsement.GrantAuthority
 			prov.Promotion.AuthorizedPromoter = hop.Endorsement.Promoter
 			prov.Promotion.EndorsementID = hop.Endorsement.ID
@@ -195,13 +212,52 @@ func validEndorsement(e Endorsement, parentDigest, parentAuthority, childDigest,
 // digest, representation, or derivation fails. Untrusted bytes must pass
 // through here before Authorize.
 func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipal) error {
-	originRepr := obj.Provenance.CurrentRepresentation
-	if len(obj.History) > 0 {
-		originRepr = obj.History[0].Derivation.FromRepresentation
+	// History-free origin objects verify against genesis state directly:
+	// fold over zero hops carries no content digest of its own.
+	if len(obj.History) == 0 {
+		want := Provenance{
+			Origin:                obj.Provenance.Origin,
+			DerivedBy:             []Derivation{},
+			CurrentRepresentation: obj.Provenance.CurrentRepresentation,
+			VisibleRole:           RoleNone,
+			Authority:             ceilingForTrust(obj.Provenance.Origin.TrustClass),
+			Lineage:               []string{},
+			ContentSHA256:         digest(obj.Content),
+			Promotion:             Promotion{Continuity: ContinuityPass},
+		}
+		if !provenanceEqual(want, obj.Provenance) {
+			return fmt.Errorf("origin provenance mismatch")
+		}
+		return nil
 	}
-	fresh := fold(obj.Provenance.Origin, originRepr, obj.History, registry)
+	var originRepr string
+	originRepr = obj.History[0].Derivation.FromRepresentation
+	fresh := fold(obj.Provenance.Origin, originRepr, obj.History)
 	if !provenanceEqual(fresh, obj.Provenance) {
 		return fmt.Errorf("provenance does not match history")
+	}
+	// Registry cross-check: revalidate every recorded endorsement against
+	// the live registry. Agreement means the verdict still holds;
+	// disagreement means registry drift or tampering — both fail closed,
+	// so rejections stay rejected and acceptances stay accepted only
+	// while their basis stands.
+	for i, hop := range obj.History {
+		if hop.Endorsement == nil {
+			continue
+		}
+		parentAuthority := ""
+		if i == 0 {
+			parentAuthority = ceilingForTrust(obj.Provenance.Origin.TrustClass)
+		} else {
+			// Authority before this hop is not stored per hop; recompute
+			// the prefix fold and read it.
+			prefix := fold(obj.Provenance.Origin, originRepr, obj.History[:i])
+			parentAuthority = prefix.Authority
+		}
+		live := validEndorsement(*hop.Endorsement, hop.ParentDigest, parentAuthority, hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry)
+		if live != hop.EndorsementValid {
+			return fmt.Errorf("hop %d endorsement verdict disagrees with registry", i)
+		}
 	}
 	// Content must agree with the folded digest chain.
 	want := ""
@@ -305,6 +361,8 @@ func DenyEvidence(obj InstructionObject) []string {
 	denyReason := "insufficient authority"
 	if !obj.InstructionBearing {
 		denyReason = "not instruction-bearing content"
+	} else if p.Promotion.DigestFailure {
+		denyReason = "digest linkage broken"
 	} else if p.Promotion.Attempted {
 		denyReason = "authority-expanding instruction"
 	}

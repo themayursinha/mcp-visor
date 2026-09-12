@@ -108,6 +108,9 @@ type Promotion struct {
 	AuthorizedPromoter string `json:"authorized_promoter"`
 	EndorsementID      string `json:"endorsement_id,omitempty"`
 	Continuity         string `json:"continuity"`
+	// DigestFailure marks a digest-linkage break: the hop log no longer
+	// describes one object's history. Set by fold, read by evidence.
+	DigestFailure bool `json:"digest_failure,omitempty"`
 }
 
 // Provenance travels with every instruction-bearing object.
@@ -167,6 +170,10 @@ type Hop struct {
 	VisibleRole        string       `json:"visible_role"`
 	RequestedAuthority string       `json:"requested_authority,omitempty"`
 	Endorsement        *Endorsement `json:"endorsement,omitempty"`
+	// EndorsementValid records the append-time validation verdict. Fold
+	// honors it; VerifyProvenance cross-checks it against the live
+	// registry so drift fails loudly instead of flipping silently.
+	EndorsementValid bool `json:"endorsement_valid"`
 }
 
 // digest binds content bytes.

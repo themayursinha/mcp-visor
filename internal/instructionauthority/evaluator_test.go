@@ -432,3 +432,69 @@ func TestMultiPromotionDenialNamesImmediateAuthority(t *testing.T) {
 		t.Fatalf("honest multi-promotion object rejected: %v", err)
 	}
 }
+
+func TestRegistryDriftFailsClosedBothWays(t *testing.T) {
+	full := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	empty := map[string]TrustedPrincipal{}
+	// Accepted under full registry, promoter later removed: must fail.
+	accepted := maliciousOriginObjectForVerify(t, full)
+	if err := VerifyProvenance(accepted, map[string]TrustedPrincipal{}); err == nil {
+		_ = empty
+		t.Fatal("revoked promoter still verifies")
+	}
+	// Rejected without promoter, promoter later added: must stay failed.
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, empty)
+	repudiated := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: summaryText},
+		&Endorsement{
+			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(summaryText),
+			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
+		}, empty)
+	if err := VerifyProvenance(repudiated, full); err == nil {
+		t.Fatal("stale rejection revived by registry upgrade")
+	}
+}
+
+func TestHopContentTamperDetected(t *testing.T) {
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	obj := launder(t, nil, nil)
+	obj.History[1].Content = "rewritten memory"
+	if err := VerifyProvenance(obj, registry); err == nil {
+		t.Fatal("rewritten hop content undetected")
+	}
+}
+
+func TestEmptyOriginVerifies(t *testing.T) {
+	obj := NewOriginObject("hello", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "PROCESS", true)
+	if err := VerifyProvenance(obj, map[string]TrustedPrincipal{}); err != nil {
+		t.Fatalf("fresh origin rejected: %v", err)
+	}
+	bad := obj
+	bad.Provenance.Authority = AuthoritySystem
+	if err := VerifyProvenance(bad, map[string]TrustedPrincipal{}); err == nil {
+		t.Fatal("inflated origin authority verified")
+	}
+}
+
+func TestDigestFailureReason(t *testing.T) {
+	obj := launder(t, nil, nil)
+	obj.History[2].ParentDigest = "sha256:dead"
+	if err := VerifyProvenance(obj, map[string]TrustedPrincipal{}); err == nil {
+		t.Fatal("tampered digest chain verified")
+	}
+	// Fold the tampered log directly to observe the reason mapping.
+	fresh := fold(obj.Provenance.Origin, obj.History[0].Derivation.FromRepresentation, obj.History)
+	if !fresh.Promotion.DigestFailure {
+		t.Fatal("digest break must mark DigestFailure")
+	}
+	evidence := strings.Join(DenyEvidence(InstructionObject{
+		SchemaVersion: obj.SchemaVersion, Content: obj.Content,
+		InstructionBearing: obj.InstructionBearing, EffectClass: obj.EffectClass,
+		Provenance: fresh, History: obj.History,
+	}), "\n")
+	if !strings.Contains(evidence, "reason=digest linkage broken") {
+		t.Fatalf("wrong reason:\n%s", evidence)
+	}
+}
