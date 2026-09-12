@@ -21,101 +21,147 @@ type Transform struct {
 	NewContent string
 }
 
-// Endorsement is a structured host input authorizing one promotion. Never
-// parsed from object content.
-type Endorsement struct {
-	ID                   string
-	Promoter             string
-	GrantAuthority       string
-	ParentContentSHA     string
-	ChildContentSHA      string
-	Transformer          string
-	TargetRepresentation string
-}
-
-// TrustedPrincipal is the immutable registry entry for a promoter.
-type TrustedPrincipal struct {
-	Name    string
-	Ceiling string
-}
-
-// ApplyTransform returns the object after one transformation. Origin and
-// earlier derivations are copied forward and cannot be replaced. Without a
-// valid endorsement, output authority never exceeds input authority: a
-// requested increase is recorded as attempted, clamped, and fails
-// continuity. FAILED continuity is sticky.
+// ApplyTransform returns the object after one transformation. It appends
+// one hop record and recomputes Provenance from scratch via fold: no
+// derived field is ever mutated piecemeal, so authority, lineage,
+// promotion outcomes, digests, and representations cannot drift apart.
 func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, registry map[string]TrustedPrincipal) InstructionObject {
-	next := InstructionObject{
-		SchemaVersion:      obj.SchemaVersion,
-		Content:            t.NewContent,
-		InstructionBearing: obj.InstructionBearing,
-		EffectClass:        obj.EffectClass,
-		Provenance: Provenance{
-			Origin:                obj.Provenance.Origin,
-			DerivedBy:             append(append([]Derivation{}, obj.Provenance.DerivedBy...), Derivation{Transformer: t.Transformer, FromRepresentation: obj.Provenance.CurrentRepresentation, ViaRepresentation: t.Via, ToRepresentation: t.To}),
-			CurrentRepresentation: t.To,
-			VisibleRole:           t.VisibleRole,
-			Authority:             obj.Provenance.Authority,
-			Lineage:               append(append([]string{}, obj.Provenance.Lineage...), obj.Provenance.Authority),
-			ContentSHA256:         digest(t.NewContent),
-			ParentContentSHA256:   obj.Provenance.ContentSHA256,
-			Promotion:             obj.Provenance.Promotion,
+	parentDigest := digest(obj.Content)
+	var endorsed *Endorsement
+	if endorse != nil {
+		copied := *endorse
+		endorsed = &copied
+	}
+	hop := Hop{
+		Derivation: Derivation{
+			Transformer:        t.Transformer,
+			FromRepresentation: obj.Provenance.CurrentRepresentation,
+			ViaRepresentation:  t.Via,
+			ToRepresentation:   t.To,
 		},
+		Content:            t.NewContent,
+		ContentDigest:      digest(t.NewContent),
+		ParentDigest:       parentDigest,
+		VisibleRole:        t.VisibleRole,
+		RequestedAuthority: t.RequestedAuthority,
+		Endorsement:        endorsed,
+	}
+	next := InstructionObject{
+		SchemaVersion:       obj.SchemaVersion,
+		Content:             t.NewContent,
+		InstructionBearing:  obj.InstructionBearing,
+		EffectClass:         obj.EffectClass,
+		History:             append(append([]Hop{}, obj.History...), hop),
 		InstructionEligible: false,
 	}
-	// A new promotion attempt starts from clean attempt state: inherited
-	// endorsement IDs and promoters belong to a past attempt and must not
-	// ride along, whether this attempt succeeds, fails, or lands on an
-	// already-failed lineage.
-	if t.RequestedAuthority != "" {
-		next.Provenance.Promotion.Attempted = true
-		next.Provenance.Promotion.RequestedAuthority = t.RequestedAuthority
-		next.Provenance.Promotion.EndorsementID = ""
-		next.Provenance.Promotion.AuthorizedPromoter = ""
-	}
-	// Sticky failure: an already-failed lineage cannot wash clean. Later
-	// attempts are still recorded (requested authority updated) so the
-	// evidence never hides an escalation that followed the first failure.
-	if obj.Provenance.Promotion.Continuity == ContinuityFailed {
-		return next
-	}
-	if t.RequestedAuthority == "" {
-		return next
-	}
-	if endorse != nil && validEndorsement(*endorse, obj, next, t, registry) {
-		next.Provenance.Authority = endorse.GrantAuthority
-		next.Provenance.Promotion.AuthorizedPromoter = endorse.Promoter
-		next.Provenance.Promotion.EndorsementID = endorse.ID
-		next.Provenance.Promotion.Continuity = ContinuityPass
-		next.Provenance.Lineage[len(next.Provenance.Lineage)-1] = endorse.GrantAuthority
-		return next
-	}
-	// Clamp to input authority and fail continuity.
-	next.Provenance.Promotion.Continuity = ContinuityFailed
+	next.Provenance = fold(obj.Provenance.Origin, obj.Provenance.CurrentRepresentation, next.History, registry)
 	return next
 }
 
-// validEndorsement checks an endorsement against the registry and both
-// object states. Every binding must match exactly, including the requested
-// authority: a SYSTEM grant for a USER request is not a narrow endorsement.
-func validEndorsement(e Endorsement, parent, child InstructionObject, t Transform, registry map[string]TrustedPrincipal) bool {
+// fold recomputes the full Provenance from origin plus the append-only hop
+// log. It is the sole writer of derived state: every rule below sees the
+// same inputs in the same order, so field-level staleness (stale IDs,
+// hidden escalations, misattributed reasons, phantom depths) is
+// structurally impossible.
+func fold(origin Origin, originRepr string, hops []Hop, registry map[string]TrustedPrincipal) Provenance {
+	prov := Provenance{
+		Origin:                origin,
+		DerivedBy:             []Derivation{},
+		CurrentRepresentation: originRepr,
+		VisibleRole:           RoleNone,
+		Authority:             ceilingForTrust(origin.TrustClass),
+		Lineage:               []string{},
+		ContentSHA256:         "",
+		Promotion:             Promotion{Continuity: ContinuityPass},
+	}
+	runningDigest := ""
+	if len(hops) > 0 {
+		runningDigest = hops[0].ParentDigest
+	}
+	for hi, hop := range hops {
+		if hop.Endorsement != nil {
+		} else {
+		}
+		_ = hi
+		// Digest linkage: each hop must chain to the previous content.
+		// A break fails continuity: the log no longer describes one
+		// object's history.
+		if hop.ParentDigest != runningDigest && runningDigest != "" {
+			prov.Promotion.Attempted = prov.Promotion.Attempted || hop.RequestedAuthority != ""
+			if hop.RequestedAuthority != "" {
+				prov.Promotion.RequestedAuthority = hop.RequestedAuthority
+			}
+			prov.Promotion.Continuity = ContinuityFailed
+			prov.Lineage = append(prov.Lineage, prov.Authority)
+			prov.DerivedBy = append(prov.DerivedBy, hop.Derivation)
+			prov.CurrentRepresentation = hop.Derivation.ToRepresentation
+			prov.VisibleRole = hop.VisibleRole
+			prov.ContentSHA256 = hop.ContentDigest
+			continue
+		}
+		prov.DerivedBy = append(prov.DerivedBy, hop.Derivation)
+		prov.Lineage = append(prov.Lineage, prov.Authority)
+		prov.CurrentRepresentation = hop.Derivation.ToRepresentation
+		prov.VisibleRole = hop.VisibleRole
+		prov.ParentContentSHA256 = runningDigest
+		prov.ContentSHA256 = hop.ContentDigest
+		runningDigest = hop.ContentDigest
+		// A new promotion attempt starts from clean attempt state:
+		// inherited endorsement IDs and promoters belong to a past
+		// attempt and must not ride along.
+		if hop.RequestedAuthority != "" {
+			prov.Promotion.Attempted = true
+			prov.Promotion.RequestedAuthority = hop.RequestedAuthority
+			prov.Promotion.EndorsementID = ""
+			prov.Promotion.AuthorizedPromoter = ""
+		}
+		// Sticky failure: an already-failed lineage cannot wash clean.
+		// Attempts are still recorded above so evidence never hides a
+		// later escalation.
+		if prov.Promotion.Continuity == ContinuityFailed {
+			continue
+		}
+		if hop.RequestedAuthority == "" {
+			continue
+		}
+		if hop.Endorsement != nil {
+		}
+		if hop.Endorsement != nil && validEndorsement(*hop.Endorsement, hop.ParentDigest, prov.Authority, hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry) {
+			prov.Authority = hop.Endorsement.GrantAuthority
+			prov.Promotion.AuthorizedPromoter = hop.Endorsement.Promoter
+			prov.Promotion.EndorsementID = hop.Endorsement.ID
+			prov.Promotion.Continuity = ContinuityPass
+			prov.Lineage[len(prov.Lineage)-1] = hop.Endorsement.GrantAuthority
+			continue
+		}
+		// Clamp to input authority and fail continuity.
+		prov.Promotion.Continuity = ContinuityFailed
+	}
+	return prov
+}
+
+// validEndorsement checks an endorsement against the registry and the hop's
+// recorded digests, transformer, target, and requested authority. Every
+// binding must match exactly, including grant == requested: a SYSTEM grant
+// for a USER request is not a narrow endorsement.
+func validEndorsement(e Endorsement, parentDigest, parentAuthority, childDigest, transformer, to, requested string, registry map[string]TrustedPrincipal) bool {
 	if e.ID == "" || e.Promoter == "" || e.GrantAuthority == "" {
 		return false
 	}
-	if t.RequestedAuthority == "" || e.GrantAuthority != t.RequestedAuthority {
+	if requested == "" || e.GrantAuthority != requested {
 		return false
 	}
 	promoter, ok := registry[e.Promoter]
 	if !ok {
 		return false
 	}
-	if e.ParentContentSHA != parent.Provenance.ContentSHA256 {
+	if e.ParentContentSHA != parentDigest {
 		return false
 	}
-	if e.ChildContentSHA != child.Provenance.ContentSHA256 {
+	if e.ChildContentSHA != childDigest {
 		return false
 	}
-	if e.Transformer != t.Transformer || e.TargetRepresentation != t.To {
+	if e.Transformer != transformer || e.TargetRepresentation != to {
 		return false
 	}
 	grantRank, err := authorityRank(e.GrantAuthority)
@@ -129,18 +175,69 @@ func validEndorsement(e Endorsement, parent, child InstructionObject, t Transfor
 	if grantRank > ceilRank {
 		return false
 	}
-	inRank, err := authorityRank(parent.Provenance.Authority)
+	inRank, err := authorityRank(parentAuthority)
 	if err != nil {
 		return false
 	}
 	// The promoter must stand strictly above the input authority: peers
-	// cannot promote each other. The promoter's own authority is its
-	// registered ceiling.
+	// cannot promote each other.
 	if ceilRank <= inRank {
 		return false
 	}
 	if grantRank <= inRank {
 		return false
+	}
+	return true
+}
+
+// VerifyProvenance recomputes the provenance from origin and history and
+// reports divergence: any hand-edited Authority, Lineage, Promotion,
+// digest, representation, or derivation fails. Untrusted bytes must pass
+// through here before Authorize.
+func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipal) error {
+	originRepr := obj.Provenance.CurrentRepresentation
+	if len(obj.History) > 0 {
+		originRepr = obj.History[0].Derivation.FromRepresentation
+	}
+	fresh := fold(obj.Provenance.Origin, originRepr, obj.History, registry)
+	if !provenanceEqual(fresh, obj.Provenance) {
+		return fmt.Errorf("provenance does not match history")
+	}
+	// Content must agree with the folded digest chain.
+	want := ""
+	if len(obj.History) > 0 {
+		want = obj.History[len(obj.History)-1].ContentDigest
+	} else {
+		want = digest(obj.Content)
+	}
+	if obj.Provenance.ContentSHA256 != want {
+		return fmt.Errorf("content digest does not match history")
+	}
+	if digest(obj.Content) != want {
+		return fmt.Errorf("content does not match digest chain")
+	}
+	return nil
+}
+
+func provenanceEqual(a, b Provenance) bool {
+	if a.Origin != b.Origin || a.CurrentRepresentation != b.CurrentRepresentation ||
+		a.VisibleRole != b.VisibleRole || a.Authority != b.Authority ||
+		a.ContentSHA256 != b.ContentSHA256 || a.ParentContentSHA256 != b.ParentContentSHA256 ||
+		a.Promotion != b.Promotion {
+		return false
+	}
+	if len(a.Lineage) != len(b.Lineage) || len(a.DerivedBy) != len(b.DerivedBy) {
+		return false
+	}
+	for i := range a.Lineage {
+		if a.Lineage[i] != b.Lineage[i] {
+			return false
+		}
+	}
+	for i := range a.DerivedBy {
+		if a.DerivedBy[i] != b.DerivedBy[i] {
+			return false
+		}
 	}
 	return true
 }
@@ -181,7 +278,10 @@ func DenyEvidence(obj InstructionObject) []string {
 	}
 	from := p.Authority
 	if len(p.Lineage) > 0 {
-		from = p.Lineage[0]
+		// Immediate pre-attempt authority: the entry this hop appended,
+		// not the first hop. Multi-promotion denials name the actual
+		// denied transition (DEVELOPER->SYSTEM, not USER->SYSTEM).
+		from = p.Lineage[len(p.Lineage)-1]
 	}
 	to := p.Authority
 	if p.Promotion.RequestedAuthority != "" {

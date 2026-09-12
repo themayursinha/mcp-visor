@@ -120,6 +120,7 @@ func TestExplicitHigherAuthorityEndorsementIsNarrowlyBound(t *testing.T) {
 	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthorityDeveloper}}
 	obj := maliciousOrigin()
 	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, registry)
+	println("DEBUG test: obj.Content before call2 = " + obj.Content)
 	upgraded := ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, VisibleRole: RoleUser, RequestedAuthority: AuthorityUser, NewContent: summaryText},
 		&Endorsement{
 			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
@@ -351,5 +352,83 @@ func TestMemoryPersistencePreservesProvenance(t *testing.T) {
 	}
 	if reloaded.Provenance.Promotion.Continuity != ContinuityFailed {
 		t.Fatal("continuity lost across persistence")
+	}
+}
+
+func TestVerifyProvenanceAcceptsHonestObjects(t *testing.T) {
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	obj := launder(t, nil, nil)
+	if err := VerifyProvenance(obj, registry); err != nil {
+		t.Fatalf("honest object rejected: %v", err)
+	}
+	obj2 := maliciousOriginObjectForVerify(t, registry)
+	if err := VerifyProvenance(obj2, registry); err != nil {
+		t.Fatalf("honest endorsed object rejected: %v", err)
+	}
+}
+
+func maliciousOriginObjectForVerify(t *testing.T, registry map[string]TrustedPrincipal) InstructionObject {
+	t.Helper()
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, NewContent: summaryText}, nil, registry)
+	return ApplyTransform(obj, Transform{Transformer: "agent_summarizer", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: summaryText},
+		&Endorsement{
+			ID: "e-1", Promoter: "op:marina", GrantAuthority: AuthorityUser,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(summaryText),
+			Transformer:      "agent_summarizer", TargetRepresentation: ReprAgentSummary,
+		}, registry)
+}
+
+func TestVerifyProvenanceDetectsTampering(t *testing.T) {
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	for _, mutate := range []struct {
+		name string
+		fn   func(*InstructionObject)
+	}{
+		{"authority", func(b *InstructionObject) { b.Provenance.Authority = AuthoritySystem }},
+		{"lineage", func(b *InstructionObject) { b.Provenance.Lineage = []string{AuthoritySystem} }},
+		{"promotion", func(b *InstructionObject) { b.Provenance.Promotion.Continuity = ContinuityPass }},
+		{"digest", func(b *InstructionObject) { b.Provenance.ContentSHA256 = "sha256:dead" }},
+		{"representation", func(b *InstructionObject) { b.Provenance.CurrentRepresentation = ReprSystemPrompt() }},
+	} {
+		obj := launder(t, nil, nil)
+		mutate.fn(&obj)
+		if err := VerifyProvenance(obj, registry); err == nil {
+			t.Fatalf("%s tampering undetected", mutate.name)
+		}
+	}
+}
+
+func ReprSystemPrompt() string { return "SYSTEM_PROMPT" }
+
+func TestMultiPromotionDenialNamesImmediateAuthority(t *testing.T) {
+	// DATA_ONLY -> USER -> DEVELOPER, then a rejected SYSTEM request: the
+	// evidence must name DEVELOPER->SYSTEM, not the first hop.
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	endorse := func(obj InstructionObject, grant string) *Endorsement {
+		return &Endorsement{
+			ID: "e-" + grant, Promoter: "op:marina", GrantAuthority: grant,
+			ParentContentSHA: obj.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(obj.Content + grant),
+			Transformer:      "promote", TargetRepresentation: ReprAgentSummary,
+		}
+	}
+	obj := maliciousOrigin()
+	obj = ApplyTransform(obj, Transform{Transformer: "promote", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: obj.Content + AuthorityUser}, endorse(obj, AuthorityUser), registry)
+	if obj.Provenance.Authority != AuthorityUser {
+		t.Fatalf("precondition: first promotion failed: %s", obj.Provenance.Authority)
+	}
+	obj = ApplyTransform(obj, Transform{Transformer: "promote", To: ReprAgentSummary, RequestedAuthority: AuthorityDeveloper, NewContent: obj.Content + AuthorityDeveloper}, endorse(obj, AuthorityDeveloper), registry)
+	if obj.Provenance.Authority != AuthorityDeveloper {
+		t.Fatalf("precondition: second promotion failed: %s", obj.Provenance.Authority)
+	}
+	obj = ApplyTransform(obj, Transform{Transformer: "promote", To: ReprAgentSummary, RequestedAuthority: AuthoritySystem, NewContent: obj.Content + AuthoritySystem}, nil, registry)
+	evidence := strings.Join(DenyEvidence(obj), "\n")
+	if !strings.Contains(evidence, "authority transition DEVELOPER->SYSTEM") {
+		t.Fatalf("wrong pre-attempt authority:\n%s", evidence)
+	}
+	if err := VerifyProvenance(obj, registry); err != nil {
+		t.Fatalf("honest multi-promotion object rejected: %v", err)
 	}
 }

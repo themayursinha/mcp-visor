@@ -125,13 +125,48 @@ type Provenance struct {
 
 // InstructionObject is one materialized instruction-bearing object.
 // InstructionBearing and EffectClass are fixture-supplied, never inferred.
+// History is the append-only derivation log; Provenance is the fold's
+// read-only view over Origin and History (see fold in evaluator.go).
 type InstructionObject struct {
 	SchemaVersion       int        `json:"schema_version"`
 	Content             string     `json:"content"`
 	InstructionBearing  bool       `json:"instruction_bearing"`
 	EffectClass         string     `json:"effect_class"`
 	Provenance          Provenance `json:"provenance"`
+	History             []Hop      `json:"history"`
 	InstructionEligible bool       `json:"instruction_eligible"`
+}
+
+// Endorsement is a structured host input authorizing one promotion. Never
+// parsed from object content.
+type Endorsement struct {
+	ID                   string `json:"id"`
+	Promoter             string `json:"promoter"`
+	GrantAuthority       string `json:"grant_authority"`
+	ParentContentSHA     string `json:"parent_content_sha"`
+	ChildContentSHA      string `json:"child_content_sha"`
+	Transformer          string `json:"transformer"`
+	TargetRepresentation string `json:"target_representation"`
+}
+
+// TrustedPrincipal is the immutable registry entry for a promoter.
+type TrustedPrincipal struct {
+	Name    string `json:"name"`
+	Ceiling string `json:"ceiling"`
+}
+
+// Hop is one appended derivation record. Append-only: once recorded, a hop
+// is never edited in place. The fold derives all state (authority,
+// lineage, promotion outcomes, digests, representations) from Origin plus
+// the hop log, so derived fields cannot go stale relative to each other.
+type Hop struct {
+	Derivation         Derivation   `json:"derivation"`
+	Content            string       `json:"content"`
+	ContentDigest      string       `json:"content_digest"`
+	ParentDigest       string       `json:"parent_digest"`
+	VisibleRole        string       `json:"visible_role"`
+	RequestedAuthority string       `json:"requested_authority,omitempty"`
+	Endorsement        *Endorsement `json:"endorsement,omitempty"`
 }
 
 // digest binds content bytes.
