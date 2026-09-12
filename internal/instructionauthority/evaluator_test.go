@@ -23,13 +23,18 @@ func maliciousOrigin() InstructionObject {
 }
 
 func mustRoot(obj InstructionObject) EvaluationRoot {
-	return EvaluationRoot{Origin: obj.Provenance.Origin, InstructionBearing: obj.InstructionBearing}
+	return EvaluationRoot{
+		Origin:             obj.Provenance.Origin,
+		InstructionBearing: obj.InstructionBearing,
+		EffectClass:        obj.EffectClass,
+	}
 }
 
 func maliciousRoot() EvaluationRoot {
 	return EvaluationRoot{
 		Origin:             Origin{Principal: "mcp:malicious-server", TrustClass: TrustUntrustedMCPResponse},
 		InstructionBearing: true,
+		EffectClass:        "PROCESS",
 	}
 }
 
@@ -653,6 +658,44 @@ func TestDenyEvidenceRootMismatchUsesHeldOrigin(t *testing.T) {
 	}
 	if !strings.Contains(evidence, "untrusted MCP response") {
 		t.Fatalf("held origin missing from evidence:\n%s", evidence)
+	}
+}
+
+func TestAuthorizeIgnoresSmashedProvenance(t *testing.T) {
+	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
+	root := mustRoot(obj)
+	obj.Provenance = Provenance{
+		Origin:                root.Origin,
+		CurrentRepresentation: ReprSecondAgentMessage,
+		VisibleRole:           RoleUser,
+		Authority:             AuthoritySystem,
+		Lineage:               []string{AuthoritySystem},
+		ContentSHA256:         "sha256:dead",
+		Promotion:             Promotion{Attempted: false, Continuity: ContinuityPass, AuthorizedPromoter: "ghost"},
+	}
+	obj.InstructionEligible = true
+	execute, reason := Authorize(obj, root)
+	if execute {
+		t.Fatalf("smashed provenance authorized: %s", reason)
+	}
+	if reason != "insufficient authority" {
+		t.Fatalf("reason=%q want insufficient authority (folded DATA_ONLY)", reason)
+	}
+}
+
+func TestDenyEvidenceEffectClassFromRoot(t *testing.T) {
+	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
+	root := mustRoot(obj)
+	obj.EffectClass = "NETWORK"
+	evidence := strings.Join(DenyEvidence(obj, root), "\n")
+	if !strings.Contains(evidence, "reason=evaluation root mismatch") {
+		t.Fatalf("effect-class drift must mismatch the held root:\n%s", evidence)
+	}
+	if strings.Contains(evidence, "effect class NETWORK") {
+		t.Fatalf("evidence used stored effect class:\n%s", evidence)
+	}
+	if !strings.Contains(evidence, "effect class PROCESS") {
+		t.Fatalf("held effect class missing:\n%s", evidence)
 	}
 }
 

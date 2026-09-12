@@ -360,6 +360,9 @@ func matchRoot(obj InstructionObject, root EvaluationRoot) error {
 	if obj.InstructionBearing != root.InstructionBearing {
 		return fmt.Errorf("instruction-bearing does not match evaluation root")
 	}
+	if obj.EffectClass != root.EffectClass {
+		return fmt.Errorf("effect class does not match evaluation root")
+	}
 	return nil
 }
 
@@ -480,7 +483,7 @@ func DenyEvidence(obj InstructionObject, root EvaluationRoot) []string {
 	return []string{
 		"policy_decision=deny  policy_rule=instruction_authority_continuity",
 		"reason=" + denyReason,
-		fmt.Sprintf("argument class %s  effect class %s", argClass, obj.EffectClass),
+		fmt.Sprintf("argument class %s  effect class %s", argClass, root.EffectClass),
 		fmt.Sprintf("visible role %s  original principal %s", p.VisibleRole, describeOrigin(p.Origin)),
 		fmt.Sprintf("authority transition %s->%s", from, to),
 		"lineage " + lineage,

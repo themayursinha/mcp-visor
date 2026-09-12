@@ -92,6 +92,7 @@ func runProtected(scen scenario) error {
 	root := instructionauthority.EvaluationRoot{
 		Origin:             instructionauthority.Origin{Principal: scen.OriginPrincipal, TrustClass: scen.OriginTrustClass},
 		InstructionBearing: true,
+		EffectClass:        "PROCESS",
 	}
 	origin := instructionauthority.NewOriginObject(
 		scen.MaliciousMCPOutput,
