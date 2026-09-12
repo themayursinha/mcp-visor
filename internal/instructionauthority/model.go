@@ -17,8 +17,9 @@ const SchemaVersion = 1
 
 // MaxHistoryHops is the cardinality bound on untrusted History. The
 // supported laundering path is a handful of representation hops; longer
-// decoded logs are not in the model. Evaluation, verification, evidence,
-// and ApplyTransform fail closed at this bound without walking extra hops.
+// logs are not in the model. Verify, Authorize, DenyEvidence, and fold
+// fail closed at this bound without walking extra hops. ApplyTransform
+// may append one more hop; evaluation then denies on length.
 const MaxHistoryHops = 8
 
 // Authority levels, fixed total order. Roles, representations, storage

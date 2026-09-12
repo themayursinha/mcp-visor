@@ -894,21 +894,39 @@ func TestHistoryOverBoundFailsClosed(t *testing.T) {
 	}
 }
 
-func TestApplyTransformStopsAtBound(t *testing.T) {
-	obj := rejectedHistory(MaxHistoryHops)
+func TestApplyTransformPastBoundDoesNotAuthorize(t *testing.T) {
+	obj := NewOriginObject("do the task", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "PROCESS", true)
+	for i := 0; i < MaxHistoryHops; i++ {
+		obj = ApplyTransform(obj, Transform{
+			Transformer: "stage", To: ReprAgentSummary, NewContent: obj.Content + string(rune('a'+i%26)),
+		}, nil, nil)
+	}
+	if len(obj.History) != MaxHistoryHops {
+		t.Fatalf("history=%d want %d", len(obj.History), MaxHistoryHops)
+	}
+	if execute, reason := Authorize(obj, mustRoot(obj)); !execute {
+		t.Fatalf("at-bound trusted USER must authorize, got %q", reason)
+	}
 	next := ApplyTransform(obj, Transform{
 		Transformer: "stage", To: ReprAgentSummary, NewContent: obj.Content + "z",
 	}, nil, nil)
-	if len(next.History) != MaxHistoryHops {
-		t.Fatalf("history grew past bound: %d", len(next.History))
+	if len(next.History) != MaxHistoryHops+1 {
+		t.Fatalf("history=%d want %d", len(next.History), MaxHistoryHops+1)
 	}
-	if next.Content != obj.Content {
-		t.Fatalf("over-bound transform replaced content")
+	execute, reason := Authorize(next, mustRoot(next))
+	if execute {
+		t.Fatal("past-bound trusted history authorized")
 	}
-	if next.Provenance.Promotion.Continuity != ContinuityFailed || !next.Provenance.Promotion.DigestFailure {
-		t.Fatalf("over-bound transform not poisoned: %+v", next.Provenance.Promotion)
+	if reason != reasonHistoryExceedsBound {
+		t.Fatalf("reason=%q want %q", reason, reasonHistoryExceedsBound)
 	}
-	if execute, _ := Authorize(next, mustRoot(next)); execute {
-		t.Fatal("poisoned at-bound object authorized")
+	if err := VerifyProvenance(next, mustRoot(next), nil); err == nil {
+		t.Fatal("past-bound history verified")
+	}
+	stuck := ApplyTransform(next, Transform{
+		Transformer: "stage", To: ReprAgentSummary, NewContent: next.Content + "more",
+	}, nil, nil)
+	if len(stuck.History) != MaxHistoryHops+1 {
+		t.Fatalf("history kept growing: %d", len(stuck.History))
 	}
 }

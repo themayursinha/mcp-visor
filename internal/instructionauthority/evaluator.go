@@ -28,15 +28,12 @@ const reasonHistoryExceedsBound = "history exceeds bound"
 // one hop record and recomputes Provenance from scratch via fold: no
 // derived field is ever mutated piecemeal, so authority, lineage,
 // promotion outcomes, digests, and representations cannot drift apart.
-// A History already at MaxHistoryHops is poisoned in place: no further
-// hop is appended, and continuity fails closed.
+// A hop at MaxHistoryHops is still appended so History length itself
+// becomes the deny signal (Authorize ignores stored Provenance). Further
+// transforms do not grow the log. Evaluation never walks past the bound.
 func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, registry map[string]TrustedPrincipal) InstructionObject {
-	if len(obj.History) >= MaxHistoryHops {
-		poisoned := obj
-		poisoned.InstructionEligible = false
-		poisoned.Provenance.Promotion.Continuity = ContinuityFailed
-		poisoned.Provenance.Promotion.DigestFailure = true
-		return poisoned
+	if len(obj.History) > MaxHistoryHops {
+		return obj
 	}
 	parentDigest := digest(obj.Content)
 	parentHop := parentDigest
