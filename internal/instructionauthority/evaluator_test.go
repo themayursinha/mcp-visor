@@ -289,3 +289,31 @@ func TestNonBearingEvidenceDerived(t *testing.T) {
 		t.Fatalf("contradicts serialized instruction_bearing:false:\n%s", evidence)
 	}
 }
+
+func TestNonBearingNeverAuthorizes(t *testing.T) {
+	// Trusted USER origin, no promotion needed — but content is DATA, not
+	// an instruction: executing it would mistake data for orders.
+	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
+	obj.Provenance.Authority = AuthorityUser
+	if execute, _ := Authorize(obj); execute {
+		t.Fatal("non-bearing content authorized as instruction")
+	}
+}
+
+func TestDenyReasonDerivedFromState(t *testing.T) {
+	// No promotion attempted: reason must not claim an expansion.
+	obj := NewOriginObject("x", Origin{Principal: "mcp:s", TrustClass: TrustUntrustedMCPResponse}, ReprMCPOutput, "PROCESS", true)
+	evidence := strings.Join(DenyEvidence(obj), "\n")
+	if !strings.Contains(evidence, "reason=insufficient authority") {
+		t.Fatalf("unattempted denial mislabeled:\n%s", evidence)
+	}
+	if strings.Contains(evidence, "authority-expanding") {
+		t.Fatalf("phantom expansion claimed:\n%s", evidence)
+	}
+	// Attempted promotion keeps the contracted literal.
+	laundered := launder(t, nil, nil)
+	evidence = strings.Join(DenyEvidence(laundered), "\n")
+	if !strings.Contains(evidence, "reason=authority-expanding instruction") {
+		t.Fatalf("attempted denial mislabeled:\n%s", evidence)
+	}
+}

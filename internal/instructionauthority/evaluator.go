@@ -150,6 +150,9 @@ func validEndorsement(e Endorsement, parent, child InstructionObject, t Transfor
 // Failure never invokes the executor: content returns as an untrusted
 // observation (instruction_eligible=false).
 func Authorize(obj InstructionObject) (execute bool, reason string) {
+	if !obj.InstructionBearing {
+		return false, "not instruction-bearing"
+	}
 	if obj.Provenance.Promotion.Continuity == ContinuityFailed {
 		return false, "continuity FAILED"
 	}
@@ -196,9 +199,17 @@ func DenyEvidence(obj InstructionObject) []string {
 	if !obj.InstructionBearing {
 		argClass = "DATA"
 	}
+	// The reason derives from the denial state: attempted promotions name
+	// the expansion; all other denials (insufficient authority, non-bearing
+	// content) name the shortfall. Fixture attempts keep the exact
+	// contracted literal.
+	denyReason := "insufficient authority"
+	if p.Promotion.Attempted {
+		denyReason = "authority-expanding instruction"
+	}
 	return []string{
 		"policy_decision=deny  policy_rule=instruction_authority_continuity",
-		"reason=authority-expanding instruction",
+		"reason=" + denyReason,
 		fmt.Sprintf("argument class %s  effect class %s", argClass, obj.EffectClass),
 		fmt.Sprintf("visible role %s  original principal %s", p.VisibleRole, describeOrigin(p.Origin)),
 		fmt.Sprintf("authority transition %s->%s", from, to),
