@@ -230,8 +230,7 @@ func VerifyProvenance(obj InstructionObject, registry map[string]TrustedPrincipa
 		}
 		return nil
 	}
-	var originRepr string
-	originRepr = obj.History[0].Derivation.FromRepresentation
+	originRepr := obj.History[0].Derivation.FromRepresentation
 	fresh := fold(obj.Provenance.Origin, originRepr, obj.History)
 	if !provenanceEqual(fresh, obj.Provenance) {
 		return fmt.Errorf("provenance does not match history")
