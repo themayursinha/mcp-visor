@@ -1,0 +1,55 @@
+{
+  "task_id": "T-SWARM-BUDGET-001",
+  "invariant_ids": ["H37"],
+  "security_sensitive": true,
+  "security_problem": "Per-agent limits are not a swarm boundary: 100 workers against 1,000 hosts will exceed 25 authorized targets unless the campaign budget is enforced. Trusted: EvaluationRoot campaign budget and caller-held CampaignState. Untrusted: worker claims, contradictory instructions, claimed host-authorized / concurrent-ok / approval flags.",
+  "required_behavior": "Authorize ignores claimed flags and evaluates C1–C9 against the held budget and state. Enabled ALLOW requires exact per-target authority and unexhausted target-count, concurrency, injected-tick rate, and harvest ceilings; domain escalation requires held target-specific approval. Disabled budget is the negative control (proof DISABLED, not VALID). Evidence is the fixed eight-element array on Decision. Authorize does not mutate state.",
+  "failure_behavior": "The disabled 100-action sequence fires 100 callbacks and exceeds 25 targets. Enabled Visor admits exactly 25 and denies records 26–100 for target authority absent. Concurrency, rate, harvest, and domain-approval fixtures deny. Malformed state and schema mismatch invalidate the root.",
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-SWARM-BUDGET-001.json",
+    "internal/swarmbudget/model.go",
+    "internal/swarmbudget/evaluator.go",
+    "internal/swarmbudget/evaluator_test.go",
+    "examples/swarm-budget/scenario.json",
+    "examples/swarm-budget/main.go",
+    "tests/integration/swarm_authority_budget_demo_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./internal/swarmbudget", "-run", "TestRedDisabledBudgetExceedsAuthorizedTargets", "-count", "1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/swarmbudget", "-count", "1"]},
+    {"name": "race", "expect": "pass", "argv": ["go", "test", "-race", "./internal/swarmbudget", "-count", "1"]},
+    {"name": "demo", "expect": "pass", "argv": ["go", "test", "./tests/integration", "-run", "TestSwarmAuthorityBudgetDemo", "-count", "1"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count", "1", "-timeout", "120s"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "Goroutine-scale claims",
+    "Real workers, hosts, PaperCut, CVEs, scanning, or exploitation",
+    "Sockets, network, or processes",
+    "Filesystem or result files",
+    "Wall clock",
+    "HMAC, signatures, or receipts",
+    "Proxy, policy, audit, or CLI integration",
+    "NLP, graphs, or model calls",
+    "Sibling proof-package imports",
+    "New dependencies",
+    "Production-prevention claims",
+    "Autonomous merge, tag, or release"
+  ],
+  "attack_classes": [
+    {"id": "unauthorized-target", "failure_class": "unauthorized-target", "expected": "host-0026 is denied for target authority absent"},
+    {"id": "contradictory-worker-instruction", "failure_class": "contradictory-worker-instruction", "expected": "ignore-budget instructions cannot authorize"},
+    {"id": "claimed-authority-smashing", "failure_class": "claimed-authority-smashing", "expected": "claimed host-authorized flags cannot authorize"},
+    {"id": "target-budget-exhaustion", "failure_class": "target-budget-exhaustion", "expected": "admission cap denies a new authorized target"},
+    {"id": "concurrent-principal-exhaustion", "failure_class": "concurrent-principal-exhaustion", "expected": "sixth distinct principal is denied"},
+    {"id": "target-authorization-rate-exhaustion", "failure_class": "target-authorization-rate-exhaustion", "expected": "sixth new target in the same tick is denied"},
+    {"id": "credential-harvest-exhaustion", "failure_class": "credential-harvest-exhaustion", "expected": "fourth harvest target is denied"},
+    {"id": "domain-approval-bypass", "failure_class": "domain-approval-bypass", "expected": "claimed approval cannot substitute held approval"},
+    {"id": "malformed-state", "failure_class": "malformed-state", "expected": "state that names an unauthorized admitted target invalidates the root"},
+    {"id": "disabled-budget-negative-control", "failure_class": "disabled-budget-negative-control", "expected": "disabled budget exceeds 25 targets"}
+  ]
+}
