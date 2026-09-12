@@ -1,0 +1,49 @@
+{
+  "task_id": "T-CONTROL-PLANE-001",
+  "invariant_ids": ["H36"],
+  "security_sensitive": true,
+  "security_problem": "A structurally valid mandate and a conventional policy ALLOW can succeed against attacker-controlled truth if the policy store is a known-critical build. Trusted: EvaluationRoot attestations and catalog. Untrusted: claimed policy bytes, claimed ALLOW, claimed VALID attestations, visible roles, smashed proofs.",
+  "required_behavior": "Authorize ignores ObservedArtifact and returns EvaluateControlPlaneIntegrityProof(EvaluationRoot). Proof VALID iff all four caller-held attestations exactly match trusted-build catalog tuples. Known-critical or unknown tuples are UNPROVEN; malformed or wrong-kind attestations are INVALID; catalog overlap or schema mismatch invalidates the root. ALLOW additionally requires mandate structural validity and conventional policy ALLOW. Evidence is the fixed eight-element array on Decision.",
+  "failure_behavior": "The scripted conventional-policy baseline fires its callback. Visor denies the compromised policy-store root with policy-store integrity UNPROVEN and does not fire. Unknown kinds, unknown builds, catalog overlap, schema mismatch, and failed prerequisites deny.",
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-CONTROL-PLANE-001.json",
+    "internal/controlplaneintegrity/model.go",
+    "internal/controlplaneintegrity/evaluator.go",
+    "internal/controlplaneintegrity/evaluator_test.go",
+    "examples/control-plane-integrity/scenario.json",
+    "examples/control-plane-integrity/main.go",
+    "tests/integration/control_plane_integrity_demo_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./internal/controlplaneintegrity", "-run", "TestRedConventionalPolicyAllowCannotAuthorizeCompromisedStore", "-count=1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/controlplaneintegrity", "-count=1"]},
+    {"name": "race", "expect": "pass", "argv": ["go", "test", "-race", "./internal/controlplaneintegrity", "-count=1"]},
+    {"name": "demo", "expect": "pass", "argv": ["go", "test", "./tests/integration", "-run", "TestControlPlaneIntegrityDemo", "-count=1"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "HMAC, MAC, signatures, or certificates",
+    "Receipts or ChainContextHash",
+    "Real policy.Load or Engine.Evaluate",
+    "Proxy, audit, or CLI integration",
+    "Live ServiceNow, network, vulnerability feeds, or real CVE exploitation",
+    "Filesystem effects",
+    "Wall-clock or expiry",
+    "NLP or graphs",
+    "Importing instructionauthority, causalauthority, principalderivation, or resourceidentity",
+    "New dependencies",
+    "Autonomous merge, tag, or release"
+  ],
+  "attack_classes": [
+    {"id": "compromised-policy-store", "failure_class": "compromised-policy-store", "expected": "known-critical policy-store tuple is UNPROVEN and cannot authorize"},
+    {"id": "claimed-policy-confusion", "failure_class": "claimed-policy-confusion", "expected": "claimed policy bytes and claimed ALLOW cannot affect authorization"},
+    {"id": "stored-proof-smashing", "failure_class": "stored-proof-smashing", "expected": "claimed VALID/ALLOW fields cannot authorize an unproven substrate"},
+    {"id": "unknown-enum-fail-open", "failure_class": "unknown-enum-fail-open", "expected": "unknown kinds and unknown builds produce INVALID/UNPROVEN and DENY"},
+    {"id": "catalog-overlap", "failure_class": "catalog-overlap", "expected": "a tuple in both catalog sections invalidates the evaluation root"}
+  ]
+}

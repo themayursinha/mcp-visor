@@ -1,0 +1,13 @@
+{
+  "mutation": "mutation:update-policy-record",
+  "mandate_structurally_valid": true,
+  "policy_engine_allow": true,
+  "identity_trusted": {"kind": "identity-store", "product": "fixture.identity-store", "build": "identity-build-trusted-2026-09", "measurement": "measurement:identity-store:trusted"},
+  "policy_trusted": {"kind": "policy-store", "product": "fixture.policy-store", "build": "policy-build-trusted-2026-09", "measurement": "measurement:policy-store:trusted"},
+  "runtime_trusted": {"kind": "execution-runtime", "product": "fixture.execution-runtime", "build": "runtime-build-trusted-2026-09", "measurement": "measurement:execution-runtime:trusted"},
+  "registry_trusted": {"kind": "resource-registry", "product": "fixture.resource-registry", "build": "registry-build-trusted-2026-09", "measurement": "measurement:resource-registry:trusted"},
+  "identity_critical": {"kind": "identity-store", "product": "fixture.identity-store", "build": "synthetic-known-critical-identity", "measurement": "measurement:identity-store:known-critical"},
+  "policy_critical": {"kind": "policy-store", "product": "fixture.policy-store", "build": "CVE-2026-18886-class", "measurement": "measurement:policy-store:known-critical"},
+  "runtime_critical": {"kind": "execution-runtime", "product": "fixture.execution-runtime", "build": "synthetic-known-critical-runtime", "measurement": "measurement:execution-runtime:known-critical"},
+  "registry_critical": {"kind": "resource-registry", "product": "fixture.resource-registry", "build": "synthetic-known-critical-registry", "measurement": "measurement:resource-registry:known-critical"}
+}
