@@ -199,12 +199,13 @@ func DenyEvidence(obj InstructionObject) []string {
 	if !obj.InstructionBearing {
 		argClass = "DATA"
 	}
-	// The reason derives from the denial state: attempted promotions name
-	// the expansion; all other denials (insufficient authority, non-bearing
-	// content) name the shortfall. Fixture attempts keep the exact
-	// contracted literal.
+	// The reason mirrors the Authorize decision tree: non-bearing content,
+	// attempted expansions, then authority shortfall. Each denial path
+	// reports its own check, never another's.
 	denyReason := "insufficient authority"
-	if p.Promotion.Attempted {
+	if !obj.InstructionBearing {
+		denyReason = "not instruction-bearing content"
+	} else if p.Promotion.Attempted {
 		denyReason = "authority-expanding instruction"
 	}
 	return []string{

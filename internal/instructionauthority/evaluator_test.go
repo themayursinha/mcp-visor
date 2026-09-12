@@ -317,3 +317,13 @@ func TestDenyReasonDerivedFromState(t *testing.T) {
 		t.Fatalf("attempted denial mislabeled:\n%s", evidence)
 	}
 }
+
+func TestDenyReasonMatchesDenyingCheck(t *testing.T) {
+	// Non-bearing USER content: Authorize denies on bearing, so evidence
+	// must say so — not "insufficient authority" for a USER object.
+	obj := NewOriginObject("plain data", Origin{Principal: "agent:dev", TrustClass: TrustTrustedUser}, ReprMCPOutput, "NETWORK", false)
+	evidence := strings.Join(DenyEvidence(obj), "\n")
+	if !strings.Contains(evidence, "reason=not instruction-bearing content") {
+		t.Fatalf("wrong check reported:\n%s", evidence)
+	}
+}
