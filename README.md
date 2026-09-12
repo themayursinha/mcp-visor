@@ -100,6 +100,21 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Permission-bypass delegation: `deny_permission_bypass` is a fail-closed spawn-flag slot. A mandate to create a worker does not authorize `spawn_agent` with skip-permissions. Explicitly-off values are not a bypass. Delegation graphs are out of model.
 - Unauthorized configuration activation: `allow_activation` is an exact, fail-closed executable-or-host slot. A mandate to register `/usr/bin/node` or `mcp.internal` does not authorize `register_mcp` of `/bin/sh` or `169.254.169.254`. Describing infrastructure is not instantiating it.
 
+## Proof-carrying autonomy islands (not on `tools/call`)
+
+These packages prove PCA properties in isolation. **`Authorize` is not wired into the proxy `tools/call` path.** A green demo does not mean Visor currently prevents that class in production.
+
+| Island | Invariant | Demo |
+|--------|-----------|------|
+| Instruction authority continuity | H32 | `go run ./examples/authority-continuity` |
+| Causal authority | H33 | `go run ./examples/causal-authority` |
+| Principal derivation | H34 | `go run ./examples/principal-derivation` |
+| Resource identity continuity | H35 | `go run ./examples/resource-identity` |
+| Control-plane integrity | H36 | `go run ./examples/control-plane-integrity` |
+| Swarm authority budget | H37 | `go run ./examples/swarm-budget` |
+
+Each island ignores untrusted presentation and fail-closes on missing proof. See [`docs/architecture.md`](docs/architecture.md#proof-carrying-autonomy-islands).
+
 ## Session-taint egress control
 
 MCP Visor tracks session state, not just individual calls.
