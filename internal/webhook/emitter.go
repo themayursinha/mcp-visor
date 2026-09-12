@@ -33,6 +33,11 @@ type EventPayload struct {
 	Reason    string         `json:"reason,omitempty"`
 	RiskLevel string         `json:"risk_level,omitempty"`
 	Message   string         `json:"message,omitempty"`
+	// Ownership proof evidence (card t_02a1bc43): propagated verbatim when
+	// present so external sinks receive the signed receipt, not just the
+	// decision. Raw bytes: identical to the audit-log embedding.
+	OwnershipReceiptHash string          `json:"ownership_receipt_hash,omitempty"`
+	OwnershipReceipt     json.RawMessage `json:"ownership_receipt,omitempty"`
 }
 
 type Config struct {
@@ -76,17 +81,19 @@ func NewEmitter(cfg Config) *Emitter {
 
 func (e *Emitter) Emit(event audit.Event) {
 	payload := EventPayload{
-		Timestamp: event.Timestamp,
-		EventType: string(event.EventType),
-		SessionID: event.SessionID,
-		AgentID:   event.AgentID,
-		Server:    event.Server,
-		Tool:      event.Tool,
-		Arguments: event.Arguments,
-		Decision:  event.Decision,
-		Reason:    event.Reason,
-		RiskLevel: event.RiskLevel,
-		Message:   event.Message,
+		Timestamp:            event.Timestamp,
+		EventType:            string(event.EventType),
+		SessionID:            event.SessionID,
+		AgentID:              event.AgentID,
+		Server:               event.Server,
+		Tool:                 event.Tool,
+		Arguments:            event.Arguments,
+		Decision:             event.Decision,
+		Reason:               event.Reason,
+		RiskLevel:            event.RiskLevel,
+		Message:              event.Message,
+		OwnershipReceiptHash: event.OwnershipReceiptHash,
+		OwnershipReceipt:     event.OwnershipReceipt,
 	}
 
 	select {
@@ -97,17 +104,19 @@ func (e *Emitter) Emit(event audit.Event) {
 
 func (e *Emitter) EmitDirect(event audit.Event) error {
 	payload := EventPayload{
-		Timestamp: event.Timestamp,
-		EventType: string(event.EventType),
-		SessionID: event.SessionID,
-		AgentID:   event.AgentID,
-		Server:    event.Server,
-		Tool:      event.Tool,
-		Arguments: event.Arguments,
-		Decision:  event.Decision,
-		Reason:    event.Reason,
-		RiskLevel: event.RiskLevel,
-		Message:   event.Message,
+		Timestamp:            event.Timestamp,
+		EventType:            string(event.EventType),
+		SessionID:            event.SessionID,
+		AgentID:              event.AgentID,
+		Server:               event.Server,
+		Tool:                 event.Tool,
+		Arguments:            event.Arguments,
+		Decision:             event.Decision,
+		Reason:               event.Reason,
+		RiskLevel:            event.RiskLevel,
+		Message:              event.Message,
+		OwnershipReceiptHash: event.OwnershipReceiptHash,
+		OwnershipReceipt:     event.OwnershipReceipt,
 	}
 
 	return e.deliver(payload)

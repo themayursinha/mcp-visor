@@ -184,12 +184,21 @@ func (e *Exporter) formatSyslog5424(event audit.Event) []byte {
 	header := fmt.Sprintf("<%d>1 %s %s %s %d mcp_visor [mcp-visor@1 session_id=\"%s\" agent_id=\"%s\"]",
 		pri, ts, e.hostname, e.appName, os.Getpid(), event.SessionID, event.AgentID)
 
+	// Ownership proof hash travels as a second structured-data element
+	// when present (card t_02a1bc43): 64 hex chars need no SD escaping.
+	// Contiguous with the first element per RFC 5424 (no separating
+	// space); the full receipt stays in JSONL/JSON/webhook sinks.
+	sd := ""
+	if event.OwnershipReceiptHash != "" {
+		sd = fmt.Sprintf("[mcp-visor-proof@1 ownership_receipt_hash=\"%s\"]", event.OwnershipReceiptHash)
+	}
+
 	msg := fmt.Sprintf(" %s: %s", event.Decision, event.Reason)
 	if event.Tool != "" {
 		msg = fmt.Sprintf(" tool=%s server=%s %s: %s", event.Tool, event.Server, event.Decision, event.Reason)
 	}
 
-	return []byte(header + msg)
+	return []byte(header + sd + msg)
 }
 
 func (e *Exporter) formatJSON(event audit.Event) []byte {
@@ -206,6 +215,15 @@ func (e *Exporter) formatJSON(event audit.Event) []byte {
 		"hostname":   e.hostname,
 		"app":        e.appName,
 	}
+	// Ownership proof evidence travels with the decision when present
+	// (card t_02a1bc43); absence omits the keys. Raw bytes: identical to
+	// the audit-log embedding.
+	if event.OwnershipReceiptHash != "" {
+		envelope["ownership_receipt_hash"] = event.OwnershipReceiptHash
+	}
+	if len(event.OwnershipReceipt) > 0 {
+		envelope["ownership_receipt"] = event.OwnershipReceipt
+	}
 
 	data, _ := json.Marshal(envelope)
 	return data
@@ -217,6 +235,11 @@ func (e *Exporter) formatCEF(event audit.Event) []byte {
 
 	extensions := fmt.Sprintf("suser=%s duser=%s request=%s act=%s reason=%s cs1=%s cs1Label=RiskLevel",
 		event.SessionID, event.AgentID, event.Tool, event.Decision, event.Reason, event.RiskLevel)
+	// Ownership proof hash in a labeled custom field when present (card
+	// t_02a1bc43); the full receipt stays in JSONL/JSON/webhook sinks.
+	if event.OwnershipReceiptHash != "" {
+		extensions += fmt.Sprintf(" cs2=%s cs2Label=OwnershipReceiptHash", event.OwnershipReceiptHash)
+	}
 
 	cef := fmt.Sprintf("CEF:0|MCP|mcp-visor|1.0|%s|%s|%d|%s",
 		name, event.Decision, severity, extensions)

@@ -170,6 +170,10 @@ func (p *Policy) Validate() error {
 		}
 	}
 
+	if err := p.CapabilityOwnership.Validate(p); err != nil {
+		return err
+	}
+
 	return nil
 }
 

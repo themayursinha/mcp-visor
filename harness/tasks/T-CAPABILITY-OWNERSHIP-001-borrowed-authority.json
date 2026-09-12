@@ -1,0 +1,141 @@
+{
+  "task_id": "T-CAPABILITY-OWNERSHIP-001-borrowed-authority",
+  "invariant_ids": [
+    "H32"
+  ],
+  "security_sensitive": true,
+  "security_problem": "A permissive MCP routing layer lets tenant-A invoke tenant-B tools: authenticated YES, server exists YES, tool exists YES yields EXECUTE. Every consequential action must prove the current principal holds a valid delegation chain to the authority embodied by the capability (Capability Ownership Proofs). Trusted: the Visor binary, the operator-supplied --client-id, the policy file including its capability_ownership block. Untrusted: MCP arguments, server metadata, delegation fields in requests, tool results.",
+  "required_behavior": "Cross-tenant invocation (requester != endpoint owner, no matching exact delegation) denies at the deterministic boundary before relay, with stable evidence naming the invalid proof. Exact delegation (owner/delegate/endpoint/tool/effect/scope-value/expiry all match) allows. Ownership never converts an existing deny to allow and never bypasses identity, argument, chain, approval, or durable-audit gates. Signed capability_ownership_v1 receipts bind requester/endpoint/owner/delegation/effect; receipt failure on a potential allow denies.",
+  "failure_behavior": "Without the gate, tenant-A read_secret on server-B forwards (RED). With it, the call denies pre-relay and is absent from the server observe-log.",
+  "spec_revision": 1,
+  "non_goals": [
+    "--client-id authentication",
+    "tenant PKI",
+    "owner-signed grants",
+    "delegation chains",
+    "wildcard scopes",
+    "revocation service",
+    "model calls",
+    "autonomous merge",
+    "tag",
+    "release",
+    "dependency addition"
+  ],
+  "attack_classes": [
+    {
+      "id": "cross-tenant-invocation",
+      "failure_class": "cross-tenant-invocation",
+      "expected": "tenant-A read_secret on server-B denies pre-relay with authority-mismatch evidence"
+    },
+    {
+      "id": "overbroad-delegation",
+      "failure_class": "overbroad-delegation",
+      "expected": "one grant authorizes only its exact tool"
+    },
+    {
+      "id": "scope-mismatch",
+      "failure_class": "scope-mismatch",
+      "expected": "wrong/missing scope value denies"
+    },
+    {
+      "id": "expired-grant",
+      "failure_class": "expired-grant",
+      "expected": "expiry denies with expired reason"
+    },
+    {
+      "id": "ambiguous-grants",
+      "failure_class": "ambiguous-grants",
+      "expected": "duplicate matching grants deny"
+    }
+  ],
+  "allowed_paths": [
+    "harness/tasks/T-CAPABILITY-OWNERSHIP-001-borrowed-authority.json",
+    "internal/ownership/model.go",
+    "internal/ownership/verifier.go",
+    "internal/ownership/verifier_test.go",
+    "internal/receipt/capability_ownership.go",
+    "internal/receipt/capability_ownership_test.go",
+    "internal/policy/capability_ownership.go",
+    "internal/policy/capability_ownership_test.go",
+    "internal/policy/types.go",
+    "internal/policy/loader.go",
+    "internal/proxy/capability_ownership.go",
+    "internal/proxy/capability_ownership_test.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/audit/logger.go",
+    "examples/borrowed-authority/main.go",
+    "examples/borrowed-authority/mock-server/main.go",
+    "examples/policies/borrowed-authority.yaml",
+    "tests/integration/borrowed_authority_demo_test.go",
+    "docs/policy-model.md",
+    "internal/siem/siem.go",
+    "internal/siem/siem_test.go",
+    "internal/webhook/emitter.go",
+    "internal/webhook/emitter_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": [
+        "go",
+        "test",
+        "./internal/proxy",
+        "-run",
+        "TestREDCrossTenantCapabilityDeniedBeforeRelay",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": [
+        "go",
+        "test",
+        "./internal/ownership",
+        "./internal/receipt",
+        "./internal/policy",
+        "./internal/proxy",
+        "-run",
+        "TestDirectOwnerAllowed|TestCrossTenantDenied|TestNarrowDelegationAllowed|TestDelegationDoesNotAuthorizeSiblingTool|TestScopeMismatchDenied|TestExpiryBoundaries|TestAmbiguousGrantsDenied|TestMutationInvalidates|TestOwnershipReceipt|TestLoadCapabilityOwnership|TestCapabilityOwnership",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "race",
+      "expect": "pass",
+      "argv": [
+        "go",
+        "test",
+        "-race",
+        "./internal/ownership",
+        "./internal/proxy",
+        "-run",
+        "TestDirectOwnerAllowed|TestCrossTenantDenied|TestNarrowDelegationAllowed|TestCapabilityOwnership",
+        "-count=1"
+      ]
+    },
+    {
+      "name": "full_test",
+      "expect": "pass",
+      "argv": [
+        "go",
+        "test",
+        "./...",
+        "-count=1",
+        "-timeout",
+        "120s"
+      ]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": [
+        "harness/check.sh"
+      ]
+    }
+  ]
+}

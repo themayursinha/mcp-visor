@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/approval"
@@ -67,6 +68,24 @@ type Proxy struct {
 	launchShape          *attestationShape
 	serverClaimedName    string
 	serverClaimedVersion string
+	// nowFunc supplies evaluation time for time-bound gates (capability
+	// ownership grant windows). Atomic pointer: tests swap it mid-flight
+	// (e.g. lapsing a grant during an approval wait) while requests read
+	// it concurrently. Nil means the system clock.
+	nowFunc atomic.Pointer[func() time.Time]
+}
+
+// now returns the pinned test time or the system clock.
+func (p *Proxy) now() time.Time {
+	if f := p.nowFunc.Load(); f != nil && *f != nil {
+		return (*f)()
+	}
+	return time.Now().UTC()
+}
+
+// setNowFunc pins evaluation time. Tests only.
+func (p *Proxy) setNowFunc(f func() time.Time) {
+	p.nowFunc.Store(&f)
 }
 
 // attestationShape is the immutable resolution shape of the launch-time pin:

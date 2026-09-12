@@ -13,6 +13,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
+	"github.com/themayursinha/mcp-visor/internal/receipt"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
 )
 
@@ -169,6 +170,18 @@ func (p *Proxy) processToolsCall(
 	chainTriggered := false
 	var egressContext egressTaintDecision
 	egressTriggered := false
+
+	// Capability ownership gate: allow-bound protected calls prove
+	// ownership before egress, chain, capability-accounting, approval,
+	// durable commit, or relay. Ownership never converts a deny to allow.
+	var ownReceipt *receipt.CapabilityOwnershipReceipt
+	if decision.Action == policy.ActionAllow || decision.Action == policy.ActionRequireApproval {
+		rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now())
+		ownReceipt = rec
+		if deny != nil {
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
+		}
+	}
 
 	if decision.Action != policy.ActionDeny {
 		if egressDecision, matched := p.evaluateEgressControls(serverName, callReq); matched {
@@ -392,6 +405,15 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
+		// Ownership recheck: a grant valid at request time may have expired
+		// during the approval wait. Fresh clock, fresh receipt; a stale
+		// pre-wait verdict never authorizes.
+		if rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now()); deny != nil {
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
+		} else {
+			ownReceipt = rec
+			attachOwnershipReceipt(&allowEvent, ownReceipt)
+		}
 		// Delegation ceiling recheck: the budget may have been spent while
 		// the approval wait was outstanding. Atomic reserve; released below
 		// if the commit fails.
@@ -432,6 +454,7 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
+		attachOwnershipReceipt(&allowEvent, ownReceipt)
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
 			if delegationReserved {
 				p.session.ReleaseDelegation()
@@ -462,6 +485,7 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
+		attachOwnershipReceipt(&defaultAllowEvent, ownReceipt)
 		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
 			if delegationReserved {
 				p.session.ReleaseDelegation()
