@@ -809,3 +809,50 @@ func TestDenyEvidenceUsesAuthorizeReason(t *testing.T) {
 		})
 	}
 }
+
+func TestFoldTraceParentAuthorityMatchesPrefixes(t *testing.T) {
+	registry := map[string]TrustedPrincipal{"op:marina": {Name: "op:marina", Ceiling: AuthoritySystem}}
+	obj := maliciousOrigin()
+	rootOrigin := obj.Provenance.Origin
+	originRepr := obj.Provenance.CurrentRepresentation
+	endorse := func(cur InstructionObject, grant string) *Endorsement {
+		return &Endorsement{
+			ID: "e-" + grant, Promoter: "op:marina", GrantAuthority: grant,
+			ParentContentSHA: cur.Provenance.ContentSHA256,
+			ChildContentSHA:  digest(cur.Content + grant),
+			Transformer:      "promote", TargetRepresentation: ReprAgentSummary,
+		}
+	}
+	obj = ApplyTransform(obj, Transform{Transformer: "promote", To: ReprAgentSummary, RequestedAuthority: AuthorityUser, NewContent: obj.Content + AuthorityUser}, endorse(obj, AuthorityUser), registry)
+	obj = ApplyTransform(obj, Transform{Transformer: "promote", To: ReprAgentSummary, RequestedAuthority: AuthorityDeveloper, NewContent: obj.Content + AuthorityDeveloper}, endorse(obj, AuthorityDeveloper), registry)
+	_, pre := foldTrace(rootOrigin, originRepr, obj.History)
+	if len(pre) != len(obj.History) {
+		t.Fatalf("pre-authority len=%d want %d", len(pre), len(obj.History))
+	}
+	if pre[0] != ceilingForTrust(rootOrigin.TrustClass) {
+		t.Fatalf("hop 0 parent=%s want genesis ceiling", pre[0])
+	}
+	for i := 1; i < len(obj.History); i++ {
+		prefix, _ := foldTrace(rootOrigin, originRepr, obj.History[:i])
+		if pre[i] != prefix.Authority {
+			t.Fatalf("hop %d parent=%s want prefix fold %s", i, pre[i], prefix.Authority)
+		}
+	}
+	if err := VerifyProvenance(obj, mustRoot(obj), registry); err != nil {
+		t.Fatalf("honest multi-promotion verify: %v", err)
+	}
+}
+
+func TestVerifyLongEndorsedHistoryCompletes(t *testing.T) {
+	obj := maliciousOrigin()
+	for i := 0; i < 64; i++ {
+		next := obj.Content + string(rune('a'+i%26))
+		obj = ApplyTransform(obj, Transform{
+			Transformer: "stage", To: ReprAgentSummary,
+			RequestedAuthority: AuthorityUser, NewContent: next,
+		}, &Endorsement{ID: "e", Promoter: "ghost", GrantAuthority: AuthorityUser}, nil)
+	}
+	if err := VerifyProvenance(obj, mustRoot(obj), map[string]TrustedPrincipal{}); err != nil {
+		t.Fatalf("long rejected-endorsement history: %v", err)
+	}
+}

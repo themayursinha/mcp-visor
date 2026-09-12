@@ -83,6 +83,11 @@ func ApplyTransform(obj InstructionObject, t Transform, endorse *Endorsement, re
 // hidden escalations, misattributed reasons, phantom depths) is
 // structurally impossible.
 func fold(origin Origin, originRepr string, hops []Hop) Provenance {
+	p, _ := foldTrace(origin, originRepr, hops)
+	return p
+}
+
+func foldTrace(origin Origin, originRepr string, hops []Hop) (Provenance, []string) {
 	prov := Provenance{
 		Origin:                origin,
 		DerivedBy:             []Derivation{},
@@ -93,6 +98,7 @@ func fold(origin Origin, originRepr string, hops []Hop) Provenance {
 		ContentSHA256:         "",
 		Promotion:             Promotion{Continuity: ContinuityPass},
 	}
+	pre := make([]string, len(hops))
 	runningDigest := ""
 	runningHop := ""
 	if len(hops) > 0 {
@@ -100,6 +106,7 @@ func fold(origin Origin, originRepr string, hops []Hop) Provenance {
 		runningHop = hops[0].ParentHopDigest
 	}
 	for i, hop := range hops {
+		pre[i] = prov.Authority
 		// Record the hop first, including a clean attempt state. Digest
 		// failures, sticky failures, and grants all share this writer so
 		// a later attempt cannot keep a prior promoter or endorsement ID.
@@ -133,7 +140,7 @@ func fold(origin Origin, originRepr string, hops []Hop) Provenance {
 			prov.Promotion.Continuity = ContinuityFailed
 		}
 	}
-	return prov
+	return prov, pre
 }
 
 // beginHop is the only writer of per-hop presentation, lineage, and
@@ -279,7 +286,7 @@ func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[s
 			return fmt.Errorf("hop %d hop digest mismatch", i)
 		}
 	}
-	fresh := fold(root.Origin, originRepr, obj.History)
+	fresh, preAuthority := foldTrace(root.Origin, originRepr, obj.History)
 	if fresh.Promotion.DigestFailure {
 		return fmt.Errorf("digest chain broken")
 	}
@@ -287,10 +294,7 @@ func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[s
 		return fmt.Errorf("provenance does not match history")
 	}
 	// Registry cross-check: revalidate every recorded endorsement against
-	// the live registry. Agreement means the verdict still holds;
-	// disagreement means registry drift or tampering — both fail closed,
-	// so rejections stay rejected and acceptances stay accepted only
-	// while their basis stands.
+	// the live registry using the pre-hop authority from the single fold.
 	for i, hop := range obj.History {
 		if hop.Endorsement == nil {
 			if hop.EndorsementValid {
@@ -298,16 +302,7 @@ func VerifyProvenance(obj InstructionObject, root EvaluationRoot, registry map[s
 			}
 			continue
 		}
-		parentAuthority := ""
-		if i == 0 {
-			parentAuthority = ceilingForTrust(root.Origin.TrustClass)
-		} else {
-			// Authority before this hop is not stored per hop; recompute
-			// the prefix fold and read it.
-			prefix := fold(root.Origin, originRepr, obj.History[:i])
-			parentAuthority = prefix.Authority
-		}
-		live := validEndorsement(*hop.Endorsement, hop.ParentDigest, parentAuthority, hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry)
+		live := validEndorsement(*hop.Endorsement, hop.ParentDigest, preAuthority[i], hop.ContentDigest, hop.Derivation.Transformer, hop.Derivation.ToRepresentation, hop.RequestedAuthority, registry)
 		if live != hop.EndorsementValid {
 			return fmt.Errorf("hop %d endorsement verdict disagrees with registry", i)
 		}
