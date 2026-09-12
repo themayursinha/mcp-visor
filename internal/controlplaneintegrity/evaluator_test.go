@@ -74,10 +74,7 @@ func healthyDecision() Decision {
 }
 
 func TestRedConventionalPolicyAllowCannotAuthorizeCompromisedStore(t *testing.T) {
-	fired := false
-	if compromisedRoot().PolicyEngineAllow {
-		fired = true
-	}
+	fired := compromisedRoot().PolicyEngineAllow
 	if !fired {
 		t.Fatal("conventional baseline must fire")
 	}

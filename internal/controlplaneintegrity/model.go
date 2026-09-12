@@ -61,6 +61,4 @@ type Decision struct {
 	Evidence                             [8]string
 }
 
-func attest(t CatalogTuple) Attestation {
-	return Attestation{Kind: t.Kind, Product: t.Product, Build: t.Build, Measurement: t.Measurement}
-}
+func attest(t CatalogTuple) Attestation { return Attestation(t) }

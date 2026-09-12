@@ -63,10 +63,7 @@ func run() error {
 }
 
 func runBaseline(scen scenario) error {
-	called := false
-	if scen.PolicyEngineAllow {
-		called = true
-	}
+	called := scen.PolicyEngineAllow
 	if !called {
 		return errors.New("baseline must fire")
 	}

@@ -15,9 +15,7 @@ const (
 	reasonAuthorized       = "authorized"
 )
 
-func (a Attestation) tuple() CatalogTuple {
-	return CatalogTuple{Kind: a.Kind, Product: a.Product, Build: a.Build, Measurement: a.Measurement}
-}
+func (a Attestation) tuple() CatalogTuple { return CatalogTuple(a) }
 
 func filled(t CatalogTuple) bool {
 	return t.Kind != "" && t.Product != "" && t.Build != "" && t.Measurement != ""
