@@ -1,0 +1,63 @@
+{
+  "task_id": "T-CONTEXT-PROVENANCE-001",
+  "invariant_ids": ["H47"],
+  "security_sensitive": true,
+  "security_problem": "Context authority laundering occurs when Agent A receives untrusted MCP web-tool data and a harness reconstructs it for Agent B as a USER message, treating visible role, reconstructed slot, content, or self-claims as instruction authority. Trusted: the caller-held EvaluationRoot containing schema, current tick, required instruction trust, and the ContextFragment graph (origin, principal, trust, scope, introduced_at, derived_from). Untrusted: CandidateMessage Content and every MessageClaims field, including visible role, reconstructed-from role, claimed origin, claimed principal, claimed trust, and claimed authoritative.",
+  "required_behavior": "Authorize is pure and reads only candidate.FragmentID. Effective trust is the min of a fragment's declared trust and every parent ceiling; selecting a higher-trust parent is forbidden. AUTHORITATIVE requires a valid acyclic graph, no ancestry ceiling breach, and ceiling(target) >= required instruction trust. Claims and content never confer authority. TOOL to USER reconstruction cannot raise effective trust. Invalid, unknown, missing, duplicate, future, time-reversed, or cyclic provenance returns INVALID, DETECTED, and NON-AUTHORITATIVE. The package must not import instructionauthority, causalauthority, proxy, policy, or another proof package.",
+  "failure_behavior": "The canonical fixture is web-1 (MCP_WEB_TOOL / REMOTE_TOOL / UNTRUSTED / invocation-481) to handoff-1 retaining the ceiling to agent-b-1 declared USER_TRUSTED with VisibleRole=USER and ReconstructedFromRole=TOOL. Without the check, trusting the reconstructed USER role records one simulated execution. With it, Authorize records zero protected executions and emits the exact eight-line evidence with Context Provenance Proof INVALID, Context Authority Escalation DETECTED, and Instruction NON-AUTHORITATIVE.",
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-CONTEXT-PROVENANCE-001.json",
+    "internal/contextprovenance/model.go",
+    "internal/contextprovenance/evaluator.go",
+    "internal/contextprovenance/evaluator_test.go",
+    "examples/context-provenance/scenario.json",
+    "examples/context-provenance/main.go",
+    "tests/integration/context_provenance_demo_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "red_test", "expect": "fail", "argv": ["go", "test", "./internal/contextprovenance", "-run", "TestRedToolOutputReconstructedAsUserCannotBecomeAuthoritative", "-count", "1"]},
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/contextprovenance", "-count", "1"]},
+    {"name": "race", "expect": "pass", "argv": ["go", "test", "-race", "./internal/contextprovenance", "-count", "1"]},
+    {"name": "demo", "expect": "pass", "argv": ["go", "test", "./tests/integration", "-run", "TestContextProvenanceDemo", "-count", "1"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count", "1", "-timeout", "120s"]},
+    {"name": "harness", "expect": "pass", "argv": ["harness/check.sh"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "NLP or instruction classification",
+    "Model calls",
+    "Real MCP servers",
+    "Real tool or shell execution",
+    "Production-prevention claims",
+    "Proxy integration",
+    "Policy, audit, receipt, or CLI integration",
+    "H32 replacement or imports",
+    "instructionauthority imports",
+    "causalauthority imports",
+    "Sibling proof-package imports",
+    "Promotion endorsements",
+    "Memory-state fidelity or EAL-Bench/H40 work",
+    "Cryptographic proofs",
+    "Wall-clock dependence",
+    "Network access",
+    "Subprocesses",
+    "New dependencies",
+    "Autonomous merge, tag, or release"
+  ],
+  "attack_classes": [
+    {"id": "tool-user-reconstruction", "failure_class": "tool-user-reconstruction", "expected": "TOOL to USER reconstruction remains UNTRUSTED and NON-AUTHORITATIVE with exact eight-line evidence"},
+    {"id": "claimed-visible-role", "failure_class": "claimed-visible-role", "expected": "VisibleRole USER cannot raise effective trust"},
+    {"id": "claimed-reconstructed-from-role", "failure_class": "claimed-reconstructed-from-role", "expected": "ReconstructedFromRole cannot confer authority"},
+    {"id": "claimed-origin-principal-trust", "failure_class": "claimed-origin-principal-trust", "expected": "claimed origin, principal, and trust cannot change the decision"},
+    {"id": "claimed-authoritative", "failure_class": "claimed-authoritative", "expected": "ClaimedAuthoritative cannot authorize"},
+    {"id": "content-substitution", "failure_class": "content-substitution", "expected": "Content is ignored by Authorize"},
+    {"id": "direct-trust-increase", "failure_class": "direct-trust-increase", "expected": "a child declaring higher trust than its source is DETECTED"},
+    {"id": "multi-hop-trust-increase", "failure_class": "multi-hop-trust-increase", "expected": "multi-hop reconstruction cannot raise the source ceiling"},
+    {"id": "multi-parent-high-trust-selection", "failure_class": "multi-parent-high-trust-selection", "expected": "least-trusted ancestry is the ceiling; selecting a higher-trust parent is forbidden"},
+    {"id": "unknown-or-incomplete-provenance", "failure_class": "unknown-or-incomplete-provenance", "expected": "unknown trust, wrong schema, missing/duplicate IDs, absent parents, future/time-reversed fragments, cycles, missing target, and unknown required trust fail closed as NON-AUTHORITATIVE"},
+    {"id": "sequential-authority-bleed", "failure_class": "sequential-authority-bleed", "expected": "prior evaluations transfer no authority"}
+  ]
+}
