@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -368,7 +367,7 @@ func rejectDupDec(dec *json.Decoder) error {
 }
 func readControlFile(path string) ([]byte, error) { return readOwnedFile(path, MaxControlBytes, 0o600) }
 func readOwnedFile(path string, max int64, perm os.FileMode) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := openNoFollow(path)
 	if err != nil {
 		return nil, err
 	}
@@ -421,10 +420,4 @@ func validateSubdir(parent, name string, create bool) error {
 		return fmt.Errorf("invalid control subdirectory")
 	}
 	return requireOwner(st)
-}
-func requireOwner(st os.FileInfo) error {
-	if sys, ok := st.Sys().(*syscall.Stat_t); ok && sys.Uid == uint32(os.Geteuid()) {
-		return nil
-	}
-	return fmt.Errorf("invalid ownership")
 }
