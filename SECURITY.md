@@ -49,7 +49,7 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 - Duplicate `method` keys where any value resolves to `tools/call` are blocked before relay.
 - JSON-RPC batches containing a `tools/call` element are blocked before relay; non-tools batches forward unchanged.
 - Strict lint is not a complete enforcement gate; the linter-only composite rule passes, and `--no-warnings` can neutralize strict warning failures
-- Proof-carrying autonomy islands (H32–H39: instruction continuity, causal authority, principal derivation, resource identity, control-plane integrity, swarm authority budget, authority-context integrity, non-transitive host authority) are isolated evaluators. They are not invoked on the proxy `tools/call` path. A passing island demo does not mean that class is enforced in production.
+- Proof-carrying autonomy islands (H32–H40: instruction continuity, causal authority, principal derivation, resource identity, control-plane integrity, swarm authority budget, authority-context integrity, non-transitive host authority, authorization-state fidelity) are isolated evaluators. They are not invoked on the proxy `tools/call` path. A passing island demo does not mean that class is enforced in production.
 
 ### Hardening Recommendations
 
