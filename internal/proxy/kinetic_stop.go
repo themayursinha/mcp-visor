@@ -108,60 +108,62 @@ func (p *Proxy) runKineticMonitor(ctx context.Context) error {
 func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 	p.kineticStopOnce.Do(func() {
 		p.kineticPersistWG.Add(1)
-		defer p.kineticPersistWG.Done()
-		p.kineticRevoked.Store(true)
-		p.kineticRunMu.Lock()
-		p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
-		p.kineticRunMu.Unlock()
-		if p.sessionCancel != nil {
-			p.sessionCancel()
-		}
-		p.containSupervisedProcess()
 		observed := stop.ObservedAt.UTC()
 		if observed.IsZero() {
 			observed = time.Now().UTC()
 		}
-		p.kineticRunMu.Lock()
-		p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
-		p.kineticRunMu.Unlock()
-		if kineticBeforePersist != nil {
-			kineticBeforePersist()
-		}
-
-		ev := audit.Event{
-			EventType:               audit.EventKineticStopEnforced,
-			SessionID:               p.cfg.SessionID,
-			AgentID:                 p.cfg.ClientID,
-			Server:                  p.cfg.ServerName,
-			Decision:                "revoked",
-			Reason:                  stop.Command.Reason,
-			ControllerID:            stop.Command.ControllerID,
-			CommandID:               stop.Command.CommandID,
-			SessionEpoch:            p.cfg.SessionEpoch,
-			RevokedThroughEpoch:     stop.Command.RevokeThroughEpoch,
-			ObservedEnforcementTime: observed.Format(time.RFC3339Nano),
-			ResultingState:          stop.ResultingState,
-			ControlRequestSHA256:    stop.RequestSHA256,
-		}
-		auditErr := p.audit.CommitKineticStop(ev)
-		var persistErr error
-		if auditErr == nil {
-			if stop.ResultingState == "revoked_contained" && p.kineticMon != nil {
-				persistErr = p.kineticMon.WriteState(stop)
-			}
-			p.forwardAudit(ev)
-		}
-		out := persistErr
-		if auditErr != nil {
-			out = auditErr
-		}
-		p.kineticRunMu.Lock()
-		if out != nil {
-			p.kineticRunErr = out
-		} else {
+		func() {
+			defer p.kineticPersistWG.Done()
+			p.kineticRevoked.Store(true)
+			p.kineticRunMu.Lock()
 			p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
-		}
-		p.kineticRunMu.Unlock()
+			p.kineticRunMu.Unlock()
+			if p.sessionCancel != nil {
+				p.sessionCancel()
+			}
+			p.containSupervisedProcess()
+			p.kineticRunMu.Lock()
+			p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
+			p.kineticRunMu.Unlock()
+			if kineticBeforePersist != nil {
+				kineticBeforePersist()
+			}
+
+			ev := audit.Event{
+				EventType:               audit.EventKineticStopEnforced,
+				SessionID:               p.cfg.SessionID,
+				AgentID:                 p.cfg.ClientID,
+				Server:                  p.cfg.ServerName,
+				Decision:                "revoked",
+				Reason:                  stop.Command.Reason,
+				ControllerID:            stop.Command.ControllerID,
+				CommandID:               stop.Command.CommandID,
+				SessionEpoch:            p.cfg.SessionEpoch,
+				RevokedThroughEpoch:     stop.Command.RevokeThroughEpoch,
+				ObservedEnforcementTime: observed.Format(time.RFC3339Nano),
+				ResultingState:          stop.ResultingState,
+				ControlRequestSHA256:    stop.RequestSHA256,
+			}
+			auditErr := p.audit.CommitKineticStop(ev)
+			var persistErr error
+			if auditErr == nil {
+				if stop.ResultingState == "revoked_contained" && p.kineticMon != nil {
+					persistErr = p.kineticMon.WriteState(stop)
+				}
+				p.forwardAudit(ev)
+			}
+			out := persistErr
+			if auditErr != nil {
+				out = auditErr
+			}
+			p.kineticRunMu.Lock()
+			if out != nil {
+				p.kineticRunErr = out
+			} else {
+				p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
+			}
+			p.kineticRunMu.Unlock()
+		}()
 		p.runtimeMu.Lock()
 		p.kineticRevokedThru = stop.Command.RevokeThroughEpoch
 		p.kineticReason = stop.Command.Reason

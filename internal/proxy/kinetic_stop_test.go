@@ -312,11 +312,24 @@ func TestKineticStopLatchesWithoutRuntimeLock(t *testing.T) {
 	for time.Now().Before(deadline) {
 		b, _ := os.ReadFile(audit)
 		if bytes.Contains(b, []byte("kinetic_stop_enforced")) {
-			return
+			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("persist blocked on runtimeMu")
+	b, _ := os.ReadFile(audit)
+	if !bytes.Contains(b, []byte("kinetic_stop_enforced")) {
+		t.Fatal("persist blocked on runtimeMu")
+	}
+	done := make(chan struct{})
+	go func() {
+		p.kineticPersistWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(400 * time.Millisecond):
+		t.Fatal("waited persist completion blocked on runtimeMu")
+	}
 }
 
 func TestKineticEncodeRefusedAfterRevoke(t *testing.T) {
