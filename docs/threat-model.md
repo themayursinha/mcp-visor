@@ -354,4 +354,4 @@ Optional `stdio_invocation_sha256_v1` attestation pins a versioned, deterministi
 
 ### PCA proof islands are not proxy enforcement
 
-H32–H39 (`internal/instructionauthority` through `internal/hosttransitivity`) prove specific PCA properties against caller-held evaluation roots. They do not sit on the `tools/call` intercept path. Do not cite those demos as evidence that Visor currently prevents instruction laundering, causal substitution, localhost-as-identity, symlink identity swap, a compromised policy store, a swarm exceeding its campaign budget, cross-principal ambient bleed, or host-to-host grant relay at the proxy.
+H32–H40 (`internal/instructionauthority` through `internal/authstatefidelity`) prove specific PCA properties against caller-held evaluation roots. They do not sit on the `tools/call` intercept path. Do not cite those demos as evidence that Visor currently prevents instruction laundering, causal substitution, localhost-as-identity, symlink identity swap, a compromised policy store, a swarm exceeding its campaign budget, cross-principal ambient bleed, host-to-host grant relay, or stale remembered grants at the proxy.

@@ -114,6 +114,7 @@ These packages prove PCA properties in isolation. **`Authorize` is not wired int
 | Swarm authority budget | H37 | `go run ./examples/swarm-budget` |
 | Authority-context integrity | H38 | `go run ./examples/authority-context` |
 | Non-transitive host authority | H39 | `go run ./examples/host-transitivity` |
+| Authorization-state fidelity | H40 | `go run ./examples/auth-state-fidelity` |
 
 Each island ignores untrusted presentation and fail-closes on missing proof. See [`docs/architecture.md`](docs/architecture.md#proof-carrying-autonomy-islands).
 
