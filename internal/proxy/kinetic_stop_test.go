@@ -195,6 +195,11 @@ func testKineticLive(t *testing.T, helper string) {
 	oldIn, oldOut := os.Stdin, os.Stdout
 	os.Stdin, os.Stdout = inR, outW
 	defer func() { os.Stdin, os.Stdout = oldIn, oldOut }()
+	// The stdin write end must stay reachable for the whole test. An unreachable
+	// *os.File is closed by its finalizer when the GC runs, which makes the proxy
+	// observe EOF on its client stream ("read from client: read: EOF") before the
+	// kinetic stop is enforced. Closing it here keeps it live and releases the fd.
+	defer func() { _ = inW.Close() }()
 	p := New(Config{ServerCommand: helper, ServerName: helper, ServerArgs: nil, SessionID: "sess-live", SessionEpoch: 1, AuditLogPath: audit, KillSwitchDir: dir, KillSwitchControllers: []killswitch.ControllerKey{{ID: "c1", Key: key}}, Policy: kpol(t, helper, "block_write", false)})
 	p.cfg.ServerArgs = nil
 	os.Setenv("K_SENTINEL", sent)
