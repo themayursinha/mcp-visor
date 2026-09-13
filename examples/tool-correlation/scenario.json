@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "correlation_enabled": true,
+  "fixture_sample_size": 8,
+  "fixture_seed": 42042,
+  "capability_ceilings": [{"capability_id": "capability:repository-read", "max_units": 3}],
+  "resource_uses": [
+    {"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code", "capability_id": "capability:repository-read", "units": 1},
+    {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search", "capability_id": "capability:repository-read", "units": 1},
+    {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search", "capability_id": "capability:repository-read", "units": 1},
+    {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents", "capability_id": "capability:repository-read", "units": 1}
+  ],
+  "correlation_edges": [
+    {"from_use_id": "use:github-search-1", "to_use_id": "use:drive-search-1"},
+    {"from_use_id": "use:drive-search-1", "to_use_id": "use:notion-search-1"},
+    {"from_use_id": "use:notion-search-1", "to_use_id": "use:github-read-1"}
+  ],
+  "canonical_attack": {
+    "action_id": "action:cross-server-repository-sweep",
+    "capability_id": "capability:repository-read",
+    "uses": [
+      {"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"},
+      {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"},
+      {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"},
+      {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents"}
+    ],
+    "claimed_per_tool_allow": true,
+    "claimed_server_hop_innocent": true,
+    "claimed_remaining_quota": 1,
+    "claimed_authorized": true
+  },
+  "legitimate_action": {
+    "action_id": "action:bounded-repository-research",
+    "capability_id": "capability:repository-read",
+    "uses": [
+      {"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"},
+      {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"},
+      {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}
+    ]
+  },
+  "measurement_records": [
+    {"record_id": "record:cross-server-sweep", "expected_authorized": false, "action": {"action_id": "action:cross-server-repository-sweep", "capability_id": "capability:repository-read", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"}, {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}, {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents"}], "claimed_per_tool_allow": true, "claimed_server_hop_innocent": true, "claimed_remaining_quota": 1, "claimed_authorized": true}},
+    {"record_id": "record:missing-resource-use", "expected_authorized": false, "action": {"action_id": "action:cross-server-repository-sweep", "capability_id": "capability:repository-read", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"}, {"use_id": "use:invented", "server_id": "mcp:notion", "tool_name": "search"}, {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents"}], "claimed_server_hop_innocent": true, "claimed_remaining_quota": 1}},
+    {"record_id": "record:missing-correlation-edge", "expected_authorized": false, "action": {"action_id": "action:cross-server-repository-sweep", "capability_id": "capability:repository-read", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}, {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"}, {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents"}], "claimed_per_tool_allow": true, "claimed_server_hop_innocent": true, "claimed_remaining_quota": 1, "claimed_authorized": true}},
+    {"record_id": "record:capability-substitution", "expected_authorized": false, "action": {"action_id": "action:cross-server-repository-sweep", "capability_id": "capability:issue-write", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"}, {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}, {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents"}], "claimed_server_hop_innocent": true, "claimed_remaining_quota": 1}},
+    {"record_id": "record:server-identity-substitution", "expected_authorized": false, "action": {"action_id": "action:cross-server-repository-sweep", "capability_id": "capability:repository-read", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:drive-search-1", "server_id": "mcp:github", "tool_name": "search"}, {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}, {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents"}], "claimed_per_tool_allow": true, "claimed_server_hop_innocent": true, "claimed_remaining_quota": 1, "claimed_authorized": true}},
+    {"record_id": "record:cross-server-sweep-unclaimed", "expected_authorized": false, "action": {"action_id": "action:cross-server-repository-sweep", "capability_id": "capability:repository-read", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"}, {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}, {"use_id": "use:github-read-1", "server_id": "mcp:github", "tool_name": "get_file_contents"}]}},
+    {"record_id": "record:bounded-research", "expected_authorized": true, "action": {"action_id": "action:bounded-repository-research", "capability_id": "capability:repository-read", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"}, {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}]}},
+    {"record_id": "record:bounded-research-hostile-claims", "expected_authorized": true, "action": {"action_id": "action:bounded-repository-research", "capability_id": "capability:repository-read", "uses": [{"use_id": "use:github-search-1", "server_id": "mcp:github", "tool_name": "search_code"}, {"use_id": "use:drive-search-1", "server_id": "mcp:drive", "tool_name": "search"}, {"use_id": "use:notion-search-1", "server_id": "mcp:notion", "tool_name": "search"}], "claimed_per_tool_allow": true, "claimed_server_hop_innocent": true, "claimed_remaining_quota": 999, "claimed_authorized": true}}
+  ]
+}
