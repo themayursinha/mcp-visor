@@ -1,16 +1,19 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/capability"
+	"github.com/themayursinha/mcp-visor/internal/instructionauthority"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
@@ -115,6 +118,40 @@ func (p *Proxy) processToolsCall(
 		p.forwardAudit(rtDeniedEvent)
 		p.observeToolCall("denied", decision.Reason, serverName, callReq.Name, string(p.engine.GetRiskLevel(serverName, callReq.Name)), false, started)
 		return raw, "denied"
+	}
+
+	if authorize := p.instructionAuthorize; authorize != nil {
+		env, classErr := classifyInstructionAuthorityEnvelope(raw)
+		reason := classErr
+		execute := false
+		if classErr == "" {
+			execute, reason = authorize(env.InstructionObject, instructionauthority.EvaluationRoot{
+				Origin:             env.EvaluationRoot.Origin,
+				InstructionBearing: env.EvaluationRoot.InstructionBearing,
+				EffectClass:        env.EvaluationRoot.EffectClass,
+				ContentSHA256:      env.EvaluationRoot.ContentSHA256,
+			})
+		}
+		if !execute {
+			respond(req.ID, reason)
+			p.metrics.IncrementDenied()
+			h32Denied := audit.Event{
+				EventType: audit.EventToolDenied,
+				SessionID: p.session.ID,
+				AgentID:   p.cfg.ClientID,
+				Server:    serverName,
+				Tool:      callReq.Name,
+				Decision:  string(policy.ActionDeny),
+				Reason:    reason,
+				RiskLevel: string(p.engine.GetRiskLevel(serverName, callReq.Name)),
+			}
+			p.attachServerIdentity(&h32Denied, snapshot.identity)
+			_ = p.audit.Log(h32Denied)
+			release()
+			p.forwardAudit(h32Denied)
+			p.observeToolCall("denied", reason, serverName, callReq.Name, string(p.engine.GetRiskLevel(serverName, callReq.Name)), false, started)
+			return raw, "denied"
+		}
 	}
 
 	redactedArgs, redactionResult := redactor.RedactArgs(argsMap)
@@ -825,4 +862,84 @@ func capabilityDeclaredAuthority(pol *policy.Policy, serverName string) capabili
 		Target:        serverName,
 		WorkspaceRoot: root,
 	}
+}
+
+const instructionAuthorityMetaKey = "mcp-visor/instruction-authority/v1"
+
+type instructionAuthorityEnvelope struct {
+	InstructionObject instructionauthority.InstructionObject `json:"instruction_object"`
+	EvaluationRoot    instructionAuthorityRootWire           `json:"evaluation_root"`
+}
+
+type instructionAuthorityRootWire struct {
+	Origin             instructionauthority.Origin `json:"origin"`
+	InstructionBearing bool                        `json:"instruction_bearing"`
+	EffectClass        string                      `json:"effect_class"`
+	ContentSHA256      string                      `json:"content_sha256"`
+}
+
+func jsonRawNull(b json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(b), []byte("null"))
+}
+
+func jsonRawObject(b json.RawMessage) bool {
+	t := bytes.TrimSpace(b)
+	return len(t) > 0 && t[0] == '{'
+}
+
+func semanticJSONEqual(a, b []byte) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
+}
+
+func classifyInstructionAuthorityEnvelope(raw json.RawMessage) (instructionAuthorityEnvelope, string) {
+	var env instructionAuthorityEnvelope
+	const missing, malformed = "instruction authority envelope missing", "instruction authority envelope malformed"
+	var wire struct {
+		Params json.RawMessage `json:"params"`
+	}
+	if json.Unmarshal(raw, &wire) != nil || !jsonRawObject(wire.Params) {
+		return env, malformed
+	}
+	var params map[string]json.RawMessage
+	if json.Unmarshal(wire.Params, &params) != nil {
+		return env, malformed
+	}
+	meta, ok := params["_meta"]
+	if !ok || jsonRawNull(meta) {
+		return env, missing
+	}
+	if !jsonRawObject(meta) {
+		return env, malformed
+	}
+	var metaMap map[string]json.RawMessage
+	if json.Unmarshal(meta, &metaMap) != nil {
+		return env, malformed
+	}
+	val, ok := metaMap[instructionAuthorityMetaKey]
+	if !ok || jsonRawNull(val) {
+		return env, missing
+	}
+	if !jsonRawObject(val) {
+		return env, malformed
+	}
+	dec := json.NewDecoder(bytes.NewReader(val))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&env); err != nil {
+		return env, malformed
+	}
+	if dec.More() {
+		return env, malformed
+	}
+	if env.InstructionObject.SchemaVersion != instructionauthority.SchemaVersion {
+		return env, malformed
+	}
+	remarshaled, err := json.Marshal(env)
+	if err != nil || !semanticJSONEqual(val, remarshaled) {
+		return env, malformed
+	}
+	return env, ""
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/approval"
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/capability"
+	"github.com/themayursinha/mcp-visor/internal/instructionauthority"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/observability"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -55,6 +56,11 @@ type Proxy struct {
 	capEvalMu   sync.Mutex
 	capLastHash string
 	capStepID   int
+
+	// instructionAuthorize is the optional H32 gate. Nil is disabled and is
+	// the zero-behavioral-delta default. When the policy setting is on, the
+	// production value is instructionauthority.Authorize.
+	instructionAuthorize func(instructionauthority.InstructionObject, instructionauthority.EvaluationRoot) (bool, string)
 
 	// resolvedIdentity is the immutable stdio executable identity resolved
 	// once per launched proxy process. identityResolved records whether the
@@ -247,6 +253,7 @@ func New(cfg Config) *Proxy {
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
 	}
+	proxy.syncInstructionAuthorize(cfg.Policy)
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
 	return proxy
@@ -306,6 +313,7 @@ func NewWithTracing(cfg Config) *Proxy {
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
 	}
+	proxy.syncInstructionAuthorize(cfg.Policy)
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
@@ -450,6 +458,18 @@ func (p *Proxy) syncCapabilityEvaluator(pol *policy.Policy) {
 	}
 }
 
+// syncInstructionAuthorize installs or clears the H32 tools/call gate from the
+// current policy generation. Disabled is a nil function (zero behavioral
+// delta). Enabled is instructionauthority.Authorize. Called under runtimeMu
+// on reload so an in-flight call sees one generation.
+func (p *Proxy) syncInstructionAuthorize(pol *policy.Policy) {
+	if pol != nil && pol.Settings.InstructionAuthorityContinuity {
+		p.instructionAuthorize = instructionauthority.Authorize
+	} else {
+		p.instructionAuthorize = nil
+	}
+}
+
 // reconcilePublishedRuntime refreshes redactor, audit patterns, and approval
 // timeout to match an already-published policy generation. It is invoked while
 // the watcher/engine registration lock is held, so it must not publish() or
@@ -484,6 +504,7 @@ func (p *Proxy) refreshPolicyRuntime(pol *policy.Policy) {
 	// published generation so a stale cfg.Policy cannot leave capEval nil
 	// while the engine already exposes capability_accounting: true.
 	p.syncCapabilityEvaluator(pol)
+	p.syncInstructionAuthorize(pol)
 	p.runtimeMu.Unlock()
 }
 
@@ -520,6 +541,7 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 		p.approval.SetTimeout(timeout)
 	}
 	p.syncCapabilityEvaluator(pol)
+	p.syncInstructionAuthorize(pol)
 	if p.audit != nil {
 		p.audit.SetRedactionPatterns(pol.Redaction.Patterns)
 		// Record the generation transition before exposing it to tools/call.

@@ -100,9 +100,11 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Permission-bypass delegation: `deny_permission_bypass` is a fail-closed spawn-flag slot. A mandate to create a worker does not authorize `spawn_agent` with skip-permissions. Explicitly-off values are not a bypass. Delegation graphs are out of model.
 - Unauthorized configuration activation: `allow_activation` is an exact, fail-closed executable-or-host slot. A mandate to register `/usr/bin/node` or `mcp.internal` does not authorize `register_mcp` of `/bin/sh` or `169.254.169.254`. Describing infrastructure is not instantiating it.
 
-## Proof-carrying autonomy islands (not on `tools/call`)
+## Optional H32 instruction-authority intercept
 
-These packages prove PCA properties in isolation. **`Authorize` is not wired into the proxy `tools/call` path.** A green demo does not mean Visor currently prevents that class in production.
+H32 has an optional `tools/call` intercept. It is disabled by default. When `settings.instruction_authority_continuity` is true, cooperating clients must supply the exact caller-held metadata envelope at `params._meta["mcp-visor/instruction-authority/v1"]`. Standard MCP `tools/call` has no provenance and cannot satisfy the enabled gate without a cooperating harness. Clients that omit the envelope are denied only when the setting is enabled.
+
+H33–H43 remain proof islands not invoked on `tools/call`. A green island demo does not mean Visor currently prevents that class in production.
 
 | Island | Invariant | Demo |
 |--------|-----------|------|

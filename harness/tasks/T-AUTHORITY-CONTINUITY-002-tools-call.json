@@ -1,0 +1,113 @@
+{
+  "task_id": "T-AUTHORITY-CONTINUITY-002-tools-call",
+  "invariant_ids": ["H32"],
+  "security_sensitive": true,
+  "security_problem": "H32 exists as an isolated evaluator but is not called on tools/call. Standard MCP carries no instruction provenance, so the proxy must not infer authority from tool name, arguments, visible USER role, or model text. When explicitly enabled, a cooperating harness must supply a caller-held InstructionObject and EvaluationRoot in the exact namespaced request metadata envelope; missing, malformed, FAILED, DATA_ONLY, broken-linkage, unknown-authority, and over-bound inputs deny before policy, approval, durable commit, or relay.",
+  "required_behavior": "Add settings.instruction_authority_continuity, default false. A nil proxy function preserves zero behavioral delta. When enabled, after canonical envelope classification, server identity, and runtime limits, decode params._meta[\"mcp-visor/instruction-authority/v1\"] strictly and call the existing instructionauthority.Authorize exactly once. Missing and malformed envelopes deny with the contract adapter reasons. Existing Authorize reasons are reused verbatim. Authorize allow is only a conjunct; denial is terminal and never routes to approval. Hot reload toggles the function under the runtime barrier.",
+  "failure_behavior": "An enabled allowed-looking tools/call with no usable caller-held envelope denies. The canonical MCP_OUTPUT to AGENT_SUMMARY to PERSISTENT_GOAL to SECOND_AGENT_MESSAGE laundering path remains DATA_ONLY even with visible role USER and denies with insufficient authority. No denied call reaches argument policy, taint, chain, capability accounting, approval, durable authorization commit, state mutation, or relay. Disabled remains the legacy path.",
+  "allowed_paths": [
+    "internal/policy/types.go",
+    "internal/policy/instruction_authority_settings_test.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/instruction_authority_adapter_test.go",
+    "tests/integration/instruction_authority_stdio_test.go",
+    "harness/invariants.md",
+    "harness/tasks/T-AUTHORITY-CONTINUITY-002-tools-call.json",
+    "README.md",
+    "SECURITY.md",
+    "docs/architecture.md",
+    "docs/policy-model.md",
+    "docs/threat-model.md"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "red_test",
+      "expect": "fail",
+      "argv": ["go", "test", "./internal/proxy", "-run", "^TestREDOptedInInstructionAuthorityDeniesLaunderedCall$", "-count=1"]
+    },
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "-race", "-count=1", "./internal/policy", "./internal/proxy"]
+    },
+    {
+      "name": "stdio_integration",
+      "expect": "pass",
+      "argv": ["go", "test", "./tests/integration", "-run", "^TestInstructionAuthorityContinuityStdioProxy$", "-count=1"]
+    },
+    {
+      "name": "full_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./...", "-count=1", "-timeout", "120s"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "H33-H43 proxy integration",
+    "natural-language instruction classification",
+    "authority inference from tool names, arguments, model text, visible roles, or representations",
+    "HMAC, signatures, tokens, channel binding, or client authentication for the provenance envelope",
+    "default-on enforcement",
+    "CLI or environment opt-in",
+    "capability evaluator or capability-accounting semantic changes",
+    "pause-to-approval behavior",
+    "human override of H32 denial",
+    "changes to internal/instructionauthority",
+    "VerifyProvenance or promoter-registry wire transport",
+    "new audit schema",
+    "metadata secrecy or stripping",
+    "new dependencies",
+    "Wiz-fixed or universal production-prevention claims",
+    "autonomous push, merge, tag, or release"
+  ],
+  "attack_classes": [
+    {
+      "id": "missing-provenance-envelope",
+      "failure_class": "missing-provenance-envelope",
+      "expected": "enabled tools/call denies before policy and relay with instruction authority envelope missing"
+    },
+    {
+      "id": "malformed-provenance-envelope",
+      "failure_class": "malformed-provenance-envelope",
+      "expected": "enabled tools/call denies before policy and relay with instruction authority envelope malformed"
+    },
+    {
+      "id": "user-role-instruction-laundering",
+      "failure_class": "user-role-instruction-laundering",
+      "expected": "MCP output laundered into a USER-visible second-agent message remains DATA_ONLY and denies with insufficient authority"
+    },
+    {
+      "id": "failed-continuity-execution",
+      "failure_class": "failed-continuity-execution",
+      "expected": "FAILED continuity denies with the existing Authorize reason"
+    },
+    {
+      "id": "natural-language-provenance-inference",
+      "failure_class": "natural-language-provenance-inference",
+      "expected": "tool name, arguments, and model text never manufacture object, root, authority, or continuity"
+    },
+    {
+      "id": "approval-overrides-continuity",
+      "failure_class": "approval-overrides-continuity",
+      "expected": "H32 denial is terminal and never reaches approval"
+    },
+    {
+      "id": "default-on-regression",
+      "failure_class": "default-on-regression",
+      "expected": "omitted or false setting leaves a nil gate and the legacy tools/call path unchanged"
+    },
+    {
+      "id": "reload-generation-race",
+      "failure_class": "reload-generation-race",
+      "expected": "one tools/call observes one coherent policy and instruction-gate generation"
+    }
+  ]
+}

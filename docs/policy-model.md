@@ -55,6 +55,14 @@ time_restrictions: # Time-of-day access controls (optional)
 | `approval_timeout_seconds` | int | 300 | Approval timeout (5 minutes). Deny after timeout. |
 | `chain_window_size` | int | 10 | Number of previous calls to inspect for chain detection. |
 | `log_level` | string | `"info"` | Log level: `debug`, `info`, `warn`, `error`. |
+| `instruction_authority_continuity` | bool | false | Opt `tools/call` into the H32 instruction-authority gate. Default false leaves a nil gate (legacy path). |
+
+```yaml
+settings:
+  instruction_authority_continuity: true
+```
+
+When enabled, callers supply `params._meta["mcp-visor/instruction-authority/v1"]` as `{instruction_object, evaluation_root}`. Missing `_meta`, null `_meta`, absent key, or null key deny with `instruction authority envelope missing`. Non-object `_meta`/value, unknown fields, schema mismatch, and failed semantic round-trip deny with `instruction authority envelope malformed`. H32 allow is only a conjunct; an H32 denial cannot be approved.
 
 ## Servers
 
@@ -803,15 +811,16 @@ The proxy applies checks in this order:
 
 1. Optional stdio identity attestation — mismatch or unresolved identity denies before argument policy
 2. Runtime limits — argument size, session call count, and session timeout
-3. Argument redaction — secrets are removed from the payload prepared for relay
-4. Built-in sensitive-path block
-5. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. `Evaluate` folds argument rules, identity, time restrictions, and `approval_required` the same way: deny stops; require_approval is remembered; allow continues; any other action is a fail-closed deny. Approval is returned only if no stage denied.
-6. Existing session taints checked against egress controls
-7. Chain detection against recent calls authorized for relay
-8. Approval check
-9. Durable allow-commit — terminal `tool_call_allowed` is fully appended and `Sync()`'d; failure denies with zero relay and does not mark taints
-10. Post-allow taint marking for matching source tools
-11. Relay to the MCP server
+3. Optional H32 instruction-authority continuity — when `settings.instruction_authority_continuity` is true, decode `params._meta["mcp-visor/instruction-authority/v1"]` and call `instructionauthority.Authorize`. Missing envelope: `instruction authority envelope missing`. Malformed envelope: `instruction authority envelope malformed`. An `Authorize` denial is terminal and cannot be approved. An H32 allow is only a conjunct; later gates still decide.
+4. Argument redaction — secrets are removed from the payload prepared for relay
+5. Built-in sensitive-path block
+6. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. `Evaluate` folds argument rules, identity, time restrictions, and `approval_required` the same way: deny stops; require_approval is remembered; allow continues; any other action is a fail-closed deny. Approval is returned only if no stage denied.
+7. Existing session taints checked against egress controls
+8. Chain detection against recent calls authorized for relay
+9. Approval check
+10. Durable allow-commit — terminal `tool_call_allowed` is fully appended and `Sync()`'d; failure denies with zero relay and does not mark taints
+11. Post-allow taint marking for matching source tools
+12. Relay to the MCP server
 
 Session history is appended after authorization but before the transport write. It therefore represents calls authorized for relay, including a call whose transport write later fails.
 

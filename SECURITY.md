@@ -49,7 +49,8 @@ MCP Visor is a deterministic policy enforcement proxy. It does not use an LLM to
 - Duplicate `method` keys where any value resolves to `tools/call` are blocked before relay.
 - JSON-RPC batches containing a `tools/call` element are blocked before relay; non-tools batches forward unchanged.
 - Strict lint is not a complete enforcement gate; the linter-only composite rule passes, and `--no-warnings` can neutralize strict warning failures
-- Proof-carrying autonomy islands (H32–H43: instruction continuity, causal authority, principal derivation, resource identity, control-plane integrity, swarm authority budget, authority-context integrity, non-transitive host authority, authorization-state fidelity, capability composition graph, cross-tool correlation, self-escalation invariant) are isolated evaluators. They are not invoked on the proxy `tools/call` path. A passing island demo does not mean that class is enforced in production.
+- H32 is optionally enforced at `tools/call` only from caller-supplied structured provenance at `params._meta["mcp-visor/instruction-authority/v1"]`. The setting defaults off; default-off deployments retain the old limitation. Ordinary clients that do not supply the envelope receive no H32 protection while the setting is off and are denied while it is on. No client provenance authentication or channel binding is added. Standard MCP does not carry instruction provenance.
+- H33–H43 remain isolated evaluators and are not invoked on the proxy `tools/call` path. A passing island demo does not mean that class is enforced in production.
 
 ### Hardening Recommendations
 
