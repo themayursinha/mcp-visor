@@ -1,6 +1,9 @@
 package contextprovenance
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 func trustRank(t string) (int, bool) {
 	switch t {
@@ -166,10 +169,65 @@ func ancestryBreach(g map[string]ContextFragment, ceil map[string]string, target
 	return walk(target)
 }
 
+func token(s string) string {
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == 0x7f {
+			b = append(b, '_')
+			continue
+		}
+		b = append(b, c)
+	}
+	return string(b)
+}
+
+func derivedPath(g map[string]ContextFragment, ids []string) string {
+	multi := false
+	for _, id := range ids {
+		if len(g[id].DerivedFrom) > 1 {
+			multi = true
+			break
+		}
+	}
+	if !multi {
+		return strings.Join(ids, "->")
+	}
+	edges := make([]string, 0, len(ids))
+	for _, id := range ids {
+		for _, p := range g[id].DerivedFrom {
+			edges = append(edges, p+"->"+id)
+		}
+	}
+	sort.Strings(edges)
+	return strings.Join(edges, ",")
+}
+
+func sourceFragment(g map[string]ContextFragment, ceil map[string]string, ids []string) ContextFragment {
+	var src ContextFragment
+	found := false
+	for _, id := range ids {
+		f := g[id]
+		if len(f.DerivedFrom) != 0 {
+			continue
+		}
+		if !found {
+			src, found = f, true
+			continue
+		}
+		cr, _ := trustRank(ceil[id])
+		sr, _ := trustRank(ceil[src.FragmentID])
+		if cr < sr || cr == sr && id < src.FragmentID {
+			src = f
+		}
+	}
+	return src
+}
+
 func evidence(c CandidateMessage, origin, principal, scope, path, declared, effective, ceiling, required, proof, escalation, authority string) [8]string {
 	return [8]string{
 		"Context route Agent A -> MCP web tool -> Agent B",
-		"Visible role " + c.Claims.VisibleRole + " reconstructed_from " + c.Claims.ReconstructedFromRole,
+		"Visible role " + token(c.Claims.VisibleRole) + " reconstructed_from " + token(c.Claims.ReconstructedFromRole),
 		"Original origin " + origin + " principal " + principal + " scope " + scope,
 		"Derived path " + path,
 		"Declared trust " + declared + " effective trust " + effective,
@@ -207,10 +265,9 @@ func Authorize(root EvaluationRoot, candidate CandidateMessage) Decision {
 	ceil := ceilings(g)
 	eff := ceil[candidate.FragmentID]
 	ids := ancestryIDs(g, candidate.FragmentID)
-	path := strings.Join(ids, "->")
+	path := derivedPath(g, ids)
 	origin, principal, scope := "", "", ""
-	if len(ids) > 0 {
-		src := g[ids[0]]
+	if src := sourceFragment(g, ceil, ids); src.FragmentID != "" {
 		origin, principal, scope = src.Origin, src.Principal, src.Scope
 	}
 	d.EffectiveTrust = eff
