@@ -41,6 +41,9 @@ func TestSwarmAuthorityBudgetDemo(t *testing.T) {
 		"concurrency sixth_principal=DENIED limit=5",
 		"authorization_rate sixth_new_target_same_tick=DENIED limit=5",
 		"credential_harvest fourth_target=DENIED limit=3",
+		"credential_use held_discovered=ALLOWED",
+		"credential_discover exhausted=DENIED",
+		"origin victim_cloud_network=DENIED",
 		"domain_escalation without_external_approval=DENIED",
 		"domain_escalation with_external_approval=ALLOWED",
 	} {
