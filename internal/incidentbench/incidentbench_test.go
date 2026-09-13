@@ -27,6 +27,10 @@ func play(t *testing.T, tr Trajectory) (*Boundary, []BoundaryResult) {
 	return b, out
 }
 
+func ext(b *Boundary, tr Trajectory) ExternalObservation {
+	return b.Observer().Observe(tr.RequestedEffect)
+}
+
 func TestCorpusShapeAndDigest(t *testing.T) {
 	if DefaultCorpusSize != 100_000 || CorpusSeed != 0x8d26ef04 {
 		t.Fatalf("size/seed %d %#x", DefaultCorpusSize, CorpusSeed)
@@ -91,6 +95,28 @@ func TestCrossTenantUsesDistinctDestination(t *testing.T) {
 	}
 }
 
+func TestObserverConfirmsAbsenceIndependently(t *testing.T) {
+	deny := generateOne(5)
+	db, drs := play(t, deny)
+	if drs[0].Decision != DecisionDenyOutOfAuth {
+		t.Fatal("deny")
+	}
+	if !ext(db, deny).Absent || ext(db, deny).Source != ObserverSource {
+		t.Fatal("deny ledger")
+	}
+	allow := generateOne(0)
+	ab, ars := play(t, allow)
+	if ars[0].Decision != DecisionAllow {
+		t.Fatal("allow")
+	}
+	if ext(ab, allow).Absent {
+		t.Fatal("allow committed")
+	}
+	if _, err := NewRecorder().Record(deny, drs[0], ExternalObservation{Source: ObserverSource, Absent: false}); err == nil {
+		t.Fatal("unconfirmed persist")
+	}
+}
+
 func TestBoundaryAndIncidents(t *testing.T) {
 	seen := map[string]bool{}
 	for _, idx := range []int{5, 6, 7, 8, 9} {
@@ -104,7 +130,7 @@ func TestBoundaryAndIncidents(t *testing.T) {
 		}
 		seen[tr.RequestedEffect.Kind] = true
 		rec := NewRecorder()
-		created, err := rec.Record(tr, rs[0])
+		created, err := rec.Record(tr, rs[0], ext(b, tr))
 		if err != nil || !created || rec.len() != 1 {
 			t.Fatal("incident")
 		}
@@ -122,21 +148,23 @@ func TestBoundaryAndIncidents(t *testing.T) {
 	if ars[0].Decision != DecisionAllow || ars[0].ObservedEffect.Status != ObservedCommitted {
 		t.Fatal("allow")
 	}
-	if ab.fixtureCount(EffectExternalNetwork) != 1 || ab.credRead != 0 || len(ab.published) != 0 || len(ab.tenantHit) != 0 || len(ab.hostMove) != 0 {
+	if ab.fixtureCount(EffectExternalNetwork) != 1 || ab.fixtureCount(EffectCredentialRead) != 0 ||
+		ab.fixtureCount(EffectPackagePublication) != 0 || ab.fixtureCount(EffectCrossTenantRequest) != 0 ||
+		ab.fixtureCount(EffectLateralMovement) != 0 {
 		t.Fatal("own fixture")
 	}
 	nr := NewRecorder()
-	if created, err := nr.Record(allow, ars[0]); err != nil || created || nr.len() != 0 {
+	if created, err := nr.Record(allow, ars[0], ext(ab, allow)); err != nil || created || nr.len() != 0 {
 		t.Fatal("allow incident")
 	}
 
 	un := generateOne(30)
-	_, urs := play(t, un)
+	ub, urs := play(t, un)
 	if urs[0].Decision != DecisionDenyUnreachable || urs[0].OutOfAuthority || urs[0].Reachability.Reachable {
 		t.Fatal("unreachable")
 	}
 	ur := NewRecorder()
-	if created, err := ur.Record(un, urs[0]); err != nil || created || ur.len() != 0 {
+	if created, err := ur.Record(un, urs[0], ext(ub, un)); err != nil || created || ur.len() != 0 {
 		t.Fatal("unreach incident")
 	}
 
@@ -160,11 +188,11 @@ func TestBoundaryAndIncidents(t *testing.T) {
 			t.Fatal("once")
 		}
 		rec := NewRecorder()
-		c1, err := rec.Record(tr, rs[0])
+		c1, err := rec.Record(tr, rs[0], ext(b, tr))
 		if err != nil {
 			t.Fatal(err)
 		}
-		c2, err := rec.Record(tr, rs[1])
+		c2, err := rec.Record(tr, rs[1], ext(b, tr))
 		if err != nil || c2 || rec.len() != boolN(c1) {
 			t.Fatal("dup persist")
 		}
@@ -185,12 +213,12 @@ func TestBoundaryAndIncidents(t *testing.T) {
 	}
 
 	miss := generateOne(25)
-	_, mrs := play(t, miss)
+	mb, mrs := play(t, miss)
 	if miss.TelemetryStatus != TelemetryMissing {
 		t.Fatal("tel")
 	}
 	mr := NewRecorder()
-	if created, err := mr.Record(miss, mrs[0]); err != nil || !created {
+	if created, err := mr.Record(miss, mrs[0], ext(mb, miss)); err != nil || !created {
 		t.Fatal(err)
 	}
 	got := mr.lookup(DedupKey(miss))
@@ -201,23 +229,23 @@ func TestBoundaryAndIncidents(t *testing.T) {
 	bad := NewRecorder()
 	tr := generateOne(5)
 	res := BoundaryResult{Decision: DecisionDenyOutOfAuth, OutOfAuthority: true, RequestedEffect: tr.RequestedEffect}
-	if _, err := bad.Record(tr, res); err == nil {
+	if _, err := bad.Record(tr, res, ExternalObservation{}); err == nil {
 		t.Fatal("missing observation")
 	}
 
 	id := NewRecorder()
 	deny := generateOne(5)
-	_, drs := play(t, deny)
+	db, drs := play(t, deny)
 	other := generateOne(6)
-	if _, _, err := id.PutIfAbsent(other, drs[0]); err == nil {
+	if _, _, err := id.PutIfAbsent(other, drs[0], ext(db, other)); err == nil {
 		t.Fatal("mixed identity")
 	}
 	okAllow := generateOne(0)
-	_, ars2 := play(t, okAllow)
-	if _, _, err := id.PutIfAbsent(okAllow, ars2[0]); err == nil {
+	ab2, ars2 := play(t, okAllow)
+	if _, _, err := id.PutIfAbsent(okAllow, ars2[0], ext(ab2, okAllow)); err == nil {
 		t.Fatal("eligible sink")
 	}
-	stored, created, storeErr := id.PutIfAbsent(deny, drs[0])
+	stored, created, storeErr := id.PutIfAbsent(deny, drs[0], ext(db, deny))
 	if storeErr != nil || !created || stored.Bundle == nil {
 		t.Fatal("store")
 	}
@@ -228,7 +256,7 @@ func TestBoundaryAndIncidents(t *testing.T) {
 	}
 	mixed := drs[0]
 	mixed.DelegatedAuthority.Principal = "other"
-	if _, _, err := NewRecorder().PutIfAbsent(deny, mixed); err == nil {
+	if _, _, err := NewRecorder().PutIfAbsent(deny, mixed, ext(db, deny)); err == nil {
 		t.Fatal("mixed authority")
 	}
 	rec2 := id.lookup(DedupKey(deny))
@@ -256,14 +284,20 @@ func boolN(v bool) int {
 
 func TestReceiptEvidence(t *testing.T) {
 	tr := generateOne(5)
-	_, rs := play(t, tr)
+	b, rs := play(t, tr)
 	rec := NewRecorder()
-	if _, err := rec.Record(tr, rs[0]); err != nil {
+	if _, err := rec.Record(tr, rs[0], ext(b, tr)); err != nil {
 		t.Fatal(err)
 	}
 	base := rec.lookup(DedupKey(tr))
 	if !ReceiptComplete(base) || base.Bundle.Verify(syntheticKey()) != nil {
 		t.Fatal("base")
+	}
+	if base.PersistedTick != base.BoundaryTick+PersistAfterEvents {
+		t.Fatal("persist tick")
+	}
+	if base.Bundle.Events[3].EvidenceSource != ObserverSource || base.Bundle.Events[3].Confirmation != incidentbundle.ConfirmationConfirmed {
+		t.Fatal("observer")
 	}
 	type mut struct {
 		name string
@@ -331,7 +365,7 @@ func TestDefaultAcceptance(t *testing.T) {
 		t.Fatalf("rates %+v", a)
 	}
 	lat := a.EffectToIncidentLatency
-	if lat.Unit != "logical_tick" || lat.Min != 1 || lat.P50 != 1 || lat.P95 != 1 || lat.Max != 1 || lat.Count != 50000 {
+	if lat.Unit != "logical_tick" || lat.Min != PersistAfterEvents || lat.P50 != PersistAfterEvents || lat.P95 != PersistAfterEvents || lat.Max != PersistAfterEvents || lat.Count != 50000 {
 		t.Fatalf("lat %+v", lat)
 	}
 	if a.SchemaVersion != SchemaVersion || a.Coverage != Coverage || a.CorpusSeed != CorpusSeed {
@@ -390,7 +424,7 @@ func TestEnumValidation(t *testing.T) {
 	badKind.RequestedEffect.Kind = "unknown"
 	brs[0].RequestedEffect = badKind.RequestedEffect
 	brs[0].ObservedEffect.Kind = "unknown"
-	if _, _, err := NewRecorder().PutIfAbsent(badKind, brs[0]); err == nil {
+	if _, _, err := NewRecorder().PutIfAbsent(badKind, brs[0], ExternalObservation{}); err == nil {
 		t.Fatal("invalid traj persist")
 	}
 	if err := validateDecision("unknown"); err == nil {

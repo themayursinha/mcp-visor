@@ -12,8 +12,10 @@ const (
 	Coverage           = "synthetic_mcp_action_boundary"
 	BoundarySource     = "synthetic-action-boundary"
 	ObservationSource  = "synthetic-fixture-table"
+	ObserverSource     = "synthetic-fixture-observer"
 	CredentialSentinel = "synthetic-placeholder"
 	RedactionNote      = "synthetic fixture; no raw credential material"
+	PersistAfterEvents = 4
 )
 
 const (

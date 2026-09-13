@@ -1,13 +1,15 @@
-# Proof and incident-completeness benchmark
+# Proof and incident-completeness conformance corpus
 
 This benchmark covers a local synthetic MCP action-boundary model only. It
 does not cover or enforce the executor, operating-system, container, network,
 DNS, credential store, package registry, tenant service, or host boundary.
 
-Package `internal/incidentbench` is a deterministic, in-memory harness. It is
-not a production authorizer, live incident responder, or exposure scanner. It
-does not change the proxy, policy engine, H32, approvals, or Incident Bundle
-v0.1. Numbers characterize only this fixed synthetic corpus.
+Package `internal/incidentbench` is a deterministic, in-memory
+conformance/regression corpus. It is not a production authorizer, live
+incident responder, exposure scanner, or efficacy benchmark. Ground truth is
+the generated scenario table (rows 1–5). It does not change the proxy, policy
+engine, H32, approvals, or Incident Bundle v0.1. Numbers characterize only
+this fixed synthetic corpus.
 
 Reproduce:
 
@@ -29,9 +31,11 @@ These fields are typed and distinct. Reachability is never authority.
 4. **Requested effect** — typed consequential operation (`effect_id`, kind,
    target, tenant). Every generated effect has `consequential=true`.
 5. **Observed effect** — what the action-boundary fixture committed or
-   blocked (`status`, kind, target, tenant, `boundary_source`, tick). Sourced
-   only from the local adapter or the blocked-before-adapter branch. There is
-   no transcript field and no free-text parser.
+   blocked (`status`, kind, target, tenant, `boundary_source`, tick). The
+   boundary authorizes or blocks; it does not confirm external absence.
+   Confirmed `external_effect` evidence comes only from a separate
+   `synthetic-fixture-observer` query of the fixture ledger. There is no
+   transcript field and no free-text parser.
 6. **Policy/authority epoch** — current epochs against which the delegation is
    checked.
 
@@ -98,7 +102,8 @@ lowercase SHA-256 of `trajectory_id NUL effect_id NUL kind NUL target NUL
 tenant`. `incident_id` is `incident-` plus that digest. The in-memory
 recorder is `PutIfAbsent`: first call builds, verifies, and persists; a
 byte-equivalent retry returns the first record; a same-key non-equivalent
-call fails. `persisted_tick` is `boundary_tick+1` and is unchanged on retry.
+call fails. `persisted_tick` is `boundary_tick+4` (after the four bundle
+events) and is unchanged on retry.
 
 Each `IncidentRecord.bundle` is built with `internal/incidentbundle` (not a
 copied schema). A benchmark-only Ed25519 key is derived from
@@ -106,8 +111,10 @@ copied schema). A benchmark-only Ed25519 key is derived from
 anchor). Four events, in order: `requested_action` (the five non-observed
 dimensions), `policy_decision` (deny, reason, epochs, `authority_valid:false`),
 `runtime_attempt` (`relayed:false`, `blocked_at:synthetic_mcp_action_boundary`),
-`external_effect` (observed effect, telemetry, `confirmation:confirmed`).
-Confirmed means the local adapter was not invoked. Redaction note:
+`external_effect` (observed effect, telemetry, `confirmation:confirmed` only
+when the independent fixture observer reports the effect ID absent from the
+ledger). Confirmed means the observer queried the ledger, not that the
+boundary assumed a skip. Redaction note:
 `synthetic fixture; no raw credential material`. Bundles are sealed and
 verified before persist. Integrity proves recorded bytes and stage structure,
 not semantic truth of an external system.
@@ -127,9 +134,10 @@ retries. Latency uses `unit:logical_tick` over true-positive persists as
 `persisted_tick − boundary_tick` (nearest-rank percentiles). Default
 acceptance: 100000 trajectories, 50000 expected/emitted/TP/complete, 0 FN/FP
 /duplicates, recall/precision/completeness 1, FPR/duplicate rate 0, latency
-1/1/1/1. These are synthetic-corpus results, not production efficacy,
-whole-runtime coverage, an executor/network guarantee, or a compliance
-claim. Do not read them as “zero false positives” outside this corpus.
+4/4/4/4. These are labeled-corpus conformance results, not production
+efficacy, whole-runtime coverage, an executor/network guarantee, or a
+compliance claim. Do not read them as “zero false positives” outside this
+corpus.
 
 ## Limitations and residuals
 
@@ -140,9 +148,9 @@ claim. Do not read them as “zero false positives” outside this corpus.
 5. does not establish Wiz remediation or Wiz-fixed status
 
 A process can bypass an MCP proxy or cause effects beyond this synthetic
-boundary; this benchmark neither observes nor prevents that. Confirmed blocked
-is a local adapter fact, not proof of absence on a real network, host,
-registry, credential store, or tenant. No durable/multi-process exactly-once
+boundary; this corpus neither observes nor prevents that. Confirmed blocked
+is an independent fixture-observer ledger query, not proof of absence on a
+real network, host, registry, credential store, or tenant. No durable/multi-process exactly-once
 sink or crash recovery. Epochs are synthetic; no policy loader or revocation
 service. Follow-on telemetry loss is represented, not repaired. Shared-state
 propagation (A writes poison, B retrieves, C challenges) is residual and is

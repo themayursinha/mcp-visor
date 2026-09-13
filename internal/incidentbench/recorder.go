@@ -80,7 +80,7 @@ func (r *Recorder) len() int { return len(r.byKey) }
 
 func (r *Recorder) lookup(key string) IncidentRecord { return cloneRecord(r.byKey[key]) }
 
-func (r *Recorder) Record(tr Trajectory, res BoundaryResult) (bool, error) {
+func (r *Recorder) Record(tr Trajectory, res BoundaryResult, ext ExternalObservation) (bool, error) {
 	if res.ObservedEffect.Status == "" || res.ObservedEffect.BoundarySource == "" {
 		return false, fmt.Errorf("missing action-boundary observation")
 	}
@@ -93,11 +93,11 @@ func (r *Recorder) Record(tr Trajectory, res BoundaryResult) (bool, error) {
 	if !tr.RequestedEffect.Consequential || res.Decision != DecisionDenyOutOfAuth || !res.OutOfAuthority {
 		return false, nil
 	}
-	_, created, err := r.PutIfAbsent(tr, res)
+	_, created, err := r.PutIfAbsent(tr, res, ext)
 	return created, err
 }
 
-func (r *Recorder) PutIfAbsent(tr Trajectory, res BoundaryResult) (IncidentRecord, bool, error) {
+func (r *Recorder) PutIfAbsent(tr Trajectory, res BoundaryResult, ext ExternalObservation) (IncidentRecord, bool, error) {
 	if err := validateTrajectory(tr); err != nil {
 		return IncidentRecord{}, false, err
 	}
@@ -114,7 +114,7 @@ func (r *Recorder) PutIfAbsent(tr Trajectory, res BoundaryResult) (IncidentRecor
 		}
 		return cloneRecord(existing), false, nil
 	}
-	rec, err := buildRecord(tr, res, res.ObservedEffect.BoundaryTick+1)
+	rec, err := buildRecord(tr, res, res.ObservedEffect.BoundaryTick+PersistAfterEvents, ext)
 	if err != nil {
 		return IncidentRecord{}, false, err
 	}
@@ -144,7 +144,7 @@ func equivRecord(rec IncidentRecord, tr Trajectory, res BoundaryResult) bool {
 		reflect.DeepEqual(rec.DelegatedAuthority, cloneDeleg(tr.DelegatedAuthority))
 }
 
-func buildRecord(tr Trajectory, res BoundaryResult, persisted uint64) (IncidentRecord, error) {
+func buildRecord(tr Trajectory, res BoundaryResult, persisted uint64, ext ExternalObservation) (IncidentRecord, error) {
 	key := DedupKey(tr)
 	rec := IncidentRecord{
 		SchemaVersion: SchemaVersion, IncidentID: "incident-" + key, DedupKey: key,
@@ -155,7 +155,7 @@ func buildRecord(tr Trajectory, res BoundaryResult, persisted uint64) (IncidentR
 		TelemetryStatus: res.TelemetryStatus, BoundaryTick: res.ObservedEffect.BoundaryTick,
 		PersistedTick: persisted,
 	}
-	b, err := buildBundle(rec)
+	b, err := buildBundle(rec, ext)
 	if err != nil {
 		return IncidentRecord{}, err
 	}
@@ -163,7 +163,7 @@ func buildRecord(tr Trajectory, res BoundaryResult, persisted uint64) (IncidentR
 	return rec, nil
 }
 
-func appendEv(b *incidentbundle.Bundle, kind string, ts int64, rec IncidentRecord, payload map[string]any, confirm string) error {
+func appendEv(b *incidentbundle.Bundle, kind string, ts int64, rec IncidentRecord, payload map[string]any, source, confirm string) error {
 	return b.Append(kind, ts, func(ev *incidentbundle.Event) {
 		if kind == incidentbundle.KindRequestedAction {
 			ev.Principal = rec.DeclaredEnvironment.Principal
@@ -172,7 +172,7 @@ func appendEv(b *incidentbundle.Bundle, kind string, ts int64, rec IncidentRecor
 		}
 		ev.Payload = payload
 		ev.RedactionNote = RedactionNote
-		ev.EvidenceSource = BoundarySource
+		ev.EvidenceSource = source
 		if confirm != "" {
 			ev.Confirmation = confirm
 		}
@@ -181,7 +181,7 @@ func appendEv(b *incidentbundle.Bundle, kind string, ts int64, rec IncidentRecor
 
 const bundleUnixBase int64 = 1_704_067_200 // 2024-01-01 UTC; events are base plus logical tick
 
-func buildBundle(rec IncidentRecord) (*incidentbundle.Bundle, error) {
+func buildBundle(rec IncidentRecord, ext ExternalObservation) (*incidentbundle.Bundle, error) {
 	ts := bundleUnixBase + int64(rec.BoundaryTick)
 	b := incidentbundle.New(rec.IncidentID, policyHash(rec.PolicyAuthorityEpoch), ts)
 	b.Manifest.PolicyID = policyID(rec.PolicyAuthorityEpoch)
@@ -189,23 +189,31 @@ func buildBundle(rec IncidentRecord) (*incidentbundle.Bundle, error) {
 		"declared_environment": rec.DeclaredEnvironment, "observed_reachability": rec.ObservedReachability,
 		"delegated_authority": rec.DelegatedAuthority, "requested_effect": rec.RequestedEffect,
 		"policy_authority_epoch": rec.PolicyAuthorityEpoch,
-	}, ""); err != nil {
+	}, BoundarySource, ""); err != nil {
 		return nil, err
 	}
 	if err := appendEv(b, incidentbundle.KindPolicyDecision, ts+1, rec, map[string]any{
 		"decision": "deny", "reason": rec.Reason, "policy_epoch": rec.PolicyAuthorityEpoch.PolicyEpoch,
 		"authority_epoch": rec.PolicyAuthorityEpoch.AuthorityEpoch, "authority_valid": false,
-	}, ""); err != nil {
+	}, BoundarySource, ""); err != nil {
 		return nil, err
 	}
 	if err := appendEv(b, incidentbundle.KindRuntimeAttempt, ts+2, rec, map[string]any{
 		"relayed": false, "blocked_at": Coverage,
-	}, ""); err != nil {
+	}, BoundarySource, ""); err != nil {
 		return nil, err
+	}
+	confirm := incidentbundle.ConfirmationUnconfirmed
+	src := ext.Source
+	if src == "" {
+		src = ObserverSource
+	}
+	if ext.Source == ObserverSource && ext.Absent {
+		confirm = incidentbundle.ConfirmationConfirmed
 	}
 	if err := appendEv(b, incidentbundle.KindExternalEffect, ts+3, rec, map[string]any{
 		"observed_effect": rec.ObservedEffect, "telemetry_status": rec.TelemetryStatus,
-	}, incidentbundle.ConfirmationConfirmed); err != nil {
+	}, src, confirm); err != nil {
 		return nil, err
 	}
 	if err := b.Seal(syntheticKey()); err != nil {
@@ -224,7 +232,7 @@ func ReceiptComplete(rec IncidentRecord) bool {
 	if rec.ObservedEffect.Status != ObservedBlocked || rec.ObservedEffect.BoundarySource != BoundarySource {
 		return false
 	}
-	if rec.PersistedTick != rec.BoundaryTick+1 || rec.BoundaryTick == 0 {
+	if rec.PersistedTick != rec.BoundaryTick+PersistAfterEvents || rec.BoundaryTick == 0 {
 		return false
 	}
 	if rec.TelemetryStatus != TelemetryPresent && rec.TelemetryStatus != TelemetryMissing {
@@ -265,7 +273,7 @@ func ReceiptComplete(rec IncidentRecord) bool {
 	if !jsonEq(p3["observed_effect"], rec.ObservedEffect) || !jsonEq(p3["telemetry_status"], rec.TelemetryStatus) {
 		return false
 	}
-	if b.Events[3].Confirmation != incidentbundle.ConfirmationConfirmed {
+	if b.Events[3].Confirmation != incidentbundle.ConfirmationConfirmed || b.Events[3].EvidenceSource != ObserverSource {
 		return false
 	}
 	return b.Verify(syntheticKey()) == nil

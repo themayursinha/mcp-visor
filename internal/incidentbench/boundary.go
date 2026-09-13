@@ -30,9 +30,8 @@ type cacheEntry struct {
 	result      BoundaryResult
 }
 
-type Boundary struct {
-	reachable map[string]bool
-	cache     map[string]cacheEntry
+type fixtureLedger struct {
+	committed map[string]bool
 	netSent   map[string]uint64
 	credRead  uint64
 	credValue string
@@ -41,8 +40,67 @@ type Boundary struct {
 	hostMove  map[string]uint64
 }
 
+func (l *fixtureLedger) has(effectID string) bool {
+	return l != nil && l.committed[effectID]
+}
+
+func (l *fixtureLedger) commit(req RequestedEffect) {
+	if l.committed == nil {
+		l.committed = map[string]bool{}
+	}
+	l.committed[req.EffectID] = true
+	switch req.Kind {
+	case EffectExternalNetwork:
+		if l.netSent == nil {
+			l.netSent = map[string]uint64{}
+		}
+		l.netSent[req.Target]++
+	case EffectCredentialRead:
+		l.credValue = CredentialSentinel
+		l.credRead++
+	case EffectCrossTenantRequest:
+		if l.tenantHit == nil {
+			l.tenantHit = map[string]uint64{}
+		}
+		l.tenantHit[req.Target]++
+	case EffectPackagePublication:
+		if l.published == nil {
+			l.published = map[string]uint64{}
+		}
+		l.published[req.Target]++
+	case EffectLateralMovement:
+		if l.hostMove == nil {
+			l.hostMove = map[string]uint64{}
+		}
+		l.hostMove[req.Target]++
+	}
+}
+
+type Boundary struct {
+	reachable map[string]bool
+	cache     map[string]cacheEntry
+	ledger    *fixtureLedger
+}
+
+type ExternalObservation struct {
+	Source string
+	Absent bool
+}
+
+type Observer struct {
+	ledger *fixtureLedger
+}
+
 func NewBoundary() *Boundary {
-	return &Boundary{reachable: map[string]bool{}, cache: map[string]cacheEntry{}}
+	return &Boundary{reachable: map[string]bool{}, cache: map[string]cacheEntry{}, ledger: &fixtureLedger{}}
+}
+
+func (b *Boundary) Observer() Observer {
+	return Observer{ledger: b.ledger}
+}
+
+func (o Observer) Observe(req RequestedEffect) ExternalObservation {
+	return ExternalObservation{Source: ObserverSource, Absent: !o.ledger.has(req.EffectID)}
 }
 
 func (b *Boundary) setReachable(id string, ok bool) {
@@ -89,62 +147,40 @@ func checkAuth(tr Trajectory) (bool, string) {
 }
 
 func (b *Boundary) invoke(req RequestedEffect) {
-	switch req.Kind {
-	case EffectExternalNetwork:
-		if b.netSent == nil {
-			b.netSent = map[string]uint64{}
-		}
-		b.netSent[req.Target]++
-	case EffectCredentialRead:
-		b.credValue = CredentialSentinel
-		b.credRead++
-	case EffectCrossTenantRequest:
-		if b.tenantHit == nil {
-			b.tenantHit = map[string]uint64{}
-		}
-		b.tenantHit[req.Target]++
-	case EffectPackagePublication:
-		if b.published == nil {
-			b.published = map[string]uint64{}
-		}
-		b.published[req.Target]++
-	case EffectLateralMovement:
-		if b.hostMove == nil {
-			b.hostMove = map[string]uint64{}
-		}
-		b.hostMove[req.Target]++
-	}
+	b.ledger.commit(req)
 }
 
 func (b *Boundary) fixtureTargetCount(req RequestedEffect) uint64 {
+	l := b.ledger
 	switch req.Kind {
 	case EffectExternalNetwork:
-		if b.netSent == nil {
+		if l.netSent == nil {
 			return 0
 		}
-		return b.netSent[req.Target]
+		return l.netSent[req.Target]
 	case EffectCredentialRead:
-		return b.credRead
+		return l.credRead
 	case EffectCrossTenantRequest:
-		if b.tenantHit == nil {
+		if l.tenantHit == nil {
 			return 0
 		}
-		return b.tenantHit[req.Target]
+		return l.tenantHit[req.Target]
 	case EffectPackagePublication:
-		if b.published == nil {
+		if l.published == nil {
 			return 0
 		}
-		return b.published[req.Target]
+		return l.published[req.Target]
 	case EffectLateralMovement:
-		if b.hostMove == nil {
+		if l.hostMove == nil {
 			return 0
 		}
-		return b.hostMove[req.Target]
+		return l.hostMove[req.Target]
 	}
 	return 0
 }
 
 func (b *Boundary) fixtureCount(kind string) uint64 {
+	l := b.ledger
 	sum := func(m map[string]uint64) uint64 {
 		var n uint64
 		for _, v := range m {
@@ -154,15 +190,15 @@ func (b *Boundary) fixtureCount(kind string) uint64 {
 	}
 	switch kind {
 	case EffectExternalNetwork:
-		return sum(b.netSent)
+		return sum(l.netSent)
 	case EffectCredentialRead:
-		return b.credRead
+		return l.credRead
 	case EffectCrossTenantRequest:
-		return sum(b.tenantHit)
+		return sum(l.tenantHit)
 	case EffectPackagePublication:
-		return sum(b.published)
+		return sum(l.published)
 	case EffectLateralMovement:
-		return sum(b.hostMove)
+		return sum(l.hostMove)
 	}
 	return 0
 }
@@ -195,18 +231,11 @@ func (b *Boundary) Evaluate(tr Trajectory, d Delivery) (BoundaryResult, error) {
 		Kind: tr.RequestedEffect.Kind, Target: tr.RequestedEffect.Target, Tenant: tr.RequestedEffect.Tenant,
 		BoundarySource: BoundarySource, BoundaryTick: d.DeliveryTick,
 	}
-	before := b.fixtureTargetCount(tr.RequestedEffect)
 	switch {
 	case !hasAuth:
-		if b.fixtureTargetCount(tr.RequestedEffect) != before {
-			return BoundaryResult{}, fmt.Errorf("denied effect mutated fixture")
-		}
 		res.Decision, res.OutOfAuthority, res.Reason = DecisionDenyOutOfAuth, true, reason
 		obs.Status = ObservedBlocked
 	case !reach.Reachable:
-		if b.fixtureTargetCount(tr.RequestedEffect) != before {
-			return BoundaryResult{}, fmt.Errorf("unreachable effect mutated fixture")
-		}
 		res.Decision, res.Reason = DecisionDenyUnreachable, "unreachable"
 		obs.Status = ObservedBlocked
 	default:

@@ -54,6 +54,7 @@ var defaultLimitations = []string{
 	"no live targets, external network, or real credentials",
 	"does not prove whole-runtime completeness or bypass resistance",
 	"does not establish Wiz remediation or Wiz-fixed status",
+	"recall/precision score a labeled conformance corpus, not an efficacy benchmark",
 }
 
 func Run() (*Report, error) { return RunSize(DefaultCorpusSize) }
@@ -87,7 +88,7 @@ func execute(trajs []Trajectory) (*Report, error) {
 			if err != nil {
 				return nil, err
 			}
-			if _, err := rec.Record(tr, res); err != nil {
+			if _, err := rec.Record(tr, res, b.Observer().Observe(tr.RequestedEffect)); err != nil {
 				return nil, err
 			}
 		}
