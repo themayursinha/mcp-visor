@@ -55,14 +55,17 @@ time_restrictions: # Time-of-day access controls (optional)
 | `approval_timeout_seconds` | int | 300 | Approval timeout (5 minutes). Deny after timeout. |
 | `chain_window_size` | int | 10 | Number of previous calls to inspect for chain detection. |
 | `log_level` | string | `"info"` | Log level: `debug`, `info`, `warn`, `error`. |
-| `instruction_authority_continuity` | bool | false | Experimental cooperating-client H32 adapter. Default false leaves a nil gate. Not production `tools/call` enforcement. |
+| `instruction_authority_continuity` | bool | false | Optional authenticated, request-bound H32 assertion gate. Default false leaves a nil gate. |
+| `instruction_authority_ed25519_public_keys` | map | omitted | Assertion key IDs to unpadded base64url Ed25519 public keys. Required when the continuity setting is true. Private keys never enter Visor. |
 
 ```yaml
 settings:
   instruction_authority_continuity: true
+  instruction_authority_ed25519_public_keys:
+    issuer-2026-09: "<unpadded-base64url-32-byte-ed25519-public-key>"
 ```
 
-When enabled, a cooperating harness may supply `params._meta["mcp-visor/instruction-authority/v1"]` as `{instruction_object, evaluation_root}`. The proxy checks envelope consistency only. It does not authenticate the caller, bind the assertion to this request, tool, server, or session, or strip the key as an H32 step. If argument redaction rewrites `params`, extra members including this key are dropped; otherwise the key is forwarded. Missing `_meta`, null `_meta`, absent key, or null key deny with `instruction authority envelope missing`. Non-object `_meta`/value, unknown fields, schema mismatch, and failed semantic round-trip deny with `instruction authority envelope malformed`. An adapter allow is only a conjunct; an adapter denial cannot be approved. Do not treat a pass as proof that this trusted instruction authorized this specific action.
+When enabled, a cooperating issuer supplies `params._meta["mcp-visor/instruction-authority/v1"]` as `{instruction_object, evaluation_root, assertion}`. Visor verifies a policy-pinned Ed25519 signature that binds the exact canonical pre-redaction request, object/root, session, client, logical server, tool, expiry, and a single-use nonce, then calls `instructionauthority.Authorize` and strips only that Visor key before later gates and relay. Unrelated `_meta` is preserved. An unsigned self-asserted `TRUSTED_USER` envelope is denied. Missing `_meta`, null `_meta`, absent key, or null key deny with `instruction authority envelope missing`. Non-object `_meta`/value, unknown fields, schema mismatch, and failed semantic round-trip deny with `instruction authority envelope malformed`. An adapter allow is only a conjunct; an adapter denial cannot be approved. Share `--session-id` and `--client-id` with the issuer out of band.
 
 ## Servers
 
@@ -811,7 +814,7 @@ The proxy applies checks in this order:
 
 1. Optional stdio identity attestation — mismatch or unresolved identity denies before argument policy
 2. Runtime limits — argument size, session call count, and session timeout
-3. Experimental H32 cooperating-client adapter — when `settings.instruction_authority_continuity` is true, decode `params._meta["mcp-visor/instruction-authority/v1"]` and call `instructionauthority.Authorize`. This is not production enforcement: the assertion is unauthenticated and not bound to the canonical request, tool, or session. Missing envelope: `instruction authority envelope missing`. Malformed envelope: `instruction authority envelope malformed`. An `Authorize` denial is terminal and cannot be approved. An adapter allow is only a conjunct; later gates still decide.
+3. Optional authenticated H32 assertion — when `settings.instruction_authority_continuity` is true, verify a policy-pinned Ed25519 assertion that binds the exact canonical pre-redaction request, object/root, session, client, logical server, tool, expiry, and one-use nonce, call `instructionauthority.Authorize`, then strip only the Visor metadata key. An unsigned self-asserted `TRUSTED_USER` envelope is denied. Missing envelope: `instruction authority envelope missing`. Malformed envelope: `instruction authority envelope malformed`. An `Authorize` denial is terminal and cannot be approved. An adapter allow is only a conjunct.
 4. Argument redaction — secrets are removed from the payload prepared for relay
 5. Built-in sensitive-path block
 6. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. `Evaluate` folds argument rules, identity, time restrictions, and `approval_required` the same way: deny stops; require_approval is remembered; allow continues; any other action is a fail-closed deny. Approval is returned only if no stage denied.

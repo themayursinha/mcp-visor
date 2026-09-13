@@ -53,6 +53,9 @@ type Settings struct {
 	// InstructionAuthorityContinuity opts tools/call into the H32 instruction-authority gate.
 	// False is the default and preserves the legacy path with a nil gate.
 	InstructionAuthorityContinuity bool `yaml:"instruction_authority_continuity"`
+	// InstructionAuthorityEd25519PublicKeys maps assertion key IDs to
+	// unpadded base64url Ed25519 public keys. Private keys never enter Visor.
+	InstructionAuthorityEd25519PublicKeys map[string]string `yaml:"instruction_authority_ed25519_public_keys,omitempty"`
 }
 
 type Server struct {

@@ -2,14 +2,17 @@
   "task_id": "T-AUTHORITY-CONTINUITY-002-tools-call",
   "invariant_ids": ["H32"],
   "security_sensitive": true,
-  "security_problem": "H32 exists as an isolated evaluator but is not called on tools/call. Standard MCP carries no instruction provenance, so the proxy must not infer authority from tool name, arguments, visible USER role, or model text. When explicitly enabled, a cooperating harness must supply a caller-held InstructionObject and EvaluationRoot in the exact namespaced request metadata envelope; missing, malformed, FAILED, DATA_ONLY, broken-linkage, unknown-authority, and over-bound inputs deny before policy, approval, durable commit, or relay.",
-  "required_behavior": "Add settings.instruction_authority_continuity, default false. A nil proxy function preserves zero behavioral delta. When enabled, after canonical envelope classification, server identity, and runtime limits, decode params._meta[\"mcp-visor/instruction-authority/v1\"] strictly and call the existing instructionauthority.Authorize exactly once. Missing and malformed envelopes deny with the contract adapter reasons. Existing Authorize reasons are reused verbatim. Authorize allow is only a conjunct; denial is terminal and never routes to approval. Hot reload toggles the function under the runtime barrier.",
-  "failure_behavior": "An enabled allowed-looking tools/call with no usable caller-held envelope denies. The canonical MCP_OUTPUT to AGENT_SUMMARY to PERSISTENT_GOAL to SECOND_AGENT_MESSAGE laundering path remains DATA_ONLY even with visible role USER and denies with insufficient authority. No denied call reaches argument policy, taint, chain, capability accounting, approval, durable authorization commit, state mutation, or relay. Disabled remains the legacy path.",
+  "security_problem": "The optional H32 tools/call adapter accepted an unauthenticated caller-supplied EvaluationRoot. An untrusted MCP client/model could self-assert TRUSTED_USER and satisfy Authorize. Enabled H32 must authenticate the root and bind it to the exact request, session, client, logical server, tool, expiry, and one-use nonce.",
+  "required_behavior": "Keep settings.instruction_authority_continuity default false and make its enabled path require a policy-pinned Ed25519 assertion from an out-of-band trusted issuer. Strictly decode the existing metadata envelope plus assertion, verify exact signed claims, enforce a maximum 60-second lifetime, atomically consume a 32-byte nonce per Session, call the existing instructionauthority.Authorize exactly once after binding, and strip only the Visor metadata key before every later gate and relay. Preserve unrelated metadata and compose stripping with argument redaction.",
+  "failure_behavior": "Enabled calls deny with exact contract reasons on missing or malformed envelope/assertion, unknown key, invalid signature, expiration, wrong session/client/server/tool/request/envelope hash, replay, or strip failure. An unsigned self-asserted TRUSTED_USER envelope never authorizes. H32 semantic denial remains terminal and consumes an authenticated nonce. Disabled remains the nil legacy path.",
   "allowed_paths": [
     "internal/policy/types.go",
+    "internal/policy/loader.go",
     "internal/policy/instruction_authority_settings_test.go",
     "internal/proxy/proxy.go",
+    "internal/proxy/session.go",
     "internal/proxy/tools_call.go",
+    "internal/proxy/instruction_authority_auth.go",
     "internal/proxy/instruction_authority_adapter_test.go",
     "tests/integration/instruction_authority_stdio_test.go",
     "harness/invariants.md",
@@ -26,7 +29,7 @@
     {
       "name": "red_test",
       "expect": "fail",
-      "argv": ["go", "test", "./internal/proxy", "-run", "^TestREDOptedInInstructionAuthorityDeniesLaunderedCall$", "-count=1"]
+      "argv": ["go", "test", "./internal/proxy", "-run", "^TestREDSelfAssertedTrustedUserWithoutAuthenticationDenies$", "-count=1"]
     },
     {
       "name": "target_test",
@@ -49,65 +52,55 @@
       "argv": ["harness/check.sh"]
     }
   ],
-  "spec_revision": 1,
+  "spec_revision": 2,
   "non_goals": [
     "H33-H43 proxy integration",
     "natural-language instruction classification",
-    "authority inference from tool names, arguments, model text, visible roles, or representations",
-    "HMAC, signatures, tokens, channel binding, or client authentication for the provenance envelope",
     "default-on enforcement",
-    "CLI or environment opt-in",
-    "capability evaluator or capability-accounting semantic changes",
-    "pause-to-approval behavior",
-    "human override of H32 denial",
-    "changes to internal/instructionauthority",
-    "VerifyProvenance or promoter-registry wire transport",
-    "new audit schema",
-    "metadata secrecy or stripping",
+    "new CLI or environment enablement",
+    "modifying the H32 lattice or Authorize semantics",
+    "recreating H32 in the proxy",
+    "using stdio server identity as client authentication",
+    "standard MCP provenance support",
     "new dependencies",
     "Wiz-fixed or universal production-prevention claims",
     "autonomous push, merge, tag, or release"
   ],
   "attack_classes": [
     {
-      "id": "missing-provenance-envelope",
-      "failure_class": "missing-provenance-envelope",
-      "expected": "enabled tools/call denies before policy and relay with instruction authority envelope missing"
+      "id": "self-asserted-trusted-user",
+      "failure_class": "unauthenticated-evaluation-root",
+      "expected": "an unsigned self-asserted TRUSTED_USER envelope denies with instruction authority assertion missing"
     },
     {
-      "id": "malformed-provenance-envelope",
-      "failure_class": "malformed-provenance-envelope",
-      "expected": "enabled tools/call denies before policy and relay with instruction authority envelope malformed"
+      "id": "assertion-replay",
+      "failure_class": "replayed-authority-assertion",
+      "expected": "a second use in the same session denies with instruction authority assertion replayed"
     },
     {
-      "id": "user-role-instruction-laundering",
-      "failure_class": "user-role-instruction-laundering",
-      "expected": "MCP output laundered into a USER-visible second-agent message remains DATA_ONLY and denies with insufficient authority"
+      "id": "cross-context-assertion",
+      "failure_class": "unbound-authority-assertion",
+      "expected": "wrong session, client, server, tool, request hash, or envelope hash denies with the exact mismatch reason"
     },
     {
-      "id": "failed-continuity-execution",
-      "failure_class": "failed-continuity-execution",
-      "expected": "FAILED continuity denies with the existing Authorize reason"
+      "id": "expired-assertion",
+      "failure_class": "stale-authority-assertion",
+      "expected": "an assertion at or after expires_at_unix denies with instruction authority assertion expired"
     },
     {
-      "id": "natural-language-provenance-inference",
-      "failure_class": "natural-language-provenance-inference",
-      "expected": "tool name, arguments, and model text never manufacture object, root, authority, or continuity"
-    },
-    {
-      "id": "approval-overrides-continuity",
-      "failure_class": "approval-overrides-continuity",
-      "expected": "H32 denial is terminal and never reaches approval"
+      "id": "metadata-confused-deputy",
+      "failure_class": "authority-metadata-relayed",
+      "expected": "the mock server never sees the Visor key; unrelated metadata survives stripping and redaction"
     },
     {
       "id": "default-on-regression",
       "failure_class": "default-on-regression",
-      "expected": "omitted or false setting leaves a nil gate and the legacy tools/call path unchanged"
+      "expected": "omitted or false setting leaves a nil gate and unchanged legacy path"
     },
     {
       "id": "reload-generation-race",
       "failure_class": "reload-generation-race",
-      "expected": "one tools/call observes one coherent policy and instruction-gate generation"
+      "expected": "one tools/call observes one coherent policy, key set, and H32 function generation while nonce state survives reload"
     }
   ]
 }

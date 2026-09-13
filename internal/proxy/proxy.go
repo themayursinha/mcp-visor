@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -60,7 +62,8 @@ type Proxy struct {
 	// instructionAuthorize is the optional H32 gate. Nil is disabled and is
 	// the zero-behavioral-delta default. When the policy setting is on, the
 	// production value is instructionauthority.Authorize.
-	instructionAuthorize func(instructionauthority.InstructionObject, instructionauthority.EvaluationRoot) (bool, string)
+	instructionAuthorize     func(instructionauthority.InstructionObject, instructionauthority.EvaluationRoot) (bool, string)
+	instructionAuthorityKeys map[string]ed25519.PublicKey
 
 	// resolvedIdentity is the immutable stdio executable identity resolved
 	// once per launched proxy process. identityResolved records whether the
@@ -182,11 +185,13 @@ type serverIdentityEvidence struct {
 // Callers that need coherence across a reload must capture it while holding
 // runtimeMu.RLock and use the returned immutable values after releasing it.
 type runtimeSnapshot struct {
-	policy          *policy.Policy
-	redactor        *redaction.Engine
-	approval        *approval.Engine
-	approvalTimeout time.Duration
-	identity        serverIdentityEvidence
+	policy                   *policy.Policy
+	redactor                 *redaction.Engine
+	approval                 *approval.Engine
+	approvalTimeout          time.Duration
+	identity                 serverIdentityEvidence
+	instructionAuthorize     func(instructionauthority.InstructionObject, instructionauthority.EvaluationRoot) (bool, string)
+	instructionAuthorityKeys map[string]ed25519.PublicKey
 }
 
 type approvalEvidence struct {
@@ -465,8 +470,10 @@ func (p *Proxy) syncCapabilityEvaluator(pol *policy.Policy) {
 func (p *Proxy) syncInstructionAuthorize(pol *policy.Policy) {
 	if pol != nil && pol.Settings.InstructionAuthorityContinuity {
 		p.instructionAuthorize = instructionauthority.Authorize
+		p.instructionAuthorityKeys = decodeInstructionAuthorityKeys(pol.Settings.InstructionAuthorityEd25519PublicKeys)
 	} else {
 		p.instructionAuthorize = nil
+		p.instructionAuthorityKeys = nil
 	}
 }
 
@@ -583,11 +590,13 @@ func (p *Proxy) currentRuntimeSnapshot() runtimeSnapshot {
 func (p *Proxy) runtimeSnapshotLocked(serverName string) runtimeSnapshot {
 	pol := p.engine.Policy()
 	return runtimeSnapshot{
-		policy:          pol,
-		redactor:        p.redactor,
-		approval:        p.approval,
-		approvalTimeout: time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second,
-		identity:        p.identityEvidence(pol, serverName),
+		policy:                   pol,
+		redactor:                 p.redactor,
+		approval:                 p.approval,
+		approvalTimeout:          time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second,
+		identity:                 p.identityEvidence(pol, serverName),
+		instructionAuthorize:     p.instructionAuthorize,
+		instructionAuthorityKeys: p.instructionAuthorityKeys,
 	}
 }
 
@@ -992,36 +1001,38 @@ func (p *Proxy) logServerMessage(raw json.RawMessage) {
 }
 
 func (p *Proxy) rewriteArgs(raw json.RawMessage, redactedArgs map[string]any) (json.RawMessage, error) {
-	var req mcp.Request
-	if err := json.Unmarshal(raw, &req); err != nil {
+	nl := bytes.HasSuffix(raw, []byte{'\n'})
+	body := bytes.TrimSuffix(raw, []byte{'\n'})
+	var req map[string]json.RawMessage
+	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, err
 	}
-
-	var callReq struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments,omitempty"`
+	paramsRaw, ok := req["params"]
+	if !ok {
+		return nil, fmt.Errorf("params")
 	}
-	if err := json.Unmarshal(req.Params, &callReq); err != nil {
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(paramsRaw, &params); err != nil {
 		return nil, err
 	}
-
 	newArgs, err := json.Marshal(redactedArgs)
 	if err != nil {
 		return nil, err
 	}
-	callReq.Arguments = newArgs
-
-	newParams, err := json.Marshal(callReq)
+	params["arguments"] = newArgs
+	newParams, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
-	req.Params = newParams
-
+	req["params"] = newParams
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	return append(data, '\n'), nil
+	if nl {
+		data = append(data, '\n')
+	}
+	return data, nil
 }
 
 func (p *Proxy) extractPath(callReq mcp.ToolsCallRequest) string {

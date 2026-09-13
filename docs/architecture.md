@@ -114,7 +114,7 @@ internal/
     emitter.go                  Async HTTP delivery with HMAC + retry
   siem/                        SIEM event export
     siem.go                     Syslog/JSON/CEF formats over TCP/UDP/file
-  instructionauthority/        PCA island (H32): instruction continuity; experimental cooperating-client adapter when settings.instruction_authority_continuity is true (not production enforcement)
+  instructionauthority/        PCA island (H32): instruction continuity; optional authenticated request-bound adapter when settings.instruction_authority_continuity is true
   causalauthority/             PCA island (H33): causal source vs mandate; not on tools/call
   principalderivation/         PCA island (H34): localhost is not identity; not on tools/call
   resourceidentity/            PCA island (H35): path is not resource identity; not on tools/call
@@ -155,9 +155,8 @@ intercepted tools/call
  └──────┬───────────┘
         ▼
  ┌──────────────────┐
- │ H32 experimental │──▶ Cooperating-client adapter only. Not production
- │ adapter (opt)    │     enforcement; unauthenticated, unbound; envelope
- │                  │     kept unless redaction rewrites params
+ │ H32 authenticated │──▶ Optional Ed25519 request-bound assertion;
+ │ adapter (opt)     │     strip Visor key before redaction/relay
  └──────┬───────────┘
         ▼
  ┌──────────────────┐
@@ -391,6 +390,6 @@ HashiCorp Vault Transit secrets engine provides cryptographic signing without ex
 
 ## Proof-carrying autonomy islands
 
-Package `instructionauthority` (H32) stays a proof island. When `settings.instruction_authority_continuity` is true, an experimental cooperating-client adapter reads `InstructionObject` and `EvaluationRoot` from `params._meta["mcp-visor/instruction-authority/v1"]` and calls `instructionauthority.Authorize`. That is not an attacker-resistant action boundary: the client is untrusted, the trust class is caller-asserted, the envelope is not bound to this request/tool/session, and the adapter does not strip the envelope. If argument redaction rewrites `params`, extra members including the envelope are dropped; otherwise it is forwarded unchanged. The setting defaults off (nil gate, zero behavioral delta). Reloads toggle the bool/function under the same runtime snapshot barrier as other policy-derived surfaces. Standard MCP has no provenance; omitting the envelope is denied only while the setting is on.
+Package `instructionauthority` (H32) stays a proof island. When `settings.instruction_authority_continuity` is true, Visor requires a policy-pinned Ed25519 assertion over the exact canonical pre-redaction request, object/root, session, client, logical server, tool, expiry, and a single-use nonce, then calls `instructionauthority.Authorize` and strips `params._meta["mcp-visor/instruction-authority/v1"]` before later gates and relay. Unrelated metadata is preserved. The assertion issuer, not MCP metadata, authenticates the evaluation root. An unsigned self-asserted `TRUSTED_USER` envelope is denied. The setting defaults off (nil gate, zero behavioral delta). Reloads toggle the bool, keys, and function under the same runtime snapshot barrier as other policy-derived surfaces. Standard MCP has no provenance; omitting the envelope is denied only while the setting is on. This is not universal production prevention.
 
 Packages `causalauthority`, `principalderivation`, `resourceidentity`, `controlplaneintegrity`, `swarmbudget`, `authoritycontext`, `hosttransitivity`, `authstatefidelity`, `compositiongraph`, `toolcorrelation`, and `selfescalation` are **not** stages in the decision pipeline above. They remain stdlib-only evaluators with scripted demos (H33–H43). Treat those as research proofs, not as current `tools/call` enforcement.
