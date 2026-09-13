@@ -125,6 +125,7 @@ internal/
   authstatefidelity/           PCA island (H40): remembered grants are not authority after revoke; not on tools/call
   compositiongraph/            PCA island (H41): claimed per-step ALLOW is not composed authority; not on tools/call
   toolcorrelation/             PCA island (H42): per-tool ALLOW is not correlated authority; not on tools/call
+  selfescalation/               PCA island (H43): ordinary delegation is not meta-authority; not on tools/call
 examples/
   demo-mcp-server/              Mock MCP server for testing/demos
   demo-runner/                  Interactive demo walkthrough
@@ -384,4 +385,4 @@ HashiCorp Vault Transit secrets engine provides cryptographic signing without ex
 
 ## Proof-carrying autonomy islands
 
-Packages `instructionauthority`, `causalauthority`, `principalderivation`, `resourceidentity`, `controlplaneintegrity`, `swarmbudget`, `authoritycontext`, `hosttransitivity`, `authstatefidelity`, `compositiongraph`, and `toolcorrelation` are **not** stages in the decision pipeline above. They are stdlib-only evaluators with scripted demos. `Authorize` ignores untrusted presentation and is not called from `internal/proxy`. Treat them as research proofs (H32–H42), not as current `tools/call` enforcement.
+Packages `instructionauthority`, `causalauthority`, `principalderivation`, `resourceidentity`, `controlplaneintegrity`, `swarmbudget`, `authoritycontext`, `hosttransitivity`, `authstatefidelity`, `compositiongraph`, `toolcorrelation`, and `selfescalation` are **not** stages in the decision pipeline above. They are stdlib-only evaluators with scripted demos. `Authorize` ignores untrusted presentation and is not called from `internal/proxy`. Treat them as research proofs (H32–H43), not as current `tools/call` enforcement.
