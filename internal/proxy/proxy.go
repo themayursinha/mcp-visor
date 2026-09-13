@@ -21,6 +21,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/instructionauthority"
+	"github.com/themayursinha/mcp-visor/internal/killswitch"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/observability"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -86,6 +87,24 @@ type Proxy struct {
 	// (e.g. lapsing a grant during an approval wait) while requests read
 	// it concurrently. Nil means the system clock.
 	nowFunc atomic.Pointer[func() time.Time]
+
+	kineticSessionEmpty bool
+	kineticMon          *killswitch.Monitor
+	kineticInitErr      error
+	kineticStopOnce     sync.Once
+	kineticRevoked      atomic.Bool
+	kineticRevokedThru  uint64
+	kineticReason       string
+	kineticResult       string
+	kineticObserved     time.Time
+	kineticRunErr       error
+	kineticRunMu        sync.Mutex
+	kineticPersistWG    sync.WaitGroup
+	supervisedMu        sync.Mutex
+	supervisedCmd       *exec.Cmd
+	supervisedStdin     io.Closer
+	supervisedPipes     []io.Closer
+	sessionCancel       context.CancelFunc
 }
 
 // now returns the pinned test time or the system clock.
@@ -153,7 +172,10 @@ type Config struct {
 	CapabilityEval bool
 	// TrajectoryAdvisor enables an advisory, default-off observer. It never
 	// authorizes, denies, or skips later gates.
-	TrajectoryAdvisor bool
+	TrajectoryAdvisor     bool
+	KillSwitchDir         string
+	KillSwitchControllers []killswitch.ControllerKey
+	SessionEpoch          uint64
 }
 
 type VaultConfig struct {
@@ -212,6 +234,7 @@ type approvalEvidence struct {
 }
 
 func New(cfg Config) *Proxy {
+	kineticSessionEmpty := cfg.SessionID == ""
 	if cfg.SessionID == "" {
 		cfg.SessionID = fmt.Sprintf("sess-%d", os.Getpid())
 	}
@@ -263,16 +286,19 @@ func New(cfg Config) *Proxy {
 		capEval:           newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
 		trajectoryAdvisor: maybeTrajectoryAdvisor(cfg.TrajectoryAdvisor),
 	}
+	proxy.kineticSessionEmpty = kineticSessionEmpty
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
 	}
 	proxy.syncInstructionAuthorize(cfg.Policy)
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
+	proxy.initKineticStop(cfg)
 	return proxy
 }
 
 func NewWithTracing(cfg Config) *Proxy {
+	kineticSessionEmpty := cfg.SessionID == ""
 	if cfg.SessionID == "" {
 		cfg.SessionID = fmt.Sprintf("sess-%d", os.Getpid())
 	}
@@ -324,6 +350,7 @@ func NewWithTracing(cfg Config) *Proxy {
 		capEval:           newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
 		trajectoryAdvisor: maybeTrajectoryAdvisor(cfg.TrajectoryAdvisor),
 	}
+	proxy.kineticSessionEmpty = kineticSessionEmpty
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
 	}
@@ -331,6 +358,7 @@ func NewWithTracing(cfg Config) *Proxy {
 	proxy.wirePolicyReload()
 	proxy.resolveLaunchedIdentity(cfg)
 	proxy.tracer = proxy.initTracer(cfg.Tracing)
+	proxy.initKineticStop(cfg)
 	return proxy
 }
 
@@ -617,6 +645,13 @@ func (p *Proxy) runtimeSnapshotLocked(serverName string) runtimeSnapshot {
 }
 
 func (p *Proxy) Run(ctx context.Context) error {
+	ctx, err := p.beginKineticRun(ctx)
+	if err != nil {
+		return err
+	}
+	if p.sessionCancel != nil {
+		defer p.sessionCancel()
+	}
 	if err := p.initObservability(); err != nil {
 		return fmt.Errorf("observability: %w", err)
 	}
@@ -625,6 +660,9 @@ func (p *Proxy) Run(ctx context.Context) error {
 	}
 
 	serverCmd := exec.CommandContext(ctx, p.cfg.ServerCommand, p.cfg.ServerArgs...)
+	if p.kineticEnabled() {
+		configureKineticProcess(serverCmd)
+	}
 
 	serverStdin, err := serverCmd.StdinPipe()
 	if err != nil {
@@ -641,6 +679,18 @@ func (p *Proxy) Run(ctx context.Context) error {
 
 	if err := serverCmd.Start(); err != nil {
 		return fmt.Errorf("start server: %w", err)
+	}
+	if p.kineticEnabled() {
+		p.registerSupervisedProcess(serverCmd)
+		p.supervisedMu.Lock()
+		p.supervisedStdin = serverStdin
+		if rc, ok := serverStdout.(io.Closer); ok {
+			p.supervisedPipes = append(p.supervisedPipes, rc)
+		}
+		if rc, ok := serverStderr.(io.Closer); ok {
+			p.supervisedPipes = append(p.supervisedPipes, rc)
+		}
+		p.supervisedMu.Unlock()
 	}
 	defer func() {
 		stopServerProcess(serverCmd, serverStdin)
@@ -670,8 +720,13 @@ func (p *Proxy) Run(ctx context.Context) error {
 	clientParser := mcp.NewParser(os.Stdin, os.Stdout)
 	serverParser := mcp.NewParser(serverStdout, serverStdin)
 
+	errCh := make(chan error, 4)
+	if p.kineticEnabled() {
+		go func() { errCh <- p.runKineticMonitor(ctx) }()
+	}
+
 	if err := p.runHandshake(clientParser, serverParser); err != nil {
-		return fmt.Errorf("handshake: %w", err)
+		return p.kineticOr(fmt.Errorf("handshake: %w", err))
 	}
 	p.logger.Info("proxy ready",
 		"session", p.session.ID,
@@ -679,32 +734,20 @@ func (p *Proxy) Run(ctx context.Context) error {
 		"default_action", p.engine.Policy().DefaultAction,
 	)
 
-	errCh := make(chan error, 2)
-	var wg sync.WaitGroup
+	go func() { errCh <- p.relayClientToServer(ctx, clientParser, serverParser) }()
+	go func() { errCh <- p.relayServerToClient(ctx, serverParser, clientParser) }()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		errCh <- p.relayClientToServer(ctx, clientParser, serverParser)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		errCh <- p.relayServerToClient(ctx, serverParser, clientParser)
-	}()
-
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
-
+	relays := 0
 	for err := range errCh {
-		if err != nil {
-			return err
+		if err != nil || p.kineticEnforcedError() != nil {
+			return p.kineticOr(err)
+		}
+		relays++
+		if relays >= 2 {
+			return p.kineticOr(nil)
 		}
 	}
-	return nil
+	return p.kineticOr(nil)
 }
 
 func stopServerProcess(cmd *exec.Cmd, stdin io.Closer) {

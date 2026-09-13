@@ -48,6 +48,9 @@ func (p *Proxy) processToolsCall(
 		}
 	}
 	defer release()
+	if revoked, reason := p.kineticGate(); revoked {
+		return p.denyKineticRevoked(req, callReq, raw, respond, release, serverName, reason, started)
+	}
 	// Capture the FULL runtime snapshot (policy, redactor, approval, and the
 	// immutable server identity evidence) ONCE while the barrier is held.
 	// Every terminal allow/deny/approval event for this call copies identity
@@ -485,6 +488,12 @@ func (p *Proxy) processToolsCall(
 			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info, advice, anomalous, lineageInfo)
 		} else {
 			delegationReserved = reserved
+		}
+		if revoked, reason := p.kineticGate(); revoked {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
+			return p.denyKineticRevoked(req, callReq, raw, respond, release, serverName, reason, started)
 		}
 		// Lineage recheck: actor/grant validity is [start, expiry). A grant
 		// that was valid when approval started may have expired while the
