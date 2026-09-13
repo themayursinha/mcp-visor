@@ -36,17 +36,39 @@ type Session struct {
 	// delegates) in this session. Enforced against
 	// settings.max_spawn_depth; a fresh session starts at zero.
 	SpawnDepth int
-	mu         sync.RWMutex
+	// instructionAuthorityNonces maps consumed assertion nonces to expiry unix
+	// seconds. Scoped to this Session object and not reset on policy reload.
+	instructionAuthorityNonces map[string]int64
+	mu                         sync.RWMutex
 }
 
 func NewSession(id, clientID string) *Session {
 	return &Session{
-		ID:        id,
-		ClientID:  clientID,
-		CreatedAt: time.Now(),
-		ToolCalls: make([]ToolCallRecord, 0),
-		Taints:    make(map[string]SessionTaint),
+		ID:                         id,
+		ClientID:                   clientID,
+		CreatedAt:                  time.Now(),
+		ToolCalls:                  make([]ToolCallRecord, 0),
+		Taints:                     make(map[string]SessionTaint),
+		instructionAuthorityNonces: make(map[string]int64),
 	}
+}
+
+func (s *Session) ConsumeInstructionAuthorityNonce(nonce string, expiresAt, nowUnix int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.instructionAuthorityNonces == nil {
+		s.instructionAuthorityNonces = make(map[string]int64)
+	}
+	for n, exp := range s.instructionAuthorityNonces {
+		if exp <= nowUnix {
+			delete(s.instructionAuthorityNonces, n)
+		}
+	}
+	if _, exists := s.instructionAuthorityNonces[nonce]; exists {
+		return false
+	}
+	s.instructionAuthorityNonces[nonce] = expiresAt
+	return true
 }
 
 func (s *Session) RecordToolCall(serverName string, req mcp.ToolsCallRequest, result string) {

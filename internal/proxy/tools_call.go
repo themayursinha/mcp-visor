@@ -120,17 +120,32 @@ func (p *Proxy) processToolsCall(
 		return raw, "denied"
 	}
 
-	if authorize := p.instructionAuthorize; authorize != nil {
+	if authorize := snapshot.instructionAuthorize; authorize != nil {
 		env, classErr := classifyInstructionAuthorityEnvelope(raw)
 		reason := classErr
 		execute := false
 		if classErr == "" {
-			execute, reason = authorize(env.InstructionObject, instructionauthority.EvaluationRoot{
-				Origin:             env.EvaluationRoot.Origin,
-				InstructionBearing: env.EvaluationRoot.InstructionBearing,
-				EffectClass:        env.EvaluationRoot.EffectClass,
-				ContentSHA256:      env.EvaluationRoot.ContentSHA256,
-			})
+			if env.Assertion == nil {
+				reason = "instruction authority assertion missing"
+			} else {
+				stripped, err := instructionAuthorityStrip(raw)
+				if err != nil {
+					reason = "instruction authority metadata strip failed"
+				} else if bindErr := p.verifyInstructionAuthorityAssertion(env, stripped, callReq, serverName, snapshot); bindErr != "" {
+					reason = bindErr
+				} else {
+					execute, reason = authorize(env.InstructionObject, instructionauthority.EvaluationRoot{
+						Origin:             env.EvaluationRoot.Origin,
+						InstructionBearing: env.EvaluationRoot.InstructionBearing,
+						EffectClass:        env.EvaluationRoot.EffectClass,
+						ContentSHA256:      env.EvaluationRoot.ContentSHA256,
+					})
+					if execute {
+						raw = stripped
+						originalRaw = stripped
+					}
+				}
+			}
 		}
 		if !execute {
 			respond(req.ID, reason)
@@ -869,6 +884,7 @@ const instructionAuthorityMetaKey = "mcp-visor/instruction-authority/v1"
 type instructionAuthorityEnvelope struct {
 	InstructionObject instructionauthority.InstructionObject `json:"instruction_object"`
 	EvaluationRoot    instructionAuthorityRootWire           `json:"evaluation_root"`
+	Assertion         *instructionAuthorityAssertion         `json:"assertion"`
 }
 
 type instructionAuthorityRootWire struct {
@@ -937,8 +953,28 @@ func classifyInstructionAuthorityEnvelope(raw json.RawMessage) (instructionAutho
 	if env.InstructionObject.SchemaVersion != instructionauthority.SchemaVersion {
 		return env, malformed
 	}
-	remarshaled, err := json.Marshal(env)
-	if err != nil || !semanticJSONEqual(val, remarshaled) {
+	var orig map[string]json.RawMessage
+	if json.Unmarshal(val, &orig) != nil {
+		return env, malformed
+	}
+	objWire, err := json.Marshal(env.InstructionObject)
+	if err != nil || !semanticJSONEqual(orig["instruction_object"], objWire) {
+		return env, malformed
+	}
+	rootWire, err := json.Marshal(env.EvaluationRoot)
+	if err != nil || !semanticJSONEqual(orig["evaluation_root"], rootWire) {
+		return env, malformed
+	}
+	assertRaw, ok := orig["assertion"]
+	if !ok || jsonRawNull(assertRaw) {
+		env.Assertion = nil
+		return env, ""
+	}
+	if env.Assertion == nil || !jsonRawObject(assertRaw) {
+		return env, malformed
+	}
+	assertWire, err := json.Marshal(env.Assertion)
+	if err != nil || !semanticJSONEqual(assertRaw, assertWire) {
 		return env, malformed
 	}
 	return env, ""

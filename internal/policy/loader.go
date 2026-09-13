@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,6 +12,7 @@ import (
 
 // serverAttestationDigestRe validates the pinned stdio invocation digest.
 var serverAttestationDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var instructionAuthorityKeyIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 func LoadFile(path string) (*Policy, error) {
 	data, err := os.ReadFile(path)
@@ -173,7 +176,27 @@ func (p *Policy) Validate() error {
 	if err := p.CapabilityOwnership.Validate(p); err != nil {
 		return err
 	}
+	if err := p.validateInstructionAuthorityKeys(); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func (p *Policy) validateInstructionAuthorityKeys() error {
+	keys := p.Settings.InstructionAuthorityEd25519PublicKeys
+	if p.Settings.InstructionAuthorityContinuity && len(keys) == 0 {
+		return fmt.Errorf("settings.instruction_authority_ed25519_public_keys: at least one key is required when instruction_authority_continuity is true")
+	}
+	for id, enc := range keys {
+		if !instructionAuthorityKeyIDRe.MatchString(id) {
+			return fmt.Errorf("settings.instruction_authority_ed25519_public_keys: invalid key id %q", id)
+		}
+		b, err := base64.RawURLEncoding.DecodeString(enc)
+		if err != nil || len(b) != ed25519.PublicKeySize || base64.RawURLEncoding.EncodeToString(b) != enc {
+			return fmt.Errorf("settings.instruction_authority_ed25519_public_keys[%q]: must be canonical unpadded base64url for a 32-byte Ed25519 public key", id)
+		}
+	}
 	return nil
 }
 
