@@ -50,7 +50,7 @@ keyring, Vault, or a host store.
 |---|---|---|
 | `external_network` | `fixture://network/<tenant>` | in-memory send counter |
 | `credential_read` | `fixture://credential/synthetic` | in-memory sentinel read |
-| `cross_tenant_request` | `fixture://tenant/<tenant>` | in-memory tenant hit |
+| `cross_tenant_request` | `fixture://tenant/<destination-tenant>` | in-memory tenant hit; requested/grant tenant is distinct from the declared home tenant |
 | `package_publication` | `fixture://registry/<package>` | in-memory publish counter |
 | `lateral_movement` | `fixture://host/<host>` | in-memory host-move counter |
 

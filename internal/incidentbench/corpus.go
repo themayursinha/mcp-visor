@@ -27,9 +27,13 @@ func generateOne(i int) Trajectory {
 	auth := uint64(700 + ((i / 150) % 5))
 	tid := fmt.Sprintf("trajectory-%06d", i)
 	eid := fmt.Sprintf("effect-%06d", i)
-	tenant := fmt.Sprintf("tenant-%06d", i)
+	home := fmt.Sprintf("tenant-%06d", i)
+	effectTenant := home
+	if kind == EffectCrossTenantRequest {
+		effectTenant = fmt.Sprintf("tenant-%06d-x-%08x", i, CorpusSeed)
+	}
 	principal := fmt.Sprintf("principal-%06d", i)
-	target := targetFor(kind, tenant, i)
+	target := targetFor(kind, effectTenant, i)
 	tick := uint64(i+1) * 10
 	reachable := scenario != 6
 	fix := []string{}
@@ -40,9 +44,9 @@ func generateOne(i int) Trajectory {
 	var grants []EffectGrant
 	switch scenario {
 	case 0, 6, 7, 8, 9:
-		grants = []EffectGrant{{Kind: kind, Target: target, Tenant: tenant}}
+		grants = []EffectGrant{{Kind: kind, Target: target, Tenant: effectTenant}}
 	case 2:
-		grants = []EffectGrant{{Kind: kind, Target: target, Tenant: tenant}}
+		grants = []EffectGrant{{Kind: kind, Target: target, Tenant: effectTenant}}
 		delAuth = auth - 1
 	}
 	tel := TelemetryPresent
@@ -68,15 +72,15 @@ func generateOne(i int) Trajectory {
 	return Trajectory{
 		TrajectoryID: tid,
 		DeclaredEnvironment: DeclaredEnvironment{
-			EnvironmentID: fmt.Sprintf("env-%06d", i), Principal: principal, Tenant: tenant, FixtureIDs: fix,
+			EnvironmentID: fmt.Sprintf("env-%06d", i), Principal: principal, Tenant: home, FixtureIDs: fix,
 		},
 		ObservedReachability: ObservedReachability{Reachable: reachable, FixtureID: target, ObservationSource: ObservationSource},
 		DelegatedAuthority: DelegatedAuthority{
 			DelegationID: fmt.Sprintf("delegation-%06d", i), Principal: principal,
-			Delegator: fmt.Sprintf("delegator-%06d", i), Tenant: tenant, Grants: grants,
+			Delegator: fmt.Sprintf("delegator-%06d", i), Tenant: home, Grants: grants,
 			PolicyEpoch: delPol, AuthorityEpoch: delAuth,
 		},
-		RequestedEffect: RequestedEffect{EffectID: eid, Kind: kind, Target: target, Tenant: tenant, Consequential: true},
+		RequestedEffect: RequestedEffect{EffectID: eid, Kind: kind, Target: target, Tenant: effectTenant, Consequential: true},
 		Epoch:           PolicyAuthorityEpoch{PolicyEpoch: pol, AuthorityEpoch: auth},
 		TelemetryStatus: tel, Deliveries: dels, scenario: scenario,
 	}

@@ -141,7 +141,29 @@ func cloneDeleg(d DelegatedAuthority) DelegatedAuthority {
 func cloneRecord(r IncidentRecord) IncidentRecord {
 	r.DeclaredEnvironment = cloneEnv(r.DeclaredEnvironment)
 	r.DelegatedAuthority = cloneDeleg(r.DelegatedAuthority)
+	r.Bundle = cloneBundle(r.Bundle)
 	return r
+}
+
+func cloneBundle(b *incidentbundle.Bundle) *incidentbundle.Bundle {
+	if b == nil {
+		return nil
+	}
+	out := *b
+	if b.Events != nil {
+		out.Events = append([]incidentbundle.Event(nil), b.Events...)
+		for i := range out.Events {
+			if out.Events[i].Payload == nil {
+				continue
+			}
+			p := make(map[string]any, len(out.Events[i].Payload))
+			for k, v := range out.Events[i].Payload {
+				p[k] = v
+			}
+			out.Events[i].Payload = p
+		}
+	}
+	return &out
 }
 
 func validEffect(k string) bool {

@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/themayursinha/mcp-visor/internal/incidentbundle"
@@ -64,6 +66,28 @@ func TestCorpusShapeAndDigest(t *testing.T) {
 	}
 	if d1, d2 := corpusDigest(a), corpusDigest(b); d1 != d2 || d1 == "" {
 		t.Fatal("corpus digest")
+	}
+}
+
+func TestCrossTenantUsesDistinctDestination(t *testing.T) {
+	tr := generateOne(2)
+	if tr.RequestedEffect.Kind != EffectCrossTenantRequest {
+		t.Fatalf("kind %s", tr.RequestedEffect.Kind)
+	}
+	if tr.DeclaredEnvironment.Tenant == tr.RequestedEffect.Tenant {
+		t.Fatal("same tenant")
+	}
+	if tr.DelegatedAuthority.Tenant != tr.DeclaredEnvironment.Tenant {
+		t.Fatal("home tenant")
+	}
+	if tr.RequestedEffect.Target != "fixture://tenant/"+tr.RequestedEffect.Tenant {
+		t.Fatal("dest target")
+	}
+	if len(tr.DelegatedAuthority.Grants) != 1 || tr.DelegatedAuthority.Grants[0].Tenant != tr.RequestedEffect.Tenant {
+		t.Fatal("grant dest")
+	}
+	if !strings.Contains(tr.RequestedEffect.Tenant, fmt.Sprintf("%08x", CorpusSeed)) {
+		t.Fatal("seed unused")
 	}
 }
 
@@ -179,6 +203,28 @@ func TestBoundaryAndIncidents(t *testing.T) {
 	res := BoundaryResult{Decision: DecisionDenyOutOfAuth, OutOfAuthority: true, RequestedEffect: tr.RequestedEffect}
 	if _, err := bad.Record(tr, res); err == nil {
 		t.Fatal("missing observation")
+	}
+
+	id := NewRecorder()
+	deny := generateOne(5)
+	_, drs := play(t, deny)
+	other := generateOne(6)
+	if _, _, err := id.PutIfAbsent(other, drs[0]); err == nil {
+		t.Fatal("mixed identity")
+	}
+	okAllow := generateOne(0)
+	_, ars2 := play(t, okAllow)
+	if _, _, err := id.PutIfAbsent(okAllow, ars2[0]); err == nil {
+		t.Fatal("eligible sink")
+	}
+	stored, created, storeErr := id.PutIfAbsent(deny, drs[0])
+	if storeErr != nil || !created || stored.Bundle == nil {
+		t.Fatal("store")
+	}
+	stored.Bundle.Events[0].Payload["declared_environment"] = "mutated"
+	again := id.lookup(DedupKey(deny))
+	if fmt.Sprint(again.Bundle.Events[0].Payload["declared_environment"]) == "mutated" {
+		t.Fatal("aliased bundle")
 	}
 }
 

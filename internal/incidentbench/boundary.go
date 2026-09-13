@@ -50,12 +50,19 @@ func (b *Boundary) setReachable(id string, ok bool) {
 }
 
 func fingerprint(tr Trajectory) string {
-	return strings.Join([]string{
+	parts := []string{
 		tr.RequestedEffect.Kind, tr.RequestedEffect.Target, tr.RequestedEffect.Tenant,
-		tr.DeclaredEnvironment.Principal,
+		tr.DeclaredEnvironment.Principal, tr.DeclaredEnvironment.Tenant,
+		tr.DelegatedAuthority.Principal, tr.DelegatedAuthority.Tenant,
+		strconv.FormatUint(tr.DelegatedAuthority.PolicyEpoch, 10),
+		strconv.FormatUint(tr.DelegatedAuthority.AuthorityEpoch, 10),
 		strconv.FormatUint(tr.Epoch.PolicyEpoch, 10),
 		strconv.FormatUint(tr.Epoch.AuthorityEpoch, 10),
-	}, "\x00")
+	}
+	for _, g := range tr.DelegatedAuthority.Grants {
+		parts = append(parts, g.Kind, g.Target, g.Tenant)
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func checkAuth(tr Trajectory) (bool, string) {
@@ -109,6 +116,34 @@ func (b *Boundary) invoke(req RequestedEffect) {
 	}
 }
 
+func (b *Boundary) fixtureTargetCount(req RequestedEffect) uint64 {
+	switch req.Kind {
+	case EffectExternalNetwork:
+		if b.netSent == nil {
+			return 0
+		}
+		return b.netSent[req.Target]
+	case EffectCredentialRead:
+		return b.credRead
+	case EffectCrossTenantRequest:
+		if b.tenantHit == nil {
+			return 0
+		}
+		return b.tenantHit[req.Target]
+	case EffectPackagePublication:
+		if b.published == nil {
+			return 0
+		}
+		return b.published[req.Target]
+	case EffectLateralMovement:
+		if b.hostMove == nil {
+			return 0
+		}
+		return b.hostMove[req.Target]
+	}
+	return 0
+}
+
 func (b *Boundary) fixtureCount(kind string) uint64 {
 	sum := func(m map[string]uint64) uint64 {
 		var n uint64
@@ -160,11 +195,18 @@ func (b *Boundary) Evaluate(tr Trajectory, d Delivery) (BoundaryResult, error) {
 		Kind: tr.RequestedEffect.Kind, Target: tr.RequestedEffect.Target, Tenant: tr.RequestedEffect.Tenant,
 		BoundarySource: BoundarySource, BoundaryTick: d.DeliveryTick,
 	}
+	before := b.fixtureTargetCount(tr.RequestedEffect)
 	switch {
 	case !hasAuth:
+		if b.fixtureTargetCount(tr.RequestedEffect) != before {
+			return BoundaryResult{}, fmt.Errorf("denied effect mutated fixture")
+		}
 		res.Decision, res.OutOfAuthority, res.Reason = DecisionDenyOutOfAuth, true, reason
 		obs.Status = ObservedBlocked
 	case !reach.Reachable:
+		if b.fixtureTargetCount(tr.RequestedEffect) != before {
+			return BoundaryResult{}, fmt.Errorf("unreachable effect mutated fixture")
+		}
 		res.Decision, res.Reason = DecisionDenyUnreachable, "unreachable"
 		obs.Status = ObservedBlocked
 	default:

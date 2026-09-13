@@ -97,6 +97,12 @@ func (r *Recorder) Record(tr Trajectory, res BoundaryResult) (bool, error) {
 }
 
 func (r *Recorder) PutIfAbsent(tr Trajectory, res BoundaryResult) (IncidentRecord, bool, error) {
+	if res.TrajectoryID != tr.TrajectoryID || res.RequestedEffect != tr.RequestedEffect {
+		return IncidentRecord{}, false, fmt.Errorf("boundary result identity mismatch")
+	}
+	if !tr.RequestedEffect.Consequential || res.Decision != DecisionDenyOutOfAuth || !res.OutOfAuthority {
+		return IncidentRecord{}, false, fmt.Errorf("ineligible incident")
+	}
 	key := DedupKey(tr)
 	if existing, ok := r.byKey[key]; ok {
 		if !equivRecord(existing, tr, res) {
