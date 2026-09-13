@@ -157,6 +157,18 @@ func TestKineticWriteCommandIsAtomicDurableAnd0600(t *testing.T) {
 	if !bytes.HasSuffix(raw, []byte("\n")) {
 		t.Fatal("newline")
 	}
+	hi := signedCmd(t, key, "s", 3, "c1", "stop", "")
+	if _, err := WriteCommand(dir, hi); err != nil {
+		t.Fatal(err)
+	}
+	lo := signedCmd(t, key, "s", 1, "c1", "stop", "")
+	if _, err := WriteCommand(dir, lo); err == nil {
+		t.Fatal("weaker replace")
+	}
+	got, _ := os.ReadFile(CommandPath(dir, "s"))
+	if !bytes.Contains(got, []byte(`"revoke_through_epoch":3`)) {
+		t.Fatal("lost stronger")
+	}
 }
 
 func TestKineticStartupRejectsPersistedOrCommandRevocation(t *testing.T) {

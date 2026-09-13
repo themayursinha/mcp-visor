@@ -176,8 +176,15 @@ func WriteCommand(dir string, cmd Command) (string, error) {
 		}
 		return "", err
 	}
+	path := CommandPath(dir, cmd.SessionID)
+	if raw, e := readControlFile(path); e == nil {
+		var prev Command
+		if decodeControl(raw, &prev) == nil && prev.SessionID == cmd.SessionID && prev.RevokeThroughEpoch > cmd.RevokeThroughEpoch {
+			return "", fmt.Errorf("weaker kinetic command")
+		}
+	}
 	data = append(data, '\n')
-	if err := atomicWrite(cdir, CommandPath(dir, cmd.SessionID), data); err != nil {
+	if err := atomicWrite(cdir, path, data); err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(data)
