@@ -239,7 +239,8 @@ func TestSequentialEvaluationsDoNotTransferAuthority(t *testing.T) {
 		v    string
 	}{{r, legit(), VerdictAllow}, {r, attack(), VerdictDeny}, {r, plain, VerdictDeny}, {r, hostile, VerdictAllow}, {off, attack(), VerdictDeny}, {r, attack(), VerdictDeny}, {r, legit(), VerdictAllow}}
 	for _, s := range seq {
-		if Authorize(s.root, s.a).Verdict != s.v || Authorize(s.root, s.a) != Authorize(s.root, s.a) {
+		d1, d2 := Authorize(s.root, s.a), Authorize(s.root, s.a)
+		if d1.Verdict != s.v || d1 != d2 {
 			t.Fatalf("%s", s.a.ActionID)
 		}
 	}
