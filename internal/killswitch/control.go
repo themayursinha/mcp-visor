@@ -148,7 +148,7 @@ func SignCommand(cmd *Command, key []byte) error {
 }
 func VerifyCommand(cmd Command, key []byte) error {
 	raw, err := hex.DecodeString(cmd.Signature)
-	if validateCommand(cmd, true) != nil || err != nil || !hmac.Equal(raw, hmacSum(macFields(commandMACCtx, strconv.Itoa(cmd.SchemaVersion), cmd.CommandID, cmd.SessionID, strconv.FormatUint(cmd.RevokeThroughEpoch, 10), cmd.ControllerID, cmd.Reason), key)) {
+	if len(key) != 32 || validateCommand(cmd, true) != nil || err != nil || !hmac.Equal(raw, hmacSum(macFields(commandMACCtx, strconv.Itoa(cmd.SchemaVersion), cmd.CommandID, cmd.SessionID, strconv.FormatUint(cmd.RevokeThroughEpoch, 10), cmd.ControllerID, cmd.Reason), key)) {
 		return ErrUnauthorized
 	}
 	return nil
@@ -162,7 +162,7 @@ func SignState(state *State, key []byte) error {
 }
 func VerifyState(state State, key []byte) error {
 	raw, err := hex.DecodeString(state.Signature)
-	if validateState(state, true) != nil || err != nil || !hmac.Equal(raw, hmacSum(macFields(stateMACCtx, strconv.Itoa(state.SchemaVersion), state.SessionID, strconv.FormatUint(state.RevokedThroughEpoch, 10), state.CommandID, state.ControllerID, state.Reason, state.ObservedAt, state.ResultingState, state.RequestSHA256), key)) {
+	if len(key) != 32 || validateState(state, true) != nil || err != nil || !hmac.Equal(raw, hmacSum(macFields(stateMACCtx, strconv.Itoa(state.SchemaVersion), state.SessionID, strconv.FormatUint(state.RevokedThroughEpoch, 10), state.CommandID, state.ControllerID, state.Reason, state.ObservedAt, state.ResultingState, state.RequestSHA256), key)) {
 		return ErrUnauthorized
 	}
 	return nil

@@ -84,6 +84,16 @@ func TestKineticCommandRejectsUnknownControllerAndBadMAC(t *testing.T) {
 	if err := m.StartupCheck(); !errors.Is(err, ErrControlInvalid) {
 		t.Fatalf("got %v", err)
 	}
+	empty := signedCmd(t, nil, "s", 1, "nobody", "stop", strings.Repeat("ff", 16))
+	if VerifyCommand(empty, nil) == nil {
+		t.Fatal("nil-key mac")
+	}
+	if _, err := WriteCommand(dir, empty); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StartupCheck(); !errors.Is(err, ErrControlInvalid) {
+		t.Fatalf("empty-key unknown controller: %v", err)
+	}
 	bad := signedCmd(t, k1, "s", 1, "c1", "stop", strings.Repeat("dd", 16))
 	bad.Signature = strings.Repeat("ee", 32)
 	if VerifyCommand(bad, k1) == nil {
