@@ -1,10 +1,47 @@
 package policy
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/themayursinha/mcp-visor/internal/lineage"
 )
+
+func (p *Policy) validateLineage() error {
+	hasRequire := false
+	for _, srv := range p.Servers {
+		for _, tool := range srv.Tools {
+			if hasLineageRequire(tool.Rules) {
+				hasRequire = true
+			}
+		}
+	}
+	if p.Identity == nil || p.Identity.Version == 0 {
+		if len(p.Trajectories) > 0 {
+			return fmt.Errorf("lineage: trajectories require identity.version=1")
+		}
+		if hasRequire {
+			return fmt.Errorf("lineage: lineage_require requires identity.version=1")
+		}
+		return nil
+	}
+	if p.Identity.Version != 1 {
+		return fmt.Errorf("lineage: identity.version must be 1")
+	}
+	_, err := lineage.NewRegistry(p.Identity.Agents, p.Identity.Grants, p.Trajectories)
+	return err
+}
+
+func hasLineageRequire(rules []ArgRule) bool {
+	for _, rule := range rules {
+		if rule.Type == "lineage_require" {
+			return true
+		}
+	}
+	return false
+}
 
 type ArgValidator struct {
 	compiledDenyPatterns  []*compiledPattern

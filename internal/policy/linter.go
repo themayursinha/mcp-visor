@@ -32,6 +32,7 @@ func Lint(p *Policy) LintResult {
 		"allow_skill":             true,
 		"deny_permission_bypass":  true,
 		"allow_activation":        true,
+		"lineage_require":         true,
 		"allowed_repos":           true,
 		"max_file_size":           true,
 		"max_result_rows":         true, "max_export_rows": true,

@@ -166,6 +166,7 @@ func (p *Proxy) denyOwnership(
 	deny *ownershipDeny,
 	advice trajectory.Advice,
 	anomalous bool,
+	lineage *audit.LineageInfo,
 ) (json.RawMessage, string) {
 	p.metrics.IncrementDenied()
 	respond(req.ID, deny.reason)
@@ -180,6 +181,7 @@ func (p *Proxy) denyOwnership(
 		Decision:  string(policy.ActionDeny),
 		Reason:    withRedactionNote(deny.reason, redactionResult),
 		RiskLevel: string(risk),
+		Lineage:   lineage,
 	}
 	attachOwnershipReceipt(&deniedEvent, deny.receipt)
 	p.attachServerIdentity(&deniedEvent, snapshot.identity)

@@ -179,6 +179,9 @@ func (p *Policy) Validate() error {
 	if err := p.validateInstructionAuthorityKeys(); err != nil {
 		return err
 	}
+	if err := p.validateLineage(); err != nil {
+		return err
+	}
 
 	return nil
 }

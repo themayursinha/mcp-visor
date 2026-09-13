@@ -175,6 +175,7 @@ func (p *Proxy) denyDelegationCeiling(
 	info *ceilingDenyInfo,
 	advice trajectory.Advice,
 	anomalous bool,
+	lineage *audit.LineageInfo,
 ) (json.RawMessage, string) {
 	p.metrics.IncrementDenied()
 	respond(req.ID, info.reason)
@@ -191,6 +192,7 @@ func (p *Proxy) denyDelegationCeiling(
 		RiskLevel:       string(risk),
 		DelegationDepth: info.depth,
 		MaxSpawnDepth:   info.max,
+		Lineage:         lineage,
 	}
 	p.attachServerIdentity(&deniedEvent, snapshot.identity)
 	attachCapabilityArtifact(&deniedEvent, capArtifact)

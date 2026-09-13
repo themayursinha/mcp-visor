@@ -517,6 +517,19 @@ func TestLintUnknownRuleType(t *testing.T) {
 	}
 }
 
+func TestLintLineageRequireIsKnown(t *testing.T) {
+	p := &Policy{
+		Version: "1.0", DefaultAction: ActionDeny, Settings: Settings{ChainWindowSize: 10},
+		Servers: []Server{{Name: "github", Allowed: true, Tools: []ToolRule{{Name: "write_file", Rules: []ArgRule{{Type: "lineage_require"}}}}}},
+	}
+	res := Lint(p)
+	for _, v := range res.Violations {
+		if v.Severity == SeverityWarning && strings.Contains(v.Message, "unknown rule type") {
+			t.Fatalf("lineage_require must be a known rule type, violations: %+v", res.Violations)
+		}
+	}
+}
+
 func TestLintEmptyRuleType(t *testing.T) {
 	p := &Policy{
 		Version:       "1.0",
