@@ -120,6 +120,8 @@ internal/
   resourceidentity/            PCA island (H35): path is not resource identity; not on tools/call
   controlplaneintegrity/       PCA island (H36): policy ALLOW is not substrate integrity; not on tools/call
   swarmbudget/                 PCA island (H37): swarm intent is not authority; not on tools/call
+  authoritycontext/            PCA island (H38): shared ambient context is not principal authority; not on tools/call
+  hosttransitivity/            PCA island (H39): a grant is not transitive across hosts; not on tools/call
 examples/
   demo-mcp-server/              Mock MCP server for testing/demos
   demo-runner/                  Interactive demo walkthrough
@@ -379,4 +381,4 @@ HashiCorp Vault Transit secrets engine provides cryptographic signing without ex
 
 ## Proof-carrying autonomy islands
 
-Packages `instructionauthority`, `causalauthority`, `principalderivation`, `resourceidentity`, `controlplaneintegrity`, and `swarmbudget` are **not** stages in the decision pipeline above. They are stdlib-only evaluators with scripted demos. `Authorize` ignores untrusted presentation and is not called from `internal/proxy`. Treat them as research proofs (H32–H37), not as current `tools/call` enforcement.
+Packages `instructionauthority`, `causalauthority`, `principalderivation`, `resourceidentity`, `controlplaneintegrity`, `swarmbudget`, `authoritycontext`, and `hosttransitivity` are **not** stages in the decision pipeline above. They are stdlib-only evaluators with scripted demos. `Authorize` ignores untrusted presentation and is not called from `internal/proxy`. Treat them as research proofs (H32–H39), not as current `tools/call` enforcement.
