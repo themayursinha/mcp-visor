@@ -117,17 +117,10 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 			p.sessionCancel()
 		}
 		p.containSupervisedProcess()
-		p.runtimeMu.Lock()
-		p.kineticRevokedThru = stop.Command.RevokeThroughEpoch
-		p.kineticReason = stop.Command.Reason
-		p.kineticResult = stop.ResultingState
 		observed := stop.ObservedAt.UTC()
 		if observed.IsZero() {
 			observed = time.Now().UTC()
 		}
-		p.kineticObserved = observed
-		p.runtimeMu.Unlock()
-
 		p.kineticRunMu.Lock()
 		p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
 		p.kineticRunMu.Unlock()
@@ -153,10 +146,10 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 		auditErr := p.audit.CommitKineticStop(ev)
 		var persistErr error
 		if auditErr == nil {
-			p.forwardAudit(ev)
 			if stop.ResultingState == "revoked_contained" && p.kineticMon != nil {
 				persistErr = p.kineticMon.WriteState(stop)
 			}
+			p.forwardAudit(ev)
 		}
 		out := persistErr
 		if auditErr != nil {
@@ -169,6 +162,12 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 			p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
 		}
 		p.kineticRunMu.Unlock()
+		p.runtimeMu.Lock()
+		p.kineticRevokedThru = stop.Command.RevokeThroughEpoch
+		p.kineticReason = stop.Command.Reason
+		p.kineticResult = stop.ResultingState
+		p.kineticObserved = observed
+		p.runtimeMu.Unlock()
 	})
 }
 

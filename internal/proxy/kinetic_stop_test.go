@@ -299,14 +299,24 @@ func TestKineticStopLatchesWithoutRuntimeLock(t *testing.T) {
 	p.runtimeMu.RLock()
 	defer p.runtimeMu.RUnlock()
 	go p.enforceKineticStop(killswitch.Stop{Command: ksign(t, key, "sess-latch", 1, "c1", "latch"), RequestSHA256: strings.Repeat("aa", 32), ObservedAt: time.Now().UTC(), ResultingState: "revoked_contained"})
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(400 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if p.kineticRevoked.Load() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !p.kineticRevoked.Load() {
+		t.Fatal("latch blocked on runtimeMu")
+	}
+	for time.Now().Before(deadline) {
+		b, _ := os.ReadFile(audit)
+		if bytes.Contains(b, []byte("kinetic_stop_enforced")) {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("latch blocked on runtimeMu")
+	t.Fatal("persist blocked on runtimeMu")
 }
 
 func TestKineticEncodeRefusedAfterRevoke(t *testing.T) {
