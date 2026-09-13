@@ -226,6 +226,25 @@ func TestBoundaryAndIncidents(t *testing.T) {
 	if fmt.Sprint(again.Bundle.Events[0].Payload["declared_environment"]) == "mutated" {
 		t.Fatal("aliased bundle")
 	}
+	mixed := drs[0]
+	mixed.DelegatedAuthority.Principal = "other"
+	if _, _, err := NewRecorder().PutIfAbsent(deny, mixed); err == nil {
+		t.Fatal("mixed authority")
+	}
+	rec2 := id.lookup(DedupKey(deny))
+	env, _ := rec2.Bundle.Events[0].Payload["declared_environment"].(DeclaredEnvironment)
+	if len(env.FixtureIDs) == 0 {
+		t.Fatal("env")
+	}
+	env.FixtureIDs[0] = "mutated-fixture"
+	againEnv, _ := id.lookup(DedupKey(deny)).Bundle.Events[0].Payload["declared_environment"].(DeclaredEnvironment)
+	if againEnv.FixtureIDs[0] == "mutated-fixture" {
+		t.Fatal("aliased fixture")
+	}
+	rec2.Bundle.Events[0].Delegation[0] = "mutated-del"
+	if id.lookup(DedupKey(deny)).Bundle.Events[0].Delegation[0] == "mutated-del" {
+		t.Fatal("aliased delegation")
+	}
 }
 
 func boolN(v bool) int {

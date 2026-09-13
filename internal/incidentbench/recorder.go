@@ -97,7 +97,7 @@ func (r *Recorder) Record(tr Trajectory, res BoundaryResult) (bool, error) {
 }
 
 func (r *Recorder) PutIfAbsent(tr Trajectory, res BoundaryResult) (IncidentRecord, bool, error) {
-	if res.TrajectoryID != tr.TrajectoryID || res.RequestedEffect != tr.RequestedEffect {
+	if !resultMatches(tr, res) {
 		return IncidentRecord{}, false, fmt.Errorf("boundary result identity mismatch")
 	}
 	if !tr.RequestedEffect.Consequential || res.Decision != DecisionDenyOutOfAuth || !res.OutOfAuthority {
@@ -117,8 +117,18 @@ func (r *Recorder) PutIfAbsent(tr Trajectory, res BoundaryResult) (IncidentRecor
 	if !ReceiptComplete(rec) {
 		return IncidentRecord{}, false, fmt.Errorf("incomplete receipt")
 	}
-	r.byKey[key] = rec
-	return cloneRecord(rec), true, nil
+	r.byKey[key] = cloneRecord(rec)
+	return cloneRecord(r.byKey[key]), true, nil
+}
+
+func resultMatches(tr Trajectory, res BoundaryResult) bool {
+	return res.TrajectoryID == tr.TrajectoryID && res.RequestedEffect == tr.RequestedEffect &&
+		res.Epoch == tr.Epoch && res.TelemetryStatus == tr.TelemetryStatus &&
+		res.ObservedEffect.Kind == tr.RequestedEffect.Kind &&
+		res.ObservedEffect.Target == tr.RequestedEffect.Target &&
+		res.ObservedEffect.Tenant == tr.RequestedEffect.Tenant &&
+		res.Reachability.FixtureID == tr.RequestedEffect.Target &&
+		reflect.DeepEqual(cloneDeleg(res.DelegatedAuthority), cloneDeleg(tr.DelegatedAuthority))
 }
 
 func equivRecord(rec IncidentRecord, tr Trajectory, res BoundaryResult) bool {

@@ -145,23 +145,56 @@ func cloneRecord(r IncidentRecord) IncidentRecord {
 	return r
 }
 
+func cloneAny(v any) any {
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		m := make(map[string]any, len(x))
+		for k, vv := range x {
+			m[k] = cloneAny(vv)
+		}
+		return m
+	case []any:
+		s := make([]any, len(x))
+		for i := range x {
+			s[i] = cloneAny(x[i])
+		}
+		return s
+	case []string:
+		return slices.Clone(x)
+	case DeclaredEnvironment:
+		return cloneEnv(x)
+	case DelegatedAuthority:
+		return cloneDeleg(x)
+	default:
+		return v
+	}
+}
+
 func cloneBundle(b *incidentbundle.Bundle) *incidentbundle.Bundle {
 	if b == nil {
 		return nil
 	}
 	out := *b
-	if b.Events != nil {
-		out.Events = append([]incidentbundle.Event(nil), b.Events...)
-		for i := range out.Events {
-			if out.Events[i].Payload == nil {
-				continue
-			}
-			p := make(map[string]any, len(out.Events[i].Payload))
-			for k, v := range out.Events[i].Payload {
-				p[k] = v
-			}
-			out.Events[i].Payload = p
+	if b.Events == nil {
+		return &out
+	}
+	out.Events = make([]incidentbundle.Event, len(b.Events))
+	for i, ev := range b.Events {
+		ev.Delegation = slices.Clone(ev.Delegation)
+		if ev.Supersedes != nil {
+			u := *ev.Supersedes
+			ev.Supersedes = &u
 		}
+		if ev.Payload != nil {
+			p := make(map[string]any, len(ev.Payload))
+			for k, val := range ev.Payload {
+				p[k] = cloneAny(val)
+			}
+			ev.Payload = p
+		}
+		out.Events[i] = ev
 	}
 	return &out
 }
