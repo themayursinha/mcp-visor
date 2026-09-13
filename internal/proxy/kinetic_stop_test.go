@@ -183,21 +183,6 @@ func TestKineticStopRedContract(t *testing.T) {
 	})
 }
 
-func handshake(t *testing.T, w io.Writer, r *bytes.Buffer) {
-	t.Helper()
-	fmt := func(s string) { _, _ = w.Write([]byte(s)) }
-	fmt(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n")
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(r.String(), `"id":1`) {
-			fmt(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("handshake: %s", r.String())
-}
-
 func testKineticLive(t *testing.T, helper string) {
 	dir, audit := kdir(t), filepath.Join(t.TempDir(), "a.jsonl")
 	_, key := kkey(t)
@@ -267,15 +252,10 @@ func testKineticLifecycle(t *testing.T, helper string) {
 	if _, err := killswitch.WriteCommand(dir, hi); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	var mu sync.Mutex
 	p.kineticStopOnce.Do(func() {})
 	p.kineticStopOnce = sync.Once{}
 	p.enforceKineticStop(killswitch.Stop{Command: hi, RequestSHA256: strings.Repeat("aa", 32), ObservedAt: time.Now().UTC(), ResultingState: "revoked_contained"})
 	p.enforceKineticStop(killswitch.Stop{Command: hi, ResultingState: "revoked_contained"})
-	mu.Lock()
-	n++
-	mu.Unlock()
 	if !p.kineticRevoked.Load() {
 		t.Fatal("latch")
 	}

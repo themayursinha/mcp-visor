@@ -129,7 +129,7 @@ func startKS(t *testing.T, visor, helper, dir, audit, sess string, epoch int, kp
 	_ = extraTool
 	return cmd, w, r
 }
-func itoa(n int) string { return strings.TrimPrefix(strings.Replace(jsonNum(n), "\"", "", -1), "") }
+func itoa(n int) string { return strings.TrimPrefix(strings.ReplaceAll(jsonNum(n), "\"", ""), "") }
 func jsonNum(n int) string {
 	b, _ := json.Marshal(n)
 	return string(b)
