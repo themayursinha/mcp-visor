@@ -230,6 +230,17 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 }
 
 func (e *Engine) evaluateLineage(serverName, toolName string, args map[string]any, pol *Policy) Decision {
+	return e.EvaluateLineageAt(serverName, toolName, args, pol, time.Now().UTC())
+}
+
+// EvaluateLineageAt evaluates R1–R3 against pol at now. Callers that must
+// not observe a later reload pass the authorizing snapshot policy; this
+// method never reads the engine's live policy.
+func (e *Engine) EvaluateLineageAt(serverName, toolName string, args map[string]any, pol *Policy, now time.Time) Decision {
+	if pol == nil {
+		ev := &lineage.Evidence{ActorAgentID: e.clientID, Rule: lineage.ReasonDelegationCeiling}
+		return Decision{Action: ActionDeny, Reason: lineage.ReasonDelegationCeiling, Lineage: ev}
+	}
 	if pol.Identity == nil || pol.Identity.Version != 1 {
 		return Decision{Action: ActionAllow, Reason: "lineage not enabled"}
 	}
@@ -239,7 +250,7 @@ func (e *Engine) evaluateLineage(serverName, toolName string, args map[string]an
 		return Decision{Action: ActionDeny, Reason: lineage.ReasonDelegationCeiling, Lineage: ev}
 	}
 	env := lineage.EnvelopeFromArgs(e.clientID, serverName, toolName, args)
-	d, ev := lineage.Validate(env, reg)
+	d, ev := lineage.ValidateAt(env, reg, now)
 	out := ev
 	if d.Allow {
 		return Decision{Action: ActionAllow, Reason: "allowed by lineage", Lineage: &out}

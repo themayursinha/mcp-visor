@@ -96,6 +96,9 @@ func NewRegistry(agents []AgentIdentity, grants []AuthorityGrant, trajectories [
 			if _, ok := humans[g.Issuer]; !ok {
 				return nil, fmt.Errorf("lineage: grant %s: root issuer %s is not a registered human principal", id, g.Issuer)
 			}
+			if r.agents[g.SubjectAgentID].ParentAgentID != "" {
+				return nil, fmt.Errorf("lineage: grant %s: root grant subject %s is not a root agent", id, g.SubjectAgentID)
+			}
 			continue
 		}
 		parent, ok := r.grants[g.ParentGrantID]

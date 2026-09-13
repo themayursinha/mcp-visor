@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/lineage"
 	"github.com/themayursinha/mcp-visor/internal/lineage/testfixture"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
@@ -154,5 +156,26 @@ func TestLineageTrajectoryInconsistentAtLoad(t *testing.T) {
 	y := strings.Replace(testfixture.PolicyYAML(), "capability: github.repo.write", "capability: github.repo.admin", 1)
 	if _, err := policy.Load([]byte(y)); err == nil {
 		t.Fatal("trajectory capability not on grant chain must fail load")
+	}
+}
+
+func TestLineageEvaluateLineageAtUsesCallerTime(t *testing.T) {
+	eng := loadLin(t, testfixture.Coding)
+	now, err := time.Parse(time.RFC3339, testfixture.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp, err := time.Parse(time.RFC3339, testfixture.Expiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := testfixture.Args()
+	got := eng.EvaluateLineageAt(testfixture.Server, testfixture.Tool, args, eng.Policy(), now)
+	if got.Action != policy.ActionAllow {
+		t.Fatalf("in-window snapshot must allow, got %s: %s", got.Action, got.Reason)
+	}
+	got = eng.EvaluateLineageAt(testfixture.Server, testfixture.Tool, args, eng.Policy(), exp)
+	if got.Action != policy.ActionDeny || got.Reason != lineage.ReasonUnregisteredPrincipal {
+		t.Fatalf("expired snapshot must deny R1, got %s: %s", got.Action, got.Reason)
 	}
 }

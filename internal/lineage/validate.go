@@ -92,6 +92,9 @@ func ValidateAt(env Envelope, reg *Registry, now time.Time) (Decision, Evidence)
 			if _, isAgent := reg.Agent(g.Issuer); isAgent {
 				return ceiling(ev)
 			}
+			if subject.ParentAgentID != "" {
+				return ceiling(ev)
+			}
 		} else {
 			parent := chain[i-1]
 			if g.Issuer != parent.SubjectAgentID {

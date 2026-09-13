@@ -249,3 +249,14 @@ func TestLineageEscalatedAndWrongIssuer(t *testing.T) {
 		t.Fatalf("grant-covered read vs write trajectory must mismatch, got allow=%v %q", d.Allow, d.Reason)
 	}
 }
+
+func TestLineageRejectsRootGrantSkippingParent(t *testing.T) {
+	grants := []lineage.AuthorityGrant{{
+		GrantID: "grant-skip-parent", Issuer: testfixture.Human, SubjectAgentID: testfixture.Coding,
+		Capabilities: []string{testfixture.CapWrite}, ResourceScope: []string{testfixture.Resource},
+		IssuedAt: testfixture.Created, Expiry: testfixture.Expiry,
+	}}
+	if _, err := lineage.NewRegistry(testfixture.Agents(), grants, nil); err == nil {
+		t.Fatal("Human root grant to a child agent must fail registry construction")
+	}
+}

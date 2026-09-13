@@ -235,7 +235,7 @@ func (p *Proxy) processToolsCall(
 		rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now())
 		ownReceipt = rec
 		if deny != nil {
-			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny, advice, anomalous)
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny, advice, anomalous, lineageInfo)
 		}
 	}
 
@@ -421,7 +421,7 @@ func (p *Proxy) processToolsCall(
 		// Delegation ceiling: deny before any approval work when the budget
 		// is already spent; the grant site rechecks for races.
 		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
-			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info, advice, anomalous)
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info, advice, anomalous, lineageInfo)
 		}
 		// The runtime snapshot was captured at the top of this call while
 		// runtimeMu.RLock was held and remains authoritative: the barrier is
@@ -473,7 +473,7 @@ func (p *Proxy) processToolsCall(
 		// during the approval wait. Fresh clock, fresh receipt; a stale
 		// pre-wait verdict never authorizes.
 		if rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now()); deny != nil {
-			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny, advice, anomalous)
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny, advice, anomalous, lineageInfo)
 		} else {
 			ownReceipt = rec
 			attachOwnershipReceipt(&allowEvent, ownReceipt)
@@ -482,9 +482,21 @@ func (p *Proxy) processToolsCall(
 		// the approval wait was outstanding. Atomic reserve; released below
 		// if the commit fails.
 		if info, reserved := tryReserveDelegation(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
-			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info, advice, anomalous)
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info, advice, anomalous, lineageInfo)
 		} else {
 			delegationReserved = reserved
+		}
+		// Lineage recheck: actor/grant validity is [start, expiry). A grant
+		// that was valid when approval started may have expired while the
+		// operator waited. Fresh clock, same immutable snapshot policy; a
+		// stale pre-wait lineage allow never authorizes.
+		if lineageInfo != nil {
+			if d := p.engine.EvaluateLineageAt(serverName, callReq.Name, extractArgs(callReq.Arguments), snapshot.policy, p.now()); d.Action == policy.ActionDeny {
+				if delegationReserved {
+					p.session.ReleaseDelegation()
+				}
+				return p.denyPostApprovalLineage(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, d.Reason, lineageInfo, advice, anomalous)
+			}
 		}
 		// Durable commit before any relay: the runtime barrier is already
 		// released (approval wait happened above), so a failure here only
@@ -604,6 +616,52 @@ func attachTrajectoryAdvice(event *audit.Event, advice trajectory.Advice, anomal
 		SourceSupport:     advice.SourceSupport,
 		TransitionSupport: advice.TransitionSupport,
 	}
+}
+
+func (p *Proxy) denyPostApprovalLineage(
+	req mcp.Request,
+	raw json.RawMessage,
+	respond toolsCallResponder,
+	release func(),
+	serverName string,
+	callReq mcp.ToolsCallRequest,
+	redactedArgs map[string]any,
+	redactionResult redaction.Result,
+	risk policy.RiskLevel,
+	snapshot runtimeSnapshot,
+	chainTriggered bool,
+	started time.Time,
+	reason string,
+	lineage *audit.LineageInfo,
+	advice trajectory.Advice,
+	anomalous bool,
+) (json.RawMessage, string) {
+	p.metrics.IncrementDenied()
+	respond(req.ID, reason)
+	deniedEvent := audit.Event{
+		EventType: audit.EventToolDenied,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    serverName,
+		Tool:      callReq.Name,
+		Arguments: redactedArgs,
+		Decision:  string(policy.ActionDeny),
+		Reason:    withRedactionNote(reason, redactionResult),
+		RiskLevel: string(risk),
+		Lineage:   lineage,
+	}
+	p.attachServerIdentity(&deniedEvent, snapshot.identity)
+	attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
+	_ = p.audit.Log(deniedEvent)
+	release()
+	p.forwardAudit(deniedEvent)
+	p.logger.Warn("lineage denied after approval",
+		"tool", callReq.Name,
+		"reason", reason,
+		"session", p.session.ID,
+	)
+	p.observeToolCall("denied", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+	return raw, "denied"
 }
 
 func withRedactionNote(reason string, result redaction.Result) string {

@@ -11,7 +11,8 @@ type AgentIdentity struct {
 }
 
 // AuthorityGrant is a registered delegation. Root grants have an empty
-// ParentGrantID and must be issued by a human principal.
+// ParentGrantID, must be issued by a human principal, and may only name a
+// root agent (ParentAgentID empty) as subject.
 type AuthorityGrant struct {
 	GrantID        string   `yaml:"grant_id" json:"grant_id"`
 	Issuer         string   `yaml:"issuer" json:"issuer"`
