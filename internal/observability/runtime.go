@@ -41,13 +41,14 @@ func (c Config) normalized() Config {
 
 // Snapshot is a point-in-time copy of proxy counters.
 type Snapshot struct {
-	MessagesProcessed int64
-	MessagesDenied    int64
-	MessagesAllowed   int64
-	MessagesApproved  int64
-	BytesRedacted     int64
-	ApprovalRequests  int64
-	ChainDetections   int64
+	MessagesProcessed   int64
+	MessagesDenied      int64
+	MessagesAllowed     int64
+	MessagesApproved    int64
+	BytesRedacted       int64
+	ApprovalRequests    int64
+	ChainDetections     int64
+	TrajectoryAnomalies int64
 }
 
 // MetricsProvider returns current proxy metrics (called on Prometheus scrape).

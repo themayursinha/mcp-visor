@@ -653,3 +653,72 @@ func TestNewLoggerRejectsHashStrippedChainRecord(t *testing.T) {
 		t.Fatalf("expected ErrCorruptAuditRecord, got %v", err)
 	}
 }
+
+func TestTrajectoryAdviceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "traj.jsonl")
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	want := &audit.TrajectoryAdvice{
+		Advisor:           "session_unseen_bigram_v1",
+		Kind:              "unseen_successor",
+		Sequence:          []string{"workspace:charlie", "workspace:echo"},
+		WindowTransitions: 8,
+		SourceSupport:     2,
+		TransitionSupport: 0,
+	}
+	if err := l.Log(audit.Event{
+		EventType:        audit.EventToolDenied,
+		SessionID:        "sess-traj",
+		Server:           "workspace",
+		Tool:             "echo",
+		Decision:         "deny",
+		TrajectoryAdvice: want,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Log(audit.Event{
+		EventType: audit.EventToolAllowed,
+		SessionID: "sess-traj",
+		Server:    "workspace",
+		Tool:      "alpha",
+		Decision:  "allow",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := readAuditLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("lines=%d", len(lines))
+	}
+	var flagged, omitted audit.Event
+	if err := json.Unmarshal([]byte(lines[0]), &flagged); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if flagged.TrajectoryAdvice == nil {
+		t.Fatal("expected nested trajectory_advice")
+	}
+	got := flagged.TrajectoryAdvice
+	if got.Advisor != want.Advisor || got.Kind != want.Kind || got.WindowTransitions != 8 || got.SourceSupport != 2 || got.TransitionSupport != 0 {
+		t.Fatalf("fields %+v", got)
+	}
+	if len(got.Sequence) != 2 || got.Sequence[0] != want.Sequence[0] || got.Sequence[1] != want.Sequence[1] {
+		t.Fatalf("sequence %v", got.Sequence)
+	}
+	if recomputeAuditHash(t, flagged) != flagged.Hash {
+		t.Fatal("hash verification failed with trajectory_advice")
+	}
+	if omitted.TrajectoryAdvice != nil {
+		t.Fatal("nil advice must omit")
+	}
+	if strings.Contains(lines[1], "trajectory_advice") {
+		t.Fatal("omitted field leaked into JSON")
+	}
+}

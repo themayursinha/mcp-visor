@@ -30,6 +30,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/siem"
 	"github.com/themayursinha/mcp-visor/internal/signer"
 	"github.com/themayursinha/mcp-visor/internal/trace"
+	"github.com/themayursinha/mcp-visor/internal/trajectory"
 	"github.com/themayursinha/mcp-visor/internal/webhook"
 )
 
@@ -64,6 +65,9 @@ type Proxy struct {
 	// production value is instructionauthority.Authorize.
 	instructionAuthorize     func(instructionauthority.InstructionObject, instructionauthority.EvaluationRoot) (bool, string)
 	instructionAuthorityKeys map[string]ed25519.PublicKey
+
+	// trajectoryAdvisor is an advisory, default-off observer. Nil means disabled.
+	trajectoryAdvisor *trajectory.Advisor
 
 	// resolvedIdentity is the immutable stdio executable identity resolved
 	// once per launched proxy process. identityResolved records whether the
@@ -147,6 +151,9 @@ type Config struct {
 	// CapabilityEval opts into the capability accounting evaluator. The
 	// default (false) constructs a no-op evaluator with zero behavioral delta.
 	CapabilityEval bool
+	// TrajectoryAdvisor enables an advisory, default-off observer. It never
+	// authorizes, denies, or skips later gates.
+	TrajectoryAdvisor bool
 }
 
 type VaultConfig struct {
@@ -245,15 +252,16 @@ func New(cfg Config) *Proxy {
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
-		engine:         eng,
-		audit:          al,
-		redactor:       red,
-		approval:       appr,
-		tracing:        cfg.Tracing,
-		webhook:        wh,
-		siem:           siemExp,
-		approvalSigner: approvalSigner,
-		capEval:        newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+		engine:            eng,
+		audit:             al,
+		redactor:          red,
+		approval:          appr,
+		tracing:           cfg.Tracing,
+		webhook:           wh,
+		siem:              siemExp,
+		approvalSigner:    approvalSigner,
+		capEval:           newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+		trajectoryAdvisor: maybeTrajectoryAdvisor(cfg.TrajectoryAdvisor),
 	}
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
@@ -305,15 +313,16 @@ func NewWithTracing(cfg Config) *Proxy {
 		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
-		engine:         eng,
-		audit:          al,
-		redactor:       red,
-		approval:       appr,
-		tracing:        cfg.Tracing,
-		webhook:        wh,
-		siem:           siemExp,
-		approvalSigner: approvalSigner,
-		capEval:        newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+		engine:            eng,
+		audit:             al,
+		redactor:          red,
+		approval:          appr,
+		tracing:           cfg.Tracing,
+		webhook:           wh,
+		siem:              siemExp,
+		approvalSigner:    approvalSigner,
+		capEval:           newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
+		trajectoryAdvisor: maybeTrajectoryAdvisor(cfg.TrajectoryAdvisor),
 	}
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
@@ -333,6 +342,13 @@ func NewWithTracing(cfg Config) *Proxy {
 // behavioral delta).
 func capEvalEnabled(cfg Config) bool {
 	return cfg.CapabilityEval || (cfg.Policy != nil && cfg.Policy.Settings.CapabilityEval)
+}
+
+func maybeTrajectoryAdvisor(enabled bool) *trajectory.Advisor {
+	if !enabled {
+		return nil
+	}
+	return trajectory.New()
 }
 
 // newCapabilityEvaluator builds the per-session capability evaluator. An
@@ -1133,7 +1149,7 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 	p.runtimeMu.RLock()
 	snapshot := p.runtimeSnapshotLocked(serverName)
 	p.runtimeMu.RUnlock()
-	p.logDeniedWithEvidence(serverName, toolName, args, reason, risk, snapshot.identity)
+	p.logDeniedWithEvidence(serverName, toolName, args, reason, risk, snapshot.identity, trajectory.Advice{}, false)
 }
 
 // logDeniedWithEvidence builds the terminal deny event and attaches identity
@@ -1143,7 +1159,7 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 // record with a different policy generation than the one that authorized the
 // call, and so the terminal record cannot read mutable live identity state
 // after release.
-func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel, identity serverIdentityEvidence) {
+func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel, identity serverIdentityEvidence, advice trajectory.Advice, anomalous bool) {
 	ev := audit.Event{
 		EventType: audit.EventToolDenied,
 		SessionID: p.session.ID,
@@ -1156,6 +1172,7 @@ func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[stri
 		RiskLevel: string(risk),
 	}
 	p.attachServerIdentity(&ev, identity)
+	attachTrajectoryAdvice(&ev, advice, anomalous)
 	p.logAudit(ev)
 }
 
@@ -1168,7 +1185,7 @@ func approvalRequiredEvent(p *Proxy, serverName string, callReq mcp.ToolsCallReq
 	}
 }
 
-func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string, snapshot runtimeSnapshot, evidence approvalEvidence, redactionResult redaction.Result) approvalOutcome {
+func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, raw json.RawMessage, chainContext []string, snapshot runtimeSnapshot, evidence approvalEvidence, redactionResult redaction.Result, advice trajectory.Advice, anomalous bool) approvalOutcome {
 	approvalReq := approval.Request{
 		ID:        fmt.Sprintf("%s-%s-%d", p.session.ID, callReq.Name, p.session.ToolCallCount()),
 		Tool:      callReq.Name,
@@ -1190,7 +1207,7 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 
 	if snapshot.approval == nil {
 		denyReason := withRedactionNote("approval denied: approval backend is not configured", redactionResult)
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, denyReason, risk, snapshot.identity)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, denyReason, risk, snapshot.identity, advice, anomalous)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
 	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
@@ -1213,6 +1230,7 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 			ChainContextHash:     evidence.ChainContextHash,
 		}
 		p.attachServerIdentity(&deniedEv, snapshot.identity)
+		attachTrajectoryAdvice(&deniedEv, advice, anomalous)
 		p.logAudit(deniedEv)
 		p.logger.Warn("approval denied", "tool", callReq.Name, "session", p.session.ID)
 		return approvalOutcome{Approved: false, Reason: denyReason}
@@ -1237,17 +1255,17 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	)
 	if err != nil {
 		errReason := fmt.Sprintf("approval receipt creation failed: %v", err)
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, advice, anomalous)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if p.approvalSigner == nil {
 		errReason := "approval receipt signing failed: signer is not configured"
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, advice, anomalous)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if err := rec.SignWith(p.approvalSigner); err != nil {
 		errReason := fmt.Sprintf("approval receipt signing failed: %v", err)
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, advice, anomalous)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 

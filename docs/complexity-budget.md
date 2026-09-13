@@ -22,7 +22,7 @@ What a new adopter must understand in one session. Everything here is on the **6
 | Basic approval (file / CLI) | `internal/approval` |
 | Demo mock server + examples | `examples/demo-mcp-server`, `serve --demo` |
 
-**Core decision path:** optional stdio identity → runtime limits → argument redaction → sensitive-path block → policy → taint-aware egress → chain detection → approval → durable allow-commit → post-authorization taint marking → relay. Terminal allows are `Sync()`'d to JSONL before relay; other selected events are appended without that `fsync`. No LLM participates in allow/deny.
+**Core decision path:** optional stdio identity → runtime limits → argument redaction → sensitive-path block → policy → advisory trajectory observer (default off; audit/metrics only) → taint-aware egress → chain detection → approval → durable allow-commit → post-authorization taint marking → relay. Terminal allows are `Sync()`'d to JSONL before relay; other selected events are appended without that `fsync`. No LLM participates in allow/deny.
 
 ### Advanced (shipped, optional)
 
@@ -37,6 +37,7 @@ Enterprise and operator integrations. **On by flag only**; not required for the 
 | Vault Transit signing | **Keep** — KMS path; Advanced |
 | Embedded dashboard | **Experimental** — unauthenticated local API can expose redacted payload data; require access-control and race hardening |
 | Prometheus + OTLP export | **Experimental** — counters are not synchronized; keep off production claims until race-safe |
+| Session trajectory advisor (`-trajectory-advisor`) | **Advanced / experimental, default off** — observability/harness evidence, not authorization semantics |
 | Trace logging (`--trace`) | **Incomplete** — formatter/config types exist but runtime paths do not invoke the tracer |
 | n8n blueprint | **Keep** — example control plane; Advanced / examples |
 | Proof Console (`examples/demo-runner -ui`) | **Examples-only** — local loopback action-boundary demonstration; unauthenticated; not a product dashboard |
@@ -81,6 +82,7 @@ Same binary, tiered documentation.
 | `--siem-*`, `--webhook-*` | Advanced | No |
 | `--dashboard` | Advanced | No |
 | `--metrics-addr`, `--otel-*` | Advanced | No |
+| `-trajectory-advisor` | Advanced / experimental, default off | No |
 | `examples/n8n` | Advanced | No |
 | `examples/demo-runner -ui` | Advanced / examples | No |
 

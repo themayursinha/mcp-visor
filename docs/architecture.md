@@ -126,6 +126,7 @@ internal/
   compositiongraph/            PCA island (H41): claimed per-step ALLOW is not composed authority; not on tools/call
   toolcorrelation/             PCA island (H42): per-tool ALLOW is not correlated authority; not on tools/call
   selfescalation/               PCA island (H43): ordinary delegation is not meta-authority; not on tools/call
+  trajectory/                   Session trajectory advisor (default-off observer; Advice has no Action)
 examples/
   demo-mcp-server/              Mock MCP server for testing/demos
   demo-runner/                  Interactive demo walkthrough
@@ -174,6 +175,9 @@ intercepted tools/call
  │ Policy evaluate  │──▶ DENY / REQUIRE_APPROVAL / ALLOW (tool + argument rules)
  │ (YAML engine)    │
  └──────┬───────────┘
+        │
+        ├──▶ ┌ Trajectory advisor (opt, default off) ──▶ audit / Prometheus only (one-way)
+        │    └ Advice has no Action and is not consumed by later gates
         ▼
  ┌──────────────────┐
  │ Egress controls  │──Match──▶ DENY or REQUIRE_APPROVAL when session taint + sink tool
@@ -209,6 +213,8 @@ intercepted tools/call
         ▼
  Return result to client
 ```
+
+The optional trajectory advisor (`internal/trajectory`) observes only syntactically valid request-form `tools/call` calls that reach `policy.Engine.Evaluate`. Identity, runtime-limit, H32, sensitive-path, malformed-envelope, and notification-form denials occur before it and do not enter its sequence. Calls that reach policy enter this attempted trajectory even if policy or a later gate denies them; it is not executed, relayed, successful, or authorized history. `Advice` has no `Action` and is not consumed by gates. Enabled/disabled parity preserves Action, client response, and relayed bytes; only advisory audit fields and the anomaly metric may differ. v1 is a bounded in-memory bigram heuristic with no LLM.
 
 When a server policy pins an attestation (`kind: stdio_invocation_sha256_v1`), the proxy resolves the launched stdio invocation exactly once at proxy construction and compares that cached lifecycle identity against the current policy snapshot on every `tools/call` before runtime limits, redaction, argument policy, taint, chains, approval, or relay. The digest always binds the locally resolved launcher executable and every literal argv value in order; only the policy-declared entry argument positions (`attestation.entry_arg_positions`, zero-based indexes into `ServerArgs` excluding the executable) additionally bind the resolved local regular-file content at that position, so mutable runtime data arguments (logs, databases, datasets, output paths) are never opened or hashed. Recognized canonical dynamic registry runners (`npx`, `uvx`, `bunx`, `pnpx`, `pnx`, `npm exec`, `npm x`, `yarn dlx`, `pnpm dlx`, `bun x`, `uv tool run`) are unpinnable: the literal package spec does not bind the registry artifact that will execute, so resolution fails and a configured attestation denies through the unresolved-identity path. Only exact canonical executable names and exact leading subcommand tuples are recognized; options-before-subcommand, renamed launchers, and shell wrappers are not inferred, and ordinary non-registry subcommands (`npm run`, `npm install`, `npm ci`, `yarn add`, `pnpm add`, `pnpm exec`, `bun run`, `bun add`, `uv run`, `uv tool install`) remain resolvable. A configured mismatch or unresolved identity fails closed with one terminal deny event, no arguments, and identity-bound audit fields. A matching local identity continues and emits `server_attested=true` on the terminal event. Policies without an attestation preserve legacy behavior, omit the verdict, and perform zero identity-resolution work at construction. Attestation is restart-bound: identity is measured once for the launched stdio child and is NEVER re-derived on hot reload. Reloading launcher or payload paths cannot attest a replacement artifact as the already-running child; a pin introduced after an unattested start, a changed resolution shape (attestation kind or normalized entry positions), or a same-shape digest replacement all fail closed until a server restart. Unrelated policy/redactor/audit/approval reloads remain atomic. Tool descriptions, schemas, instructions, and handshake `serverInfo` are untrusted presentation data and never satisfy identity. This is local invocation pinning, not remote/hardware attestation; server startup behavior and TOCTOU by a privileged filesystem attacker remain out of scope.
 
