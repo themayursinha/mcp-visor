@@ -326,8 +326,7 @@ func validateCommand(c Command, sig bool) error {
 	return nil
 }
 func validateState(s State, sig bool) error {
-	ok := s.SchemaVersion == SchemaVersion && validID(s.SessionID) && s.RevokedThroughEpoch >= 1 && isLowerHex(s.CommandID, 32) && validID(s.ControllerID) && validReason(s.Reason) && s.ObservedAt != "" && s.ResultingState != "" && isLowerHex(s.RequestSHA256, 64) && (!sig || isLowerHex(s.Signature, 64))
-	if !ok {
+	if s.SchemaVersion != SchemaVersion || !validID(s.SessionID) || s.RevokedThroughEpoch < 1 || !isLowerHex(s.CommandID, 32) || !validID(s.ControllerID) || !validReason(s.Reason) || s.ObservedAt == "" || s.ResultingState == "" || !isLowerHex(s.RequestSHA256, 64) || (sig && !isLowerHex(s.Signature, 64)) {
 		return fmt.Errorf("invalid kinetic state")
 	}
 	return nil
@@ -414,8 +413,9 @@ func validateSubdir(parent, name string, create bool) error {
 	st, err := os.Lstat(p)
 	if errors.Is(err, os.ErrNotExist) && create {
 		if err = os.Mkdir(p, 0o700); err == nil {
-			_ = dirSync(parent)
-			st, err = os.Lstat(p)
+			if err = dirSync(parent); err == nil {
+				st, err = os.Lstat(p)
+			}
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("missing control subdirectory")

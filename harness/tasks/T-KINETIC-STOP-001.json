@@ -3,9 +3,9 @@
   "invariant_ids": ["H45"],
   "security_sensitive": true,
   "security_problem": "SECURITY INVARIANT: an authenticated local controller can monotonically revoke and contain one explicitly enabled supervised stdio session without model mediation. SUPPORTED MODEL: one local Visor process, its launched MCP process group, a protected local control directory, and per-controller HMAC keys. ATTACK CLASSES: unauthorized signal, stale epoch/replay, post-stop call, in-flight side effect, restart/reconnect, control-channel loss, and audit omission/tampering. FAILURE SEMANTICS: enabled initialization and channel integrity fail closed; a valid stop latches before later relay and contains the supervised process group. NON-GOALS: replicas/other hosts, remote execution interruption, fleet control, host-wide process killing, and production-prevention claims.",
-  "required_behavior": "Default-off local stdio kinetic stop authenticates controller identity and exact command, scopes revocation to session plus monotonic epoch, denies later calls, contains in-flight supervised execution within the documented bound, blocks same-epoch restart, and durably hash-chain audits enforcement.",
-  "failure_behavior": "Invalid enabled configuration refuses startup; loss or corruption of the enabled control channel contains the current session; unauthenticated commands never gain a controller identity; audit/state failure never resumes a contained session.",
-  "spec_revision": 1,
+  "required_behavior": "Default-off local stdio kinetic stop authenticates controller identity and exact command, scopes revocation to session plus monotonic epoch, denies later calls, contains in-flight supervised execution within the documented bound, linearizes EncodeRaw and child Start with containment via a dedicated I/O mutex held across check and write/launch, blocks same-epoch restart, and durably hash-chain audits enforcement.",
+  "failure_behavior": "Invalid enabled configuration refuses startup; loss or corruption of the enabled control channel contains the current session; unauthenticated commands never gain a controller identity; audit/state failure never resumes a contained session; mkdir of commands/ or state/ fails closed if the parent directory cannot be synced.",
+  "spec_revision": 2,
   "non_goals": [
     "discovering or stopping replicas on another host (H39 denied edge)",
     "remote MCP execution interruption",
@@ -16,8 +16,8 @@
   "attack_classes": [
     {"id": "unauthorized-signal", "failure_class": "unauthorized-signal", "expected": "Unknown controller, malformed command, or bad MAC cannot be attributed as an authorized controller; enabled channel corruption contains fail closed."},
     {"id": "stale-epoch-replay", "failure_class": "stale-epoch-replay", "expected": "Lower epochs cannot revoke a newer session; equal-or-higher authenticated revocation is monotonic and blocks restart through that epoch."},
-    {"id": "post-stop-relay", "failure_class": "post-stop-relay", "expected": "The first tools/call gate and approval recheck deny every call after the revocation latch with zero relay."},
-    {"id": "in-flight-side-effect", "failure_class": "in-flight-side-effect", "expected": "The supervised Unix process group and session pipes are killed/closed within the documented operational bound before delayed side effect."},
+    {"id": "post-stop-relay", "failure_class": "post-stop-relay", "expected": "The first tools/call gate and approval recheck deny every call after the revocation latch with zero relay. EncodeRaw and supervised Start hold a dedicated I/O mutex across the revoked check and the write/launch so a latched stop cannot be followed by a successful encode or Start."},
+    {"id": "in-flight-side-effect", "failure_class": "in-flight-side-effect", "expected": "The supervised Unix process group and session pipes are killed/closed within the documented operational bound before delayed side effect. Contain closes pipes first so a blocked write unblocks, then acquires the I/O mutex before kill."},
     {"id": "restart-reconnect", "failure_class": "restart-reconnect", "expected": "Signed command or authenticated persisted state refuses launch for the same session at a revoked epoch."},
     {"id": "control-channel-loss", "failure_class": "control-channel-loss", "expected": "An enabled running session contains itself when its protected local control directory becomes unavailable or invalid."},
     {"id": "audit-gap-tamper", "failure_class": "audit-gap-tamper", "expected": "Enforcement emits a synced hash-chained event binding controller, command, target, reason, observed time, epoch, request digest, and resulting state; failure cannot resume execution."}

@@ -138,6 +138,15 @@ func TestKineticControlPathsDoNotEmbedSessionID(t *testing.T) {
 func TestKineticWriteCommandIsAtomicDurableAnd0600(t *testing.T) {
 	dir := ksDir(t)
 	_, key := ksKey(t)
+	{
+		old := dirSync
+		dirSync = func(string) error { return errors.New("sync fail") }
+		_, err := NewMonitor(monCfg(ksDir(t), "s0", 1, "c1", key))
+		dirSync = old
+		if err == nil {
+			t.Fatal("dirsync")
+		}
+	}
 	c := signedCmd(t, key, "s", 1, "c1", "stop", "")
 	n := atomic.Int32{}
 	old := dirSync

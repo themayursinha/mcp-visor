@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -315,5 +316,79 @@ func TestKineticEncodeRefusedAfterRevoke(t *testing.T) {
 	p.kineticRevoked.Store(true)
 	if err := p.encodeIfNotRevoked(func(json.RawMessage) error { t.Fatal("encoded"); return nil }, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "encode refused") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestKineticEncodeHoldsIOMutexAcrossWrite(t *testing.T) {
+	dir, audit := kdir(t), filepath.Join(t.TempDir(), "a.jsonl")
+	_, key := kkey(t)
+	p := New(Config{ServerName: "h", SessionID: "sess-enc-io", SessionEpoch: 1, AuditLogPath: audit, KillSwitchDir: dir, KillSwitchControllers: []killswitch.ControllerKey{{ID: "c1", Key: key}}, Policy: kpol(t, "h", "file_read", false)})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- p.encodeIfNotRevoked(func(json.RawMessage) error {
+			close(started)
+			<-release
+			return nil
+		}, []byte(`{}`))
+	}()
+	<-started
+	p.kineticRevoked.Store(true)
+	var raced atomic.Bool
+	second := make(chan error, 1)
+	go func() {
+		second <- p.encodeIfNotRevoked(func(json.RawMessage) error {
+			raced.Store(true)
+			return nil
+		}, []byte(`{}`))
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("second encode returned before first write finished: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first %v", err)
+	}
+	err := <-second
+	if raced.Load() || err == nil || !strings.Contains(err.Error(), "encode refused") {
+		t.Fatalf("raced=%v err=%v", raced.Load(), err)
+	}
+}
+
+func TestKineticLaunchRefusedAfterRevoke(t *testing.T) {
+	dir, audit := kdir(t), filepath.Join(t.TempDir(), "a.jsonl")
+	_, key := kkey(t)
+	p := New(Config{ServerName: "h", SessionID: "sess-ln", SessionEpoch: 1, AuditLogPath: audit, KillSwitchDir: dir, KillSwitchControllers: []killswitch.ControllerKey{{ID: "c1", Key: key}}, Policy: kpol(t, "h", "file_read", false)})
+	p.kineticRevoked.Store(true)
+	cmd := exec.Command("true")
+	if err := p.startSupervised(cmd, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "refused launch") {
+		t.Fatalf("got %v", err)
+	}
+	if cmd.Process != nil {
+		t.Fatal("started")
+	}
+}
+
+func TestKineticLaunchWaitsForIOMutexThenRefuses(t *testing.T) {
+	dir, audit := kdir(t), filepath.Join(t.TempDir(), "a.jsonl")
+	_, key := kkey(t)
+	p := New(Config{ServerName: "h", SessionID: "sess-ln-io", SessionEpoch: 1, AuditLogPath: audit, KillSwitchDir: dir, KillSwitchControllers: []killswitch.ControllerKey{{ID: "c1", Key: key}}, Policy: kpol(t, "h", "file_read", false)})
+	p.kineticIOMu.Lock()
+	p.kineticRevoked.Store(true)
+	cmd := exec.Command("true")
+	done := make(chan error, 1)
+	go func() { done <- p.startSupervised(cmd, nil, nil, nil) }()
+	select {
+	case err := <-done:
+		t.Fatalf("launch returned while IO lock held: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	p.kineticIOMu.Unlock()
+	err := <-done
+	if err == nil || !strings.Contains(err.Error(), "refused launch") || cmd.Process != nil {
+		t.Fatalf("got %v proc %v", err, cmd.Process)
 	}
 }

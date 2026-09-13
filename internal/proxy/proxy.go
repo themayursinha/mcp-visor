@@ -101,6 +101,7 @@ type Proxy struct {
 	kineticRunMu        sync.Mutex
 	kineticPersistWG    sync.WaitGroup
 	supervisedMu        sync.Mutex
+	kineticIOMu         sync.Mutex // linearizes encode/launch vs contain
 	supervisedCmd       *exec.Cmd
 	supervisedStdin     io.Closer
 	supervisedPipes     []io.Closer
@@ -681,13 +682,9 @@ func (p *Proxy) Run(ctx context.Context) error {
 	errCh := make(chan error, 4)
 	if p.kineticEnabled() {
 		go func() { errCh <- p.runKineticMonitor(ctx) }()
-		if p.kineticRevoked.Load() {
-			return p.kineticOr(fmt.Errorf("kinetic stop: refused launch"))
-		}
 	}
-
-	if err := serverCmd.Start(); err != nil {
-		return fmt.Errorf("start server: %w", err)
+	if err := p.startSupervised(serverCmd, serverStdin, serverStdout, serverStderr); err != nil {
+		return p.kineticOr(err)
 	}
 	defer func() {
 		stopServerProcess(serverCmd, serverStdin)
@@ -702,22 +699,6 @@ func (p *Proxy) Run(ctx context.Context) error {
 		p.closeEventSinks()
 		p.engine.Close()
 	}()
-	if p.kineticEnabled() {
-		p.registerSupervisedProcess(serverCmd)
-		p.supervisedMu.Lock()
-		p.supervisedStdin = serverStdin
-		if rc, ok := serverStdout.(io.Closer); ok {
-			p.supervisedPipes = append(p.supervisedPipes, rc)
-		}
-		if rc, ok := serverStderr.(io.Closer); ok {
-			p.supervisedPipes = append(p.supervisedPipes, rc)
-		}
-		p.supervisedMu.Unlock()
-		if p.kineticRevoked.Load() {
-			p.containSupervisedProcess()
-			return p.kineticOr(fmt.Errorf("kinetic stop: refused launch"))
-		}
-	}
 	p.logger.Info("mcp server started", "command", p.cfg.ServerCommand)
 
 	p.logAudit(audit.Event{

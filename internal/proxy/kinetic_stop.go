@@ -178,12 +178,11 @@ func (p *Proxy) registerSupervisedProcess(cmd *exec.Cmd) {
 	p.supervisedMu.Unlock()
 }
 
-func (p *Proxy) containSupervisedProcess() {
+func (p *Proxy) closeSupervisedPipes() {
 	p.supervisedMu.Lock()
-	defer p.supervisedMu.Unlock()
-	cmd := p.supervisedCmd
 	stdin := p.supervisedStdin
 	pipes := append([]io.Closer(nil), p.supervisedPipes...)
+	p.supervisedMu.Unlock()
 	if stdin != nil {
 		_ = stdin.Close()
 	}
@@ -192,17 +191,59 @@ func (p *Proxy) containSupervisedProcess() {
 			_ = c.Close()
 		}
 	}
+}
+
+func (p *Proxy) killSupervisedLocked() {
+	p.supervisedMu.Lock()
+	cmd := p.supervisedCmd
+	p.supervisedMu.Unlock()
 	killKineticProcess(cmd)
 }
 
+func (p *Proxy) containSupervisedProcess() {
+	p.closeSupervisedPipes()
+	p.kineticIOMu.Lock()
+	defer p.kineticIOMu.Unlock()
+	p.killSupervisedLocked()
+}
+
 func (p *Proxy) encodeIfNotRevoked(encode func(json.RawMessage) error, raw json.RawMessage) error {
-	p.supervisedMu.Lock()
-	revoked := p.kineticEnabled() && p.kineticRevoked.Load()
-	p.supervisedMu.Unlock()
-	if revoked {
+	p.kineticIOMu.Lock()
+	defer p.kineticIOMu.Unlock()
+	if p.kineticEnabled() && p.kineticRevoked.Load() {
 		return fmt.Errorf("kinetic stop: encode refused")
 	}
 	return encode(raw)
+}
+
+func (p *Proxy) startSupervised(cmd *exec.Cmd, stdin, stdout, stderr io.Closer) error {
+	p.kineticIOMu.Lock()
+	defer p.kineticIOMu.Unlock()
+	if p.kineticEnabled() && p.kineticRevoked.Load() {
+		return fmt.Errorf("kinetic stop: refused launch")
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start server: %w", err)
+	}
+	if !p.kineticEnabled() {
+		return nil
+	}
+	p.registerSupervisedProcess(cmd)
+	p.supervisedMu.Lock()
+	p.supervisedStdin = stdin
+	if stdout != nil {
+		p.supervisedPipes = append(p.supervisedPipes, stdout)
+	}
+	if stderr != nil {
+		p.supervisedPipes = append(p.supervisedPipes, stderr)
+	}
+	p.supervisedMu.Unlock()
+	if p.kineticRevoked.Load() {
+		p.closeSupervisedPipes()
+		p.killSupervisedLocked()
+		return fmt.Errorf("kinetic stop: refused launch")
+	}
+	return nil
 }
 
 func (p *Proxy) readRawUntilStop(read func() (json.RawMessage, error)) (json.RawMessage, error) {
