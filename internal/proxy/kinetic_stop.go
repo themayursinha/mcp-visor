@@ -112,6 +112,8 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 		if observed.IsZero() {
 			observed = time.Now().UTC()
 		}
+		var ev audit.Event
+		var auditOK bool
 		func() {
 			defer p.kineticPersistWG.Done()
 			p.kineticRevoked.Store(true)
@@ -129,7 +131,7 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 				kineticBeforePersist()
 			}
 
-			ev := audit.Event{
+			ev = audit.Event{
 				EventType:               audit.EventKineticStopEnforced,
 				SessionID:               p.cfg.SessionID,
 				AgentID:                 p.cfg.ClientID,
@@ -150,7 +152,6 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 				if stop.ResultingState == "revoked_contained" && p.kineticMon != nil {
 					persistErr = p.kineticMon.WriteState(stop)
 				}
-				p.forwardAudit(ev)
 			}
 			out := persistErr
 			if auditErr != nil {
@@ -163,7 +164,11 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 				p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
 			}
 			p.kineticRunMu.Unlock()
+			auditOK = auditErr == nil
 		}()
+		if auditOK {
+			p.forwardAudit(ev)
+		}
 		p.runtimeMu.Lock()
 		p.kineticRevokedThru = stop.Command.RevokeThroughEpoch
 		p.kineticReason = stop.Command.Reason
