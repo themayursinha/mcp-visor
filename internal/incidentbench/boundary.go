@@ -150,35 +150,6 @@ func (b *Boundary) invoke(req RequestedEffect) {
 	b.ledger.commit(req)
 }
 
-func (b *Boundary) fixtureTargetCount(req RequestedEffect) uint64 {
-	l := b.ledger
-	switch req.Kind {
-	case EffectExternalNetwork:
-		if l.netSent == nil {
-			return 0
-		}
-		return l.netSent[req.Target]
-	case EffectCredentialRead:
-		return l.credRead
-	case EffectCrossTenantRequest:
-		if l.tenantHit == nil {
-			return 0
-		}
-		return l.tenantHit[req.Target]
-	case EffectPackagePublication:
-		if l.published == nil {
-			return 0
-		}
-		return l.published[req.Target]
-	case EffectLateralMovement:
-		if l.hostMove == nil {
-			return 0
-		}
-		return l.hostMove[req.Target]
-	}
-	return 0
-}
-
 func (b *Boundary) fixtureCount(kind string) uint64 {
 	l := b.ledger
 	sum := func(m map[string]uint64) uint64 {
