@@ -171,20 +171,20 @@ func WriteCommand(dir string, cmd Command) (string, error) {
 	err := validateSubdir(dir, "commands", true)
 	data, err2 := json.Marshal(cmd)
 	if err != nil || err2 != nil || ValidateControlDir(dir) != nil || validateCommand(cmd, true) != nil {
-		if err == nil {
-			err = fmt.Errorf("invalid kinetic command or directory")
-		}
-		return "", err
-	}
-	path := CommandPath(dir, cmd.SessionID)
-	if raw, e := readControlFile(path); e == nil {
-		var prev Command
-		if decodeControl(raw, &prev) == nil && prev.SessionID == cmd.SessionID && prev.RevokeThroughEpoch > cmd.RevokeThroughEpoch {
-			return "", fmt.Errorf("weaker kinetic command")
-		}
+		return "", fmt.Errorf("invalid kinetic command or directory")
 	}
 	data = append(data, '\n')
-	if err := atomicWrite(cdir, path, data); err != nil {
+	path := CommandPath(dir, cmd.SessionID)
+	err = withPublishLock(cdir, func() error {
+		if raw, e := readControlFile(path); e == nil {
+			var prev Command
+			if decodeControl(raw, &prev) == nil && prev.SessionID == cmd.SessionID && prev.RevokeThroughEpoch > cmd.RevokeThroughEpoch {
+				return fmt.Errorf("weaker kinetic command")
+			}
+		}
+		return atomicWrite(cdir, path, data)
+	})
+	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(data)

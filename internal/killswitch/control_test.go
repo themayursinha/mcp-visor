@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -168,6 +169,17 @@ func TestKineticWriteCommandIsAtomicDurableAnd0600(t *testing.T) {
 	got, _ := os.ReadFile(CommandPath(dir, "s"))
 	if !bytes.Contains(got, []byte(`"revoke_through_epoch":3`)) {
 		t.Fatal("lost stronger")
+	}
+	dir2 := ksDir(t)
+	hi2, lo2 := signedCmd(t, key, "s2", 9, "c1", "stop", ""), signedCmd(t, key, "s2", 1, "c1", "stop", "")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = WriteCommand(dir2, lo2) }()
+	go func() { defer wg.Done(); _, _ = WriteCommand(dir2, hi2) }()
+	wg.Wait()
+	raw2, _ := os.ReadFile(CommandPath(dir2, "s2"))
+	if !bytes.Contains(raw2, []byte(`"revoke_through_epoch":9`)) {
+		t.Fatal("concurrent weaker won")
 	}
 }
 

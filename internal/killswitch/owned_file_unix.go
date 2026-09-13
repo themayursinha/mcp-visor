@@ -8,6 +8,19 @@ import (
 	"syscall"
 )
 
+func withPublishLock(dir string, fn func() error) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := syscall.Flock(int(d.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(d.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
 func openNoFollow(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 }
