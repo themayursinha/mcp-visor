@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "composition_enabled": true,
+  "fixture_sample_size": 8,
+  "fixture_seed": 41041,
+  "mandate": {
+    "mandate_id": "mandate:report-export",
+    "allowed_effects": ["READ", "TRANSFORM", "SEND"],
+    "allowed_destinations": ["mcp:external"],
+    "allowed_artifact_classes": ["REPORT_SOURCE", "REPORT_ARTIFACT", "REPORT_CONTEXT", "EXTERNAL_DELIVERY"]
+  },
+  "installed_skills": [
+    {"skill_id": "skill:credential-discovery", "edges": [{"edge_id": "edge:discover-credentials", "from_artifact_class": "CREDENTIAL_SOURCE", "to_artifact_class": "CREDENTIAL_ARTIFACT", "effect_class": "READ", "destination": ""}]},
+    {"skill_id": "skill:context-normalizer", "edges": [{"edge_id": "edge:normalize-credential", "from_artifact_class": "CREDENTIAL_ARTIFACT", "to_artifact_class": "CONTEXT_ARTIFACT", "effect_class": "TRANSFORM", "destination": ""}]},
+    {"skill_id": "skill:mcp-submitter", "edges": [{"edge_id": "edge:submit-external", "from_artifact_class": "CONTEXT_ARTIFACT", "to_artifact_class": "EXTERNAL_DISCLOSURE", "effect_class": "SEND", "destination": "mcp:external"}]},
+    {"skill_id": "skill:report-reader", "edges": [{"edge_id": "edge:read-report", "from_artifact_class": "REPORT_SOURCE", "to_artifact_class": "REPORT_ARTIFACT", "effect_class": "READ", "destination": ""}]},
+    {"skill_id": "skill:report-transformer", "edges": [{"edge_id": "edge:transform-report", "from_artifact_class": "REPORT_ARTIFACT", "to_artifact_class": "REPORT_CONTEXT", "effect_class": "TRANSFORM", "destination": ""}]},
+    {"skill_id": "skill:report-sender", "edges": [{"edge_id": "edge:send-report", "from_artifact_class": "REPORT_CONTEXT", "to_artifact_class": "EXTERNAL_DELIVERY", "effect_class": "SEND", "destination": "mcp:external"}]}
+  ],
+  "canonical_attack": {
+    "action_id": "action:credential-external-disclosure",
+    "start_artifact_class": "CREDENTIAL_SOURCE",
+    "final_artifact_class": "EXTERNAL_DISCLOSURE",
+    "destination": "mcp:external",
+    "steps": [{"skill_id": "skill:credential-discovery", "edge_id": "edge:discover-credentials"}, {"skill_id": "skill:context-normalizer", "edge_id": "edge:normalize-credential"}, {"skill_id": "skill:mcp-submitter", "edge_id": "edge:submit-external"}],
+    "claimed_signatures_valid": true,
+    "claimed_individual_allow": true,
+    "claimed_composition_valid": true,
+    "claimed_authorized": true
+  },
+  "legitimate_action": {
+    "action_id": "action:report-external-delivery",
+    "start_artifact_class": "REPORT_SOURCE",
+    "final_artifact_class": "EXTERNAL_DELIVERY",
+    "destination": "mcp:external",
+    "steps": [{"skill_id": "skill:report-reader", "edge_id": "edge:read-report"}, {"skill_id": "skill:report-transformer", "edge_id": "edge:transform-report"}, {"skill_id": "skill:report-sender", "edge_id": "edge:send-report"}]
+  },
+  "measurement_records": [
+    {"record_id": "record:credential-disclosure", "expected_authorized": false, "action": {"action_id": "action:credential-external-disclosure", "start_artifact_class": "CREDENTIAL_SOURCE", "final_artifact_class": "EXTERNAL_DISCLOSURE", "destination": "mcp:external", "steps": [{"skill_id": "skill:credential-discovery", "edge_id": "edge:discover-credentials"}, {"skill_id": "skill:context-normalizer", "edge_id": "edge:normalize-credential"}, {"skill_id": "skill:mcp-submitter", "edge_id": "edge:submit-external"}], "claimed_signatures_valid": true, "claimed_individual_allow": true, "claimed_composition_valid": true, "claimed_authorized": true}},
+    {"record_id": "record:isolated-a-claim", "expected_authorized": false, "action": {"action_id": "action:credential-external-disclosure", "start_artifact_class": "CREDENTIAL_SOURCE", "final_artifact_class": "EXTERNAL_DISCLOSURE", "destination": "mcp:external", "steps": [{"skill_id": "skill:credential-discovery", "edge_id": "edge:discover-credentials"}], "claimed_signatures_valid": true, "claimed_individual_allow": true, "claimed_composition_valid": true, "claimed_authorized": true}},
+    {"record_id": "record:isolated-b-claim", "expected_authorized": false, "action": {"action_id": "action:credential-external-disclosure", "start_artifact_class": "CREDENTIAL_SOURCE", "final_artifact_class": "EXTERNAL_DISCLOSURE", "destination": "mcp:external", "steps": [{"skill_id": "skill:context-normalizer", "edge_id": "edge:normalize-credential"}], "claimed_signatures_valid": true, "claimed_individual_allow": true, "claimed_composition_valid": true, "claimed_authorized": true}},
+    {"record_id": "record:missing-edge", "expected_authorized": false, "action": {"action_id": "action:credential-external-disclosure", "start_artifact_class": "CREDENTIAL_SOURCE", "final_artifact_class": "EXTERNAL_DISCLOSURE", "destination": "mcp:external", "steps": [{"skill_id": "skill:credential-discovery", "edge_id": "edge:discover-credentials"}, {"skill_id": "skill:context-normalizer", "edge_id": "edge:normalize-credential"}, {"skill_id": "skill:mcp-submitter", "edge_id": "edge:invented"}], "claimed_composition_valid": true}},
+    {"record_id": "record:discontinuous-path", "expected_authorized": false, "action": {"action_id": "action:credential-external-disclosure", "start_artifact_class": "CREDENTIAL_SOURCE", "final_artifact_class": "EXTERNAL_DISCLOSURE", "destination": "mcp:external", "steps": [{"skill_id": "skill:credential-discovery", "edge_id": "edge:discover-credentials"}, {"skill_id": "skill:mcp-submitter", "edge_id": "edge:submit-external"}], "claimed_composition_valid": true}},
+    {"record_id": "record:credential-disclosure-unclaimed", "expected_authorized": false, "action": {"action_id": "action:credential-external-disclosure", "start_artifact_class": "CREDENTIAL_SOURCE", "final_artifact_class": "EXTERNAL_DISCLOSURE", "destination": "mcp:external", "steps": [{"skill_id": "skill:credential-discovery", "edge_id": "edge:discover-credentials"}, {"skill_id": "skill:context-normalizer", "edge_id": "edge:normalize-credential"}, {"skill_id": "skill:mcp-submitter", "edge_id": "edge:submit-external"}]}},
+    {"record_id": "record:legitimate-report", "expected_authorized": true, "action": {"action_id": "action:report-external-delivery", "start_artifact_class": "REPORT_SOURCE", "final_artifact_class": "EXTERNAL_DELIVERY", "destination": "mcp:external", "steps": [{"skill_id": "skill:report-reader", "edge_id": "edge:read-report"}, {"skill_id": "skill:report-transformer", "edge_id": "edge:transform-report"}, {"skill_id": "skill:report-sender", "edge_id": "edge:send-report"}]}},
+    {"record_id": "record:legitimate-report-hostile-claims", "expected_authorized": true, "action": {"action_id": "action:report-external-delivery", "start_artifact_class": "REPORT_SOURCE", "final_artifact_class": "EXTERNAL_DELIVERY", "destination": "mcp:external", "steps": [{"skill_id": "skill:report-reader", "edge_id": "edge:read-report"}, {"skill_id": "skill:report-transformer", "edge_id": "edge:transform-report"}, {"skill_id": "skill:report-sender", "edge_id": "edge:send-report"}], "claimed_signatures_valid": true, "claimed_individual_allow": true, "claimed_composition_valid": true, "claimed_authorized": true}}
+  ]
+}
