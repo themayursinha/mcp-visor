@@ -237,10 +237,10 @@ func TestCapabilityCeilingMustExist(t *testing.T) {
 }
 func TestCorrelatedUsageAboveCeilingDenies(t *testing.T) {
 	deny(t, attack(), 4, 3, "correlated capability ceiling exceeded", GraphPresent, TrajectoryValid, CapabilityPresent, CeilingPresent, UsageExceeded, CorrelationInvalid)
-}
-func TestCorrelatedUsageAtCeilingAllows(t *testing.T) {
-	if Authorize(root(), legit()).Verdict != VerdictAllow {
-		t.Fatal("at ceiling")
+	r := root()
+	r.CapabilityCeilings[0].MaxUnits, r.ResourceUses[0].Units = int(^uint(0)>>1), int(^uint(0)>>1)
+	if Authorize(root(), legit()).Verdict != VerdictAllow || Authorize(r, attack()).Verdict == VerdictAllow {
+		t.Fatal("overflow")
 	}
 }
 func TestSchemaMismatchFailsClosed(t *testing.T) {

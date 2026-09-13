@@ -68,7 +68,7 @@ func Authorize(root EvaluationRoot, action ProposedAction) Decision {
 		d.Proof, d.Reason, d.GraphStatus, d.TrajectoryStatus, d.CapabilityStatus, d.CeilingStatus, d.UsageStatus, d.CorrelationStatus = ProofDisabled, "tool correlation disabled", GraphDisabled, TrajectoryDisabled, CapabilityDisabled, CeilingDisabled, UsageDisabled, CorrelationDisabled
 	default:
 		var resolved []ResourceUse
-		c5, c6, c7 := true, true, true
+		c5, c6, c7, over := true, true, true, false
 		for i, ref := range action.Uses {
 			found := false
 			for _, u := range root.ResourceUses {
@@ -108,7 +108,7 @@ func Authorize(root EvaluationRoot, action ProposedAction) Decision {
 			for _, u := range resolved {
 				ss[u.ServerID], ts[[2]string{u.ServerID, u.ToolName}] = struct{}{}, struct{}{}
 				if u.Units > 0 && sum > max-u.Units {
-					sum = ceil + 1
+					over = true
 					break
 				}
 				sum += u.Units
@@ -126,10 +126,10 @@ func Authorize(root EvaluationRoot, action ProposedAction) Decision {
 		if c5 && c6 && c7 {
 			d.CeilingStatus = map[bool]string{true: CeilingPresent, false: CeilingAbsent}[c8]
 			if c8 {
-				d.UsageStatus = map[bool]string{true: UsageWithin, false: UsageExceeded}[d.TotalUnits <= ceil]
+				d.UsageStatus = map[bool]string{true: UsageWithin, false: UsageExceeded}[!over && d.TotalUnits <= ceil]
 			}
 		}
-		if c5 && c6 && c7 && c8 && d.TotalUnits <= ceil {
+		if c5 && c6 && c7 && c8 && !over && d.TotalUnits <= ceil {
 			d.Verdict, d.Proof, d.Reason, d.CorrelationStatus = VerdictAllow, ProofValid, "authorized", CorrelationValid
 		} else if !c5 {
 			d.Reason = "referenced resource use absent"
