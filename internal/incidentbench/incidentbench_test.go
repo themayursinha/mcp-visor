@@ -385,6 +385,14 @@ func TestEnumValidation(t *testing.T) {
 	if err := validateTrajectory(tr); err == nil {
 		t.Fatal("consequential")
 	}
+	badKind := generateOne(5)
+	_, brs := play(t, badKind)
+	badKind.RequestedEffect.Kind = "unknown"
+	brs[0].RequestedEffect = badKind.RequestedEffect
+	brs[0].ObservedEffect.Kind = "unknown"
+	if _, _, err := NewRecorder().PutIfAbsent(badKind, brs[0]); err == nil {
+		t.Fatal("invalid traj persist")
+	}
 	if err := validateDecision("unknown"); err == nil {
 		t.Fatal("decision")
 	}

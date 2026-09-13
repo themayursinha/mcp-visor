@@ -54,8 +54,9 @@ func DedupKey(tr Trajectory) string {
 }
 
 func policyHash(e PolicyAuthorityEpoch) string {
+	spec := []byte(`incidentbench-checkAuth-v1:principal=eq,tenant=eq,epochs=eq,grant=exact-kind-target-tenant`)
 	data, _ := json.Marshal(e)
-	sum := sha256.Sum256(data)
+	sum := sha256.Sum256(append(append([]byte{}, spec...), data...))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
@@ -97,6 +98,9 @@ func (r *Recorder) Record(tr Trajectory, res BoundaryResult) (bool, error) {
 }
 
 func (r *Recorder) PutIfAbsent(tr Trajectory, res BoundaryResult) (IncidentRecord, bool, error) {
+	if err := validateTrajectory(tr); err != nil {
+		return IncidentRecord{}, false, err
+	}
 	if !resultMatches(tr, res) {
 		return IncidentRecord{}, false, fmt.Errorf("boundary result identity mismatch")
 	}
@@ -175,8 +179,10 @@ func appendEv(b *incidentbundle.Bundle, kind string, ts int64, rec IncidentRecor
 	})
 }
 
+const bundleUnixBase int64 = 1_704_067_200 // 2024-01-01 UTC; events are base plus logical tick
+
 func buildBundle(rec IncidentRecord) (*incidentbundle.Bundle, error) {
-	ts := int64(rec.BoundaryTick)
+	ts := bundleUnixBase + int64(rec.BoundaryTick)
 	b := incidentbundle.New(rec.IncidentID, policyHash(rec.PolicyAuthorityEpoch), ts)
 	b.Manifest.PolicyID = policyID(rec.PolicyAuthorityEpoch)
 	if err := appendEv(b, incidentbundle.KindRequestedAction, ts, rec, map[string]any{
