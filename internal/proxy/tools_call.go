@@ -18,6 +18,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
+	"github.com/themayursinha/mcp-visor/internal/trajectory"
 )
 
 // toolsCallResponder sends JSON-RPC errors back to the MCP client.
@@ -218,6 +219,7 @@ func (p *Proxy) processToolsCall(
 
 	decision := p.engine.Evaluate(serverName, callReq)
 	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
+	advice, anomalous := p.assessTrajectory(serverName, callReq.Name)
 	var chainContext []string
 	chainTriggered := false
 	var egressContext egressTaintDecision
@@ -231,7 +233,7 @@ func (p *Proxy) processToolsCall(
 		rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now())
 		ownReceipt = rec
 		if deny != nil {
-			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny, advice, anomalous)
 		}
 	}
 
@@ -263,6 +265,7 @@ func (p *Proxy) processToolsCall(
 				ChainContext: previousCalls,
 			}
 			p.attachServerIdentity(&chainDeniedEvent, snapshot.identity)
+			attachTrajectoryAdvice(&chainDeniedEvent, advice, anomalous)
 			_ = p.audit.Log(chainDeniedEvent)
 			release()
 			p.forwardAudit(chainDeniedEvent)
@@ -398,6 +401,7 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
 		attachCapabilityArtifact(&deniedEvent, capArtifact)
+		attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
 		_ = p.audit.Log(deniedEvent)
 		release()
 		p.forwardAudit(deniedEvent)
@@ -413,7 +417,7 @@ func (p *Proxy) processToolsCall(
 		// Delegation ceiling: deny before any approval work when the budget
 		// is already spent; the grant site rechecks for races.
 		if info := checkDelegationCeiling(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
-			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info)
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info, advice, anomalous)
 		}
 		// The runtime snapshot was captured at the top of this call while
 		// runtimeMu.RLock was held and remains authoritative: the barrier is
@@ -428,6 +432,7 @@ func (p *Proxy) processToolsCall(
 		// durable. Dropping a successful Eval receipt would leave only the
 		// in-memory hash, which disappears on process exit.
 		attachCapabilityArtifact(&approvalEvent, capArtifact)
+		attachTrajectoryAdvice(&approvalEvent, advice, anomalous)
 		// Write the JSONL ledger record while holding runtimeMu to
 		// preserve audit ordering with respect to policy reloads.
 		_ = p.audit.Log(approvalEvent)
@@ -435,7 +440,7 @@ func (p *Proxy) processToolsCall(
 		// forwarding so slow SIEM/webhook sinks cannot stall reloads.
 		release()
 		p.forwardAudit(approvalEvent)
-		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence, redactionResult)
+		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence, redactionResult, advice, anomalous)
 		if !outcome.Approved {
 			reason := fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason)
 			respond(req.ID, reason)
@@ -457,11 +462,12 @@ func (p *Proxy) processToolsCall(
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
+		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
 		// Ownership recheck: a grant valid at request time may have expired
 		// during the approval wait. Fresh clock, fresh receipt; a stale
 		// pre-wait verdict never authorizes.
 		if rec, deny := p.checkCapabilityOwnership(serverName, callReq, redactedArgs, originalRaw, snapshot.policy, p.now()); deny != nil {
-			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny)
+			return p.denyOwnership(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, deny, advice, anomalous)
 		} else {
 			ownReceipt = rec
 			attachOwnershipReceipt(&allowEvent, ownReceipt)
@@ -470,7 +476,7 @@ func (p *Proxy) processToolsCall(
 		// the approval wait was outstanding. Atomic reserve; released below
 		// if the commit fails.
 		if info, reserved := tryReserveDelegation(snapshot.policy, p.session, serverName, callReq.Name); info != nil {
-			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info)
+			return p.denyDelegationCeiling(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, capArtifact, chainTriggered, started, info, advice, anomalous)
 		} else {
 			delegationReserved = reserved
 		}
@@ -507,6 +513,7 @@ func (p *Proxy) processToolsCall(
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
 		attachOwnershipReceipt(&allowEvent, ownReceipt)
+		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
 		if err := p.audit.CommitAuthorization(allowEvent); err != nil {
 			if delegationReserved {
 				p.session.ReleaseDelegation()
@@ -538,6 +545,7 @@ func (p *Proxy) processToolsCall(
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		attachOwnershipReceipt(&defaultAllowEvent, ownReceipt)
+		attachTrajectoryAdvice(&defaultAllowEvent, advice, anomalous)
 		if err := p.audit.CommitAuthorization(defaultAllowEvent); err != nil {
 			if delegationReserved {
 				p.session.ReleaseDelegation()
@@ -563,6 +571,31 @@ func (p *Proxy) denyCommitFailure(req mcp.Request, respond toolsCallResponder, s
 	respond(req.ID, reason)
 	p.metrics.IncrementDenied()
 	p.observeToolCall("denied", reason, serverName, toolName, string(risk), chainTriggered, started)
+}
+
+func (p *Proxy) assessTrajectory(serverName, toolName string) (trajectory.Advice, bool) {
+	if p.trajectoryAdvisor == nil {
+		return trajectory.Advice{}, false
+	}
+	advice, anomalous := p.trajectoryAdvisor.Assess(trajectory.Observation{Server: serverName, Tool: toolName})
+	if anomalous {
+		p.metrics.IncrementTrajectoryAnomalies()
+	}
+	return advice, anomalous
+}
+
+func attachTrajectoryAdvice(event *audit.Event, advice trajectory.Advice, anomalous bool) {
+	if event == nil || !anomalous {
+		return
+	}
+	event.TrajectoryAdvice = &audit.TrajectoryAdvice{
+		Advisor:           advice.Advisor,
+		Kind:              advice.Kind,
+		Sequence:          append([]string(nil), advice.Sequence...),
+		WindowTransitions: advice.WindowTransitions,
+		SourceSupport:     advice.SourceSupport,
+		TransitionSupport: advice.TransitionSupport,
+	}
 }
 
 func withRedactionNote(reason string, result redaction.Result) string {

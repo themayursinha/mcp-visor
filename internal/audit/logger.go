@@ -101,8 +101,18 @@ type Event struct {
 	// DelegationDepth is the session delegation count at a ceiling denial;
 	// MaxSpawnDepth is the enforced settings.max_spawn_depth. Populated
 	// only by delegation-ceiling denials (card t_1851c97f).
-	DelegationDepth int `json:"delegation_depth,omitempty"`
-	MaxSpawnDepth   int `json:"max_spawn_depth,omitempty"`
+	DelegationDepth  int               `json:"delegation_depth,omitempty"`
+	MaxSpawnDepth    int               `json:"max_spawn_depth,omitempty"`
+	TrajectoryAdvice *TrajectoryAdvice `json:"trajectory_advice,omitempty"`
+}
+
+type TrajectoryAdvice struct {
+	Advisor           string   `json:"advisor"`
+	Kind              string   `json:"kind"`
+	Sequence          []string `json:"sequence"`
+	WindowTransitions int      `json:"window_transitions"`
+	SourceSupport     uint64   `json:"source_support"`
+	TransitionSupport uint64   `json:"transition_support"`
 }
 
 type Logger struct {

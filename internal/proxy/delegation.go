@@ -9,6 +9,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
+	"github.com/themayursinha/mcp-visor/internal/trajectory"
 )
 
 // Delegation ceilings (card t_1851c97f): a hard, configurable cap on
@@ -172,6 +173,8 @@ func (p *Proxy) denyDelegationCeiling(
 	chainTriggered bool,
 	started time.Time,
 	info *ceilingDenyInfo,
+	advice trajectory.Advice,
+	anomalous bool,
 ) (json.RawMessage, string) {
 	p.metrics.IncrementDenied()
 	respond(req.ID, info.reason)
@@ -191,6 +194,7 @@ func (p *Proxy) denyDelegationCeiling(
 	}
 	p.attachServerIdentity(&deniedEvent, snapshot.identity)
 	attachCapabilityArtifact(&deniedEvent, capArtifact)
+	attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
 	_ = p.audit.Log(deniedEvent)
 	release()
 	p.forwardAudit(deniedEvent)

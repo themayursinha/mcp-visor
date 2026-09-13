@@ -17,13 +17,14 @@ func (p *Proxy) initObservability() error {
 	rt, err := observability.New(cfg, func() observability.Snapshot {
 		m := p.metrics.Load()
 		return observability.Snapshot{
-			MessagesProcessed: m.MessagesProcessed,
-			MessagesDenied:    m.MessagesDenied,
-			MessagesAllowed:   m.MessagesAllowed,
-			MessagesApproved:  m.MessagesApproved,
-			BytesRedacted:     m.BytesRedacted,
-			ApprovalRequests:  m.ApprovalRequests,
-			ChainDetections:   m.ChainDetections,
+			MessagesProcessed:   m.MessagesProcessed,
+			MessagesDenied:      m.MessagesDenied,
+			MessagesAllowed:     m.MessagesAllowed,
+			MessagesApproved:    m.MessagesApproved,
+			BytesRedacted:       m.BytesRedacted,
+			ApprovalRequests:    m.ApprovalRequests,
+			ChainDetections:     m.ChainDetections,
+			TrajectoryAnomalies: m.TrajectoryAnomalies,
 		}
 	})
 	if err != nil {

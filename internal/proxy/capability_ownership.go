@@ -12,6 +12,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
 	"github.com/themayursinha/mcp-visor/internal/redaction"
+	"github.com/themayursinha/mcp-visor/internal/trajectory"
 ) // Capability ownership gate (card t_02a1bc43, Architect contract). Runs
 // after ordinary policy evaluation succeeds or requires approval, before
 // egress, chain, capability-accounting, approval, durable commit, or
@@ -163,6 +164,8 @@ func (p *Proxy) denyOwnership(
 	chainTriggered bool,
 	started time.Time,
 	deny *ownershipDeny,
+	advice trajectory.Advice,
+	anomalous bool,
 ) (json.RawMessage, string) {
 	p.metrics.IncrementDenied()
 	respond(req.ID, deny.reason)
@@ -180,6 +183,7 @@ func (p *Proxy) denyOwnership(
 	}
 	attachOwnershipReceipt(&deniedEvent, deny.receipt)
 	p.attachServerIdentity(&deniedEvent, snapshot.identity)
+	attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
 	_ = p.audit.Log(deniedEvent)
 	release()
 	p.forwardAudit(deniedEvent)

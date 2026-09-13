@@ -228,7 +228,15 @@ mcp-visor version          Print version
 
 Common flags: `-server`, `-policy`, `-audit-log`, `-approval-dir`, `-approval-cli`, `-demo`
 
-Advanced flags: `-server-url`, `-webhook-url`, `-siem-target`, `-vault-addr`, `-metrics-addr`, `-otel-endpoint`, `-dashboard`, `-trace`, `-capability-eval`
+Advanced flags: `-server-url`, `-webhook-url`, `-siem-target`, `-vault-addr`, `-metrics-addr`, `-otel-endpoint`, `-dashboard`, `-trace`, `-capability-eval`, `-trajectory-advisor`
+
+### Trajectory advisor (Advanced / experimental)
+
+Off by default. Deterministic bounded session bigram heuristic. Observes policy-reaching attempted calls. Writes advisory evidence to audit JSONL and Prometheus only. Cannot change allow/deny/approval or skip gates. No LLM or model API in v1. Heuristic flags are neither proof of maliciousness nor proof of prevention.
+
+```text
+mcp-visor serve ... -trajectory-advisor
+```
 
 Full reference: `mcp-visor serve -h`
 

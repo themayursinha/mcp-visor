@@ -18,4 +18,5 @@ func WritePrometheus(w io.Writer, s Snapshot) {
 	writeCounter("mcp_visor_bytes_redacted_total", "Bytes redacted from tool arguments", s.BytesRedacted)
 	writeCounter("mcp_visor_approval_requests_total", "Human approval workflows started", s.ApprovalRequests)
 	writeCounter("mcp_visor_chain_detections_total", "Dangerous tool chain rules triggered", s.ChainDetections)
+	writeCounter("mcp_visor_trajectory_anomalies_total", "Advisory unseen session tool transitions observed", s.TrajectoryAnomalies)
 }
