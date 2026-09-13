@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -287,5 +288,32 @@ func testKineticLifecycle(t *testing.T, helper string) {
 	_ = p3.kineticMon.Run(ctx, func(s killswitch.Stop) { got = s.ResultingState })
 	if got != "contained_control_unavailable" {
 		t.Fatalf("unavail %q", got)
+	}
+}
+
+func TestKineticStopLatchesWithoutRuntimeLock(t *testing.T) {
+	dir, audit := kdir(t), filepath.Join(t.TempDir(), "a.jsonl")
+	_, key := kkey(t)
+	p := New(Config{ServerName: "h", SessionID: "sess-latch", SessionEpoch: 1, AuditLogPath: audit, KillSwitchDir: dir, KillSwitchControllers: []killswitch.ControllerKey{{ID: "c1", Key: key}}, Policy: kpol(t, "h", "file_read", false)})
+	p.runtimeMu.RLock()
+	defer p.runtimeMu.RUnlock()
+	go p.enforceKineticStop(killswitch.Stop{Command: ksign(t, key, "sess-latch", 1, "c1", "latch"), RequestSHA256: strings.Repeat("aa", 32), ObservedAt: time.Now().UTC(), ResultingState: "revoked_contained"})
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if p.kineticRevoked.Load() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("latch blocked on runtimeMu")
+}
+
+func TestKineticEncodeRefusedAfterRevoke(t *testing.T) {
+	dir, audit := kdir(t), filepath.Join(t.TempDir(), "a.jsonl")
+	_, key := kkey(t)
+	p := New(Config{ServerName: "h", SessionID: "sess-enc", SessionEpoch: 1, AuditLogPath: audit, KillSwitchDir: dir, KillSwitchControllers: []killswitch.ControllerKey{{ID: "c1", Key: key}}, Policy: kpol(t, "h", "file_read", false)})
+	p.kineticRevoked.Store(true)
+	if err := p.encodeIfNotRevoked(func(json.RawMessage) error { t.Fatal("encoded"); return nil }, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "encode refused") {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -360,3 +360,25 @@ func TestKineticStateMACBindsResultAndObservedTime(t *testing.T) {
 		t.Fatal("time")
 	}
 }
+
+func TestKineticMonitorTreatsMissingCommandsAsUnavailable(t *testing.T) {
+	dir := ksDir(t)
+	_, key := ksKey(t)
+	m, err := NewMonitor(monCfg(dir, "s", 1, "c1", key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "commands")); err != nil {
+		t.Fatal("commands created at NewMonitor")
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "commands")); err != nil {
+		t.Fatal(err)
+	}
+	var got Stop
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = m.Run(ctx, func(s Stop) { got = s })
+	if got.ResultingState != "contained_control_unavailable" {
+		t.Fatalf("got %q", got.ResultingState)
+	}
+}

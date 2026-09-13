@@ -80,7 +80,7 @@ func main() {
 	otelTraceSample := serveCmd.Float64("otel-trace-sample", 1.0, "Trace sampling ratio 0..1 when OTLP is enabled")
 	capabilityEval := serveCmd.Bool("capability-eval", false, "Enable capability accounting evaluator (default: no-op)")
 	trajectoryAdvisor := serveCmd.Bool("trajectory-advisor", false, "Enable advisory session trajectory anomaly telemetry (default: off; never authorizes)")
-	killSwitchDir := serveCmd.String("kill-switch-dir", "", "Opt-in local kinetic stop control directory (default: disabled)")
+	killSwitchDir := serveCmd.String("kill-switch-dir", "", "Opt-in local kinetic stop control directory (default: disabled; cooperative same-UID stdio child, not an independent kill authority)")
 	killSwitchControllers := &stringSlice{}
 	serveCmd.Var(killSwitchControllers, "kill-switch-controller", "CONTROLLER_ID=KEY_FILE (repeatable)")
 	sessionEpoch := serveCmd.Uint64("session-epoch", 0, "Session epoch for kinetic stop (>=1 when enabled)")

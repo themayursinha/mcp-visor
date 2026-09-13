@@ -105,6 +105,7 @@ type Proxy struct {
 	supervisedStdin     io.Closer
 	supervisedPipes     []io.Closer
 	sessionCancel       context.CancelFunc
+	sessionCtx          context.Context
 }
 
 // now returns the pinned test time or the system clock.
@@ -677,20 +678,16 @@ func (p *Proxy) Run(ctx context.Context) error {
 		return fmt.Errorf("server stderr pipe: %w", err)
 	}
 
+	errCh := make(chan error, 4)
+	if p.kineticEnabled() {
+		go func() { errCh <- p.runKineticMonitor(ctx) }()
+		if p.kineticRevoked.Load() {
+			return p.kineticOr(fmt.Errorf("kinetic stop: refused launch"))
+		}
+	}
+
 	if err := serverCmd.Start(); err != nil {
 		return fmt.Errorf("start server: %w", err)
-	}
-	if p.kineticEnabled() {
-		p.registerSupervisedProcess(serverCmd)
-		p.supervisedMu.Lock()
-		p.supervisedStdin = serverStdin
-		if rc, ok := serverStdout.(io.Closer); ok {
-			p.supervisedPipes = append(p.supervisedPipes, rc)
-		}
-		if rc, ok := serverStderr.(io.Closer); ok {
-			p.supervisedPipes = append(p.supervisedPipes, rc)
-		}
-		p.supervisedMu.Unlock()
 	}
 	defer func() {
 		stopServerProcess(serverCmd, serverStdin)
@@ -705,6 +702,22 @@ func (p *Proxy) Run(ctx context.Context) error {
 		p.closeEventSinks()
 		p.engine.Close()
 	}()
+	if p.kineticEnabled() {
+		p.registerSupervisedProcess(serverCmd)
+		p.supervisedMu.Lock()
+		p.supervisedStdin = serverStdin
+		if rc, ok := serverStdout.(io.Closer); ok {
+			p.supervisedPipes = append(p.supervisedPipes, rc)
+		}
+		if rc, ok := serverStderr.(io.Closer); ok {
+			p.supervisedPipes = append(p.supervisedPipes, rc)
+		}
+		p.supervisedMu.Unlock()
+		if p.kineticRevoked.Load() {
+			p.containSupervisedProcess()
+			return p.kineticOr(fmt.Errorf("kinetic stop: refused launch"))
+		}
+	}
 	p.logger.Info("mcp server started", "command", p.cfg.ServerCommand)
 
 	p.logAudit(audit.Event{
@@ -719,11 +732,6 @@ func (p *Proxy) Run(ctx context.Context) error {
 
 	clientParser := mcp.NewParser(os.Stdin, os.Stdout)
 	serverParser := mcp.NewParser(serverStdout, serverStdin)
-
-	errCh := make(chan error, 4)
-	if p.kineticEnabled() {
-		go func() { errCh <- p.runKineticMonitor(ctx) }()
-	}
 
 	if err := p.runHandshake(clientParser, serverParser); err != nil {
 		return p.kineticOr(fmt.Errorf("handshake: %w", err))
@@ -770,7 +778,7 @@ func (p *Proxy) streamStderr(stderr io.Reader) {
 }
 
 func (p *Proxy) runHandshake(client, server *mcp.Parser) error {
-	raw, err := client.ReadRaw()
+	raw, err := p.readRawUntilStop(client.ReadRaw)
 	if err != nil {
 		return fmt.Errorf("read initialize: %w", err)
 	}
@@ -788,11 +796,11 @@ func (p *Proxy) runHandshake(client, server *mcp.Parser) error {
 	}
 	p.logger.Info("client init", "client", initReq.ClientInfo.Name, "version", initReq.ClientInfo.Version)
 
-	if err := server.EncodeRaw(raw); err != nil {
+	if err := p.encodeIfNotRevoked(server.EncodeRaw, raw); err != nil {
 		return fmt.Errorf("forward initialize to server: %w", err)
 	}
 
-	raw, err = server.ReadRaw()
+	raw, err = p.readRawUntilStop(server.ReadRaw)
 	if err != nil {
 		return fmt.Errorf("read initialize response: %w", err)
 	}
@@ -810,15 +818,17 @@ func (p *Proxy) runHandshake(client, server *mcp.Parser) error {
 		p.logger.Info("server init", "server", initResp.ServerInfo.Name, "version", initResp.ServerInfo.Version)
 	}
 
-	if err := client.EncodeRaw(raw); err != nil {
+	if err := p.encodeIfNotRevoked(client.EncodeRaw, raw); err != nil {
 		return fmt.Errorf("return initialize response: %w", err)
 	}
 
-	raw, err = client.ReadRaw()
+	raw, err = p.readRawUntilStop(client.ReadRaw)
 	if err != nil {
 		return fmt.Errorf("read initialized notification: %w", err)
 	}
-	return p.relayHandshakeClientMessage(raw, client, server.EncodeRaw)
+	return p.relayHandshakeClientMessage(raw, client, func(msg json.RawMessage) error {
+		return p.encodeIfNotRevoked(server.EncodeRaw, msg)
+	})
 }
 
 func (p *Proxy) relayClientToServer(ctx context.Context, client, server *mcp.Parser) error {
@@ -829,7 +839,7 @@ func (p *Proxy) relayClientToServer(ctx context.Context, client, server *mcp.Par
 		default:
 		}
 
-		raw, err := client.ReadRaw()
+		raw, err := p.readRawUntilStop(client.ReadRaw)
 		if err != nil {
 			return fmt.Errorf("read from client: %w", err)
 		}
@@ -841,7 +851,7 @@ func (p *Proxy) relayClientToServer(ctx context.Context, client, server *mcp.Par
 
 		p.logClientMessage(modified)
 
-		if err := server.EncodeRaw(modified); err != nil {
+		if err := p.encodeIfNotRevoked(server.EncodeRaw, modified); err != nil {
 			return fmt.Errorf("forward to server: %w", err)
 		}
 	}

@@ -206,7 +206,7 @@ func ReadState(dir, sessionID string, controllers map[string][]byte) (State, err
 	return st, nil
 }
 func NewMonitor(cfg Config) (*Monitor, error) {
-	if cfg.Dir == "" || !validID(cfg.SessionID) || cfg.SessionEpoch < 1 || len(cfg.Controllers) == 0 || ValidateControlDir(cfg.Dir) != nil || validateSubdir(cfg.Dir, "commands", false) != nil || validateSubdir(cfg.Dir, "state", false) != nil {
+	if cfg.Dir == "" || !validID(cfg.SessionID) || cfg.SessionEpoch < 1 || len(cfg.Controllers) == 0 || ValidateControlDir(cfg.Dir) != nil || validateSubdir(cfg.Dir, "commands", true) != nil || validateSubdir(cfg.Dir, "state", true) != nil {
 		return nil, fmt.Errorf("invalid kinetic monitor config")
 	}
 	ctrls, seen := map[string][]byte{}, map[string]struct{}{}
@@ -413,12 +413,12 @@ func validateSubdir(parent, name string, create bool) error {
 	p := filepath.Join(parent, name)
 	st, err := os.Lstat(p)
 	if errors.Is(err, os.ErrNotExist) && create {
-		err = os.Mkdir(p, 0o700)
-		if err == nil {
+		if err = os.Mkdir(p, 0o700); err == nil {
+			_ = dirSync(parent)
 			st, err = os.Lstat(p)
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return fmt.Errorf("missing control subdirectory")
 	}
 	if err != nil {
 		return err

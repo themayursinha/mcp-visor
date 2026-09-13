@@ -87,6 +87,7 @@ func (p *Proxy) beginKineticRun(ctx context.Context) (context.Context, error) {
 		return ctx, nil
 	}
 	ctx, p.sessionCancel = context.WithCancel(ctx)
+	p.sessionCtx = ctx
 	if err := p.kineticMon.StartupCheck(); err != nil {
 		return ctx, fmt.Errorf("kinetic stop initialization: %w", err)
 	}
@@ -108,8 +109,15 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 	p.kineticStopOnce.Do(func() {
 		p.kineticPersistWG.Add(1)
 		defer p.kineticPersistWG.Done()
-		p.runtimeMu.Lock()
 		p.kineticRevoked.Store(true)
+		p.kineticRunMu.Lock()
+		p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
+		p.kineticRunMu.Unlock()
+		if p.sessionCancel != nil {
+			p.sessionCancel()
+		}
+		p.containSupervisedProcess()
+		p.runtimeMu.Lock()
 		p.kineticRevokedThru = stop.Command.RevokeThroughEpoch
 		p.kineticReason = stop.Command.Reason
 		p.kineticResult = stop.ResultingState
@@ -123,18 +131,10 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 		p.kineticRunMu.Lock()
 		p.kineticRunErr = fmt.Errorf("kinetic stop enforced: %s", stop.ResultingState)
 		p.kineticRunMu.Unlock()
-		if p.sessionCancel != nil {
-			p.sessionCancel()
-		}
-		p.containSupervisedProcess()
 		if kineticBeforePersist != nil {
 			kineticBeforePersist()
 		}
 
-		var persistErr error
-		if stop.ResultingState == "revoked_contained" && p.kineticMon != nil {
-			persistErr = p.kineticMon.WriteState(stop)
-		}
 		ev := audit.Event{
 			EventType:               audit.EventKineticStopEnforced,
 			SessionID:               p.cfg.SessionID,
@@ -151,8 +151,12 @@ func (p *Proxy) enforceKineticStop(stop killswitch.Stop) {
 			ControlRequestSHA256:    stop.RequestSHA256,
 		}
 		auditErr := p.audit.CommitKineticStop(ev)
+		var persistErr error
 		if auditErr == nil {
 			p.forwardAudit(ev)
+			if stop.ResultingState == "revoked_contained" && p.kineticMon != nil {
+				persistErr = p.kineticMon.WriteState(stop)
+			}
 		}
 		out := persistErr
 		if auditErr != nil {
@@ -176,10 +180,10 @@ func (p *Proxy) registerSupervisedProcess(cmd *exec.Cmd) {
 
 func (p *Proxy) containSupervisedProcess() {
 	p.supervisedMu.Lock()
+	defer p.supervisedMu.Unlock()
 	cmd := p.supervisedCmd
 	stdin := p.supervisedStdin
 	pipes := append([]io.Closer(nil), p.supervisedPipes...)
-	p.supervisedMu.Unlock()
 	if stdin != nil {
 		_ = stdin.Close()
 	}
@@ -189,6 +193,35 @@ func (p *Proxy) containSupervisedProcess() {
 		}
 	}
 	killKineticProcess(cmd)
+}
+
+func (p *Proxy) encodeIfNotRevoked(encode func(json.RawMessage) error, raw json.RawMessage) error {
+	p.supervisedMu.Lock()
+	revoked := p.kineticEnabled() && p.kineticRevoked.Load()
+	p.supervisedMu.Unlock()
+	if revoked {
+		return fmt.Errorf("kinetic stop: encode refused")
+	}
+	return encode(raw)
+}
+
+func (p *Proxy) readRawUntilStop(read func() (json.RawMessage, error)) (json.RawMessage, error) {
+	ctx := p.sessionCtx
+	if ctx == nil {
+		return read()
+	}
+	type result struct {
+		raw json.RawMessage
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() { raw, err := read(); ch <- result{raw, err} }()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.raw, r.err
+	}
 }
 
 func (p *Proxy) kineticEnforcedError() error {
