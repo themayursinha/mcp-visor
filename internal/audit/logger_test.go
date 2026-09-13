@@ -722,3 +722,18 @@ func TestTrajectoryAdviceRoundTrip(t *testing.T) {
 		t.Fatal("omitted field leaked into JSON")
 	}
 }
+
+func TestLineageSanitizeAndWriteRedaction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	l.SetRedactionPatterns([]policy.RedactionPattern{{Name: "m", Regex: "SECRET", Replacement: "[REDACTED]"}})
+	san := l.SanitizeLineage(&audit.LineageInfo{GrantID: "grant-SECRET", GrantChain: []string{"g-SECRET"}})
+	if san.GrantID != "grant-[REDACTED]" || san.GrantChain[0] != "g-[REDACTED]" {
+		t.Fatalf("sanitize: %+v", san)
+	}
+}

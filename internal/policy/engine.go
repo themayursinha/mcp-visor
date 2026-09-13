@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/lineage"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 )
 
@@ -177,39 +178,73 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 	// is a fail-closed deny. YAML order and later stages cannot skip a deny
 	// or turn an unsupported action into a proxy default-allow.
 	var pendingApproval Decision
+	var lineageEv *lineage.Evidence
+	if known && hasLineageRequire(tool.Rules) {
+		args := extractArgs(req.Arguments)
+		lineageDecision := e.evaluateLineage(serverName, req.Name, args, pol)
+		lineageEv = lineageDecision.Lineage
+		if d, stop := mergeEvalDecision(&pendingApproval, lineageDecision); stop {
+			return d
+		}
+	}
+	withLineage := func(d Decision) Decision {
+		if lineageEv != nil && d.Lineage == nil {
+			d.Lineage = lineageEv
+		}
+		return d
+	}
+
 	if known && len(tool.Rules) > 0 {
 		args := extractArgs(req.Arguments)
 		for _, rule := range tool.Rules {
 			if d, stop := mergeEvalDecision(&pendingApproval, e.evaluateRule(rule, args, req.Name)); stop {
-				return d
+				return withLineage(d)
 			}
 		}
 	}
 
 	if len(pol.Identities) > 0 && e.clientID != "" {
 		if d, stop := mergeEvalDecision(&pendingApproval, e.evaluateIdentity(serverName, req.Name, pol)); stop {
-			return d
+			return withLineage(d)
 		}
 	}
 
 	if len(pol.TimeRestrictions) > 0 {
 		if d, stop := mergeEvalDecision(&pendingApproval, e.evaluateTimeRestriction(serverName, req.Name, pol)); stop {
-			return d
+			return withLineage(d)
 		}
 	}
 
 	if known && tool.ApprovalRequired {
 		reqApproval := Decision{Action: ActionRequireApproval, Reason: fmt.Sprintf("tool '%s' requires approval", req.Name)}
 		if d, stop := mergeEvalDecision(&pendingApproval, reqApproval); stop {
-			return d
+			return withLineage(d)
 		}
 	}
 
 	if pendingApproval.Action == ActionRequireApproval {
-		return pendingApproval
+		return withLineage(pendingApproval)
 	}
 
-	return Decision{Action: ActionAllow, Reason: "allowed by policy"}
+	return withLineage(Decision{Action: ActionAllow, Reason: "allowed by policy"})
+}
+
+func (e *Engine) evaluateLineage(serverName, toolName string, args map[string]any, pol *Policy) Decision {
+	if pol.Identity == nil || pol.Identity.Version != 1 {
+		return Decision{Action: ActionAllow, Reason: "lineage not enabled"}
+	}
+	reg, err := lineage.NewRegistry(pol.Identity.Agents, pol.Identity.Grants, pol.Trajectories)
+	if err != nil {
+		ev := &lineage.Evidence{ActorAgentID: e.clientID, Rule: lineage.ReasonDelegationCeiling}
+		return Decision{Action: ActionDeny, Reason: lineage.ReasonDelegationCeiling, Lineage: ev}
+	}
+	env := lineage.EnvelopeFromArgs(e.clientID, serverName, toolName, args)
+	d, ev := lineage.Validate(env, reg)
+	out := ev
+	if d.Allow {
+		return Decision{Action: ActionAllow, Reason: "allowed by lineage", Lineage: &out}
+	}
+	return Decision{Action: ActionDeny, Reason: d.Reason, Lineage: &out}
 }
 
 // mergeEvalDecision folds one Evaluate stage into the running result.
@@ -587,6 +622,9 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 
 	case "require_approval_always":
 		return Decision{Action: ActionRequireApproval, Reason: "approval is required for this tool"}
+
+	case "lineage_require":
+		return Decision{Action: ActionAllow, Reason: "lineage_require"}
 	}
 
 	return Decision{Action: ActionAllow, Reason: "rule passed"}

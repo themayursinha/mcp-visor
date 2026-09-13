@@ -92,6 +92,7 @@ type Event struct {
 	ServerAttested         *bool           `json:"server_attested,omitempty"`
 	ServerClaimedName      string          `json:"server_claimed_name,omitempty"`
 	ServerClaimedVersion   string          `json:"server_claimed_version,omitempty"`
+	Lineage                *LineageInfo    `json:"lineage,omitempty"`
 	ResultPreview          string          `json:"result_preview,omitempty"`
 	IsError                bool            `json:"is_error,omitempty"`
 	Message                string          `json:"message,omitempty"`
@@ -113,6 +114,21 @@ type TrajectoryAdvice struct {
 	WindowTransitions int      `json:"window_transitions"`
 	SourceSupport     uint64   `json:"source_support"`
 	TransitionSupport uint64   `json:"transition_support"`
+}
+
+// LineageInfo is additive evidence for a lineage-gated tools/call.
+type LineageInfo struct {
+	ActorAgentID     string   `json:"actor_agent_id,omitempty"`
+	ParentAgentID    string   `json:"parent_agent_id,omitempty"`
+	HumanPrincipalID string   `json:"human_principal_id,omitempty"`
+	GrantID          string   `json:"grant_id,omitempty"`
+	GrantChain       []string `json:"grant_chain,omitempty"`
+	Capability       string   `json:"capability,omitempty"`
+	Resource         string   `json:"resource,omitempty"`
+	Effect           string   `json:"effect,omitempty"`
+	TrajectoryID     string   `json:"trajectory_id,omitempty"`
+	PriorStateHash   string   `json:"prior_state_hash,omitempty"`
+	Rule             string   `json:"rule,omitempty"`
 }
 
 type Logger struct {
@@ -386,6 +402,10 @@ func (l *Logger) prepareRecord(event Event) (Event, []byte, error) {
 		event.Reason = l.redactString(event.Reason)
 	}
 
+	if event.Lineage != nil {
+		event.Lineage = l.redactLineage(event.Lineage)
+	}
+
 	event.PrevHash = l.prevHash
 	event.ChainIndex = l.chainIndex
 
@@ -460,6 +480,53 @@ func (l *Logger) redactString(s string) string {
 		s = re.ReplaceAllString(s, "[REDACTED]")
 	}
 	return s
+}
+
+// SanitizeLineage deep-copies info and redacts through the logger's current
+// compiled patterns. Callers must invoke it while the authorizing generation
+// still pins those patterns.
+func (l *Logger) SanitizeLineage(info *LineageInfo) *LineageInfo {
+	if info == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.redactLineage(copyLineage(info))
+}
+
+func copyLineage(info *LineageInfo) *LineageInfo {
+	if info == nil {
+		return nil
+	}
+	out := *info
+	if info.GrantChain != nil {
+		out.GrantChain = append([]string(nil), info.GrantChain...)
+	}
+	return &out
+}
+
+func (l *Logger) redactLineage(info *LineageInfo) *LineageInfo {
+	if info == nil {
+		return nil
+	}
+	out := *info
+	out.ActorAgentID = l.redactString(info.ActorAgentID)
+	out.ParentAgentID = l.redactString(info.ParentAgentID)
+	out.HumanPrincipalID = l.redactString(info.HumanPrincipalID)
+	out.GrantID = l.redactString(info.GrantID)
+	out.Capability = l.redactString(info.Capability)
+	out.Resource = l.redactString(info.Resource)
+	out.Effect = l.redactString(info.Effect)
+	out.TrajectoryID = l.redactString(info.TrajectoryID)
+	out.PriorStateHash = l.redactString(info.PriorStateHash)
+	out.Rule = l.redactString(info.Rule)
+	if info.GrantChain != nil {
+		out.GrantChain = make([]string, len(info.GrantChain))
+		for i, s := range info.GrantChain {
+			out.GrantChain[i] = l.redactString(s)
+		}
+	}
+	return &out
 }
 
 func (l *Logger) redactMap(m map[string]any) map[string]any {

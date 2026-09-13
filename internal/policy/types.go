@@ -1,5 +1,7 @@
 package policy
 
+import "github.com/themayursinha/mcp-visor/internal/lineage"
+
 type Action string
 
 const (
@@ -35,6 +37,15 @@ type Policy struct {
 	// exact delegation grants. Nil (absent) disables ownership proofs with
 	// zero behavioral delta.
 	CapabilityOwnership *CapabilityOwnership `yaml:"capability_ownership,omitempty"`
+	Identity            *IdentitySection     `yaml:"identity,omitempty" json:"Identity,omitempty"`
+	Trajectories        []lineage.Trajectory `yaml:"trajectories,omitempty" json:"Trajectories,omitempty"`
+}
+
+// IdentitySection is the opt-in agent-identity lineage registry (version 1).
+type IdentitySection struct {
+	Version int                      `yaml:"version"`
+	Agents  []lineage.AgentIdentity  `yaml:"agents"`
+	Grants  []lineage.AuthorityGrant `yaml:"grants"`
 }
 
 type Settings struct {
@@ -186,6 +197,7 @@ type RedactionPattern struct {
 }
 
 type Decision struct {
-	Action Action
-	Reason string
+	Action  Action
+	Reason  string
+	Lineage *lineage.Evidence
 }

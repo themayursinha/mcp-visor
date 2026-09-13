@@ -14,6 +14,7 @@ import (
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/instructionauthority"
+	"github.com/themayursinha/mcp-visor/internal/lineage"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/receipt"
@@ -218,6 +219,7 @@ func (p *Proxy) processToolsCall(
 	}
 
 	decision := p.engine.Evaluate(serverName, callReq)
+	lineageInfo := p.audit.SanitizeLineage(auditLineageInfo(decision.Lineage))
 	risk := p.engine.GetRiskLevel(serverName, callReq.Name)
 	advice, anomalous := p.assessTrajectory(serverName, callReq.Name)
 	var chainContext []string
@@ -263,6 +265,7 @@ func (p *Proxy) processToolsCall(
 				Reason:       withRedactionNote(chainDecision.Reason, redactionResult),
 				RiskLevel:    string(risk),
 				ChainContext: previousCalls,
+				Lineage:      lineageInfo,
 			}
 			p.attachServerIdentity(&chainDeniedEvent, snapshot.identity)
 			attachTrajectoryAdvice(&chainDeniedEvent, advice, anomalous)
@@ -388,6 +391,7 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(decision.Action),
 			Reason:    withRedactionNote(decision.Reason, redactionResult),
 			RiskLevel: string(risk),
+			Lineage:   lineageInfo,
 		}
 		if ceiling != nil {
 			deniedEvent.DelegationDepth = ceiling.depth
@@ -427,6 +431,7 @@ func (p *Proxy) processToolsCall(
 		// SAME snapshot used for evaluation and the identity gate.
 		evidence := p.buildApprovalEvidence(originalRaw, redactedArgs, chainContext, snapshot.policy)
 		approvalEvent := approvalRequiredEvent(p, serverName, callReq, redactedArgs, withRedactionNote(decision.Reason, redactionResult), risk, chainContext, evidence)
+		approvalEvent.Lineage = lineageInfo
 		// Persist the capability receipt (ALLOW, E5 pause, or evaluator-error
 		// pause) on the terminal event so the accounting trajectory is
 		// durable. Dropping a successful Eval receipt would leave only the
@@ -440,7 +445,7 @@ func (p *Proxy) processToolsCall(
 		// forwarding so slow SIEM/webhook sinks cannot stall reloads.
 		release()
 		p.forwardAudit(approvalEvent)
-		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence, redactionResult, advice, anomalous)
+		outcome := p.requestApproval(serverName, callReq, redactedArgs, decision.Reason, risk, originalRaw, chainContext, snapshot, evidence, redactionResult, advice, anomalous, lineageInfo)
 		if !outcome.Approved {
 			reason := fmt.Sprintf("execution denied: approval not granted (%s)", outcome.Reason)
 			respond(req.ID, reason)
@@ -459,6 +464,7 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(policy.ActionAllow),
 			Reason:    withRedactionNote("approved by human operator", redactionResult),
 			RiskLevel: string(risk),
+			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
@@ -509,6 +515,7 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(policy.ActionAllow),
 			Reason:    reason,
 			RiskLevel: string(risk),
+			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
@@ -541,6 +548,7 @@ func (p *Proxy) processToolsCall(
 			Decision:  string(policy.ActionAllow),
 			Reason:    reason,
 			RiskLevel: string(risk),
+			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
@@ -607,6 +615,29 @@ func withRedactionNote(reason string, result redaction.Result) string {
 		return note
 	}
 	return reason + "; " + note
+}
+
+func auditLineageInfo(ev *lineage.Evidence) *audit.LineageInfo {
+	if ev == nil {
+		return nil
+	}
+	chain := ev.GrantChain
+	if chain != nil {
+		chain = append([]string(nil), chain...)
+	}
+	return &audit.LineageInfo{
+		ActorAgentID:     ev.ActorAgentID,
+		ParentAgentID:    ev.ParentAgentID,
+		HumanPrincipalID: ev.HumanPrincipalID,
+		GrantID:          ev.GrantID,
+		GrantChain:       chain,
+		Capability:       ev.Capability,
+		Resource:         ev.Resource,
+		Effect:           ev.Effect,
+		TrajectoryID:     ev.TrajectoryID,
+		PriorStateHash:   ev.PriorStateHash,
+		Rule:             ev.Rule,
+	}
 }
 
 // identityEvidence derives the immutable attestation evidence for the
