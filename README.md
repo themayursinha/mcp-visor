@@ -116,6 +116,7 @@ These packages prove PCA properties in isolation. **`Authorize` is not wired int
 | Non-transitive host authority | H39 | `go run ./examples/host-transitivity` |
 | Authorization-state fidelity | H40 | `go run ./examples/auth-state-fidelity` |
 | Capability composition graph | H41 | `go run ./examples/composition-graph` |
+| Cross-tool correlation | H42 | `go run ./examples/tool-correlation` |
 
 Each island ignores untrusted presentation and fail-closes on missing proof. See [`docs/architecture.md`](docs/architecture.md#proof-carrying-autonomy-islands).
 
