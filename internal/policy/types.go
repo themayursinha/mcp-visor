@@ -50,6 +50,9 @@ type Settings struct {
 	LogLevel        string `yaml:"log_level"`
 	// CapabilityEval opts the session into the capability accounting evaluator (default false = no-op evaluator, zero behavioral delta).
 	CapabilityEval bool `yaml:"capability_accounting"`
+	// InstructionAuthorityContinuity opts tools/call into the H32 instruction-authority gate.
+	// False is the default and preserves the legacy path with a nil gate.
+	InstructionAuthorityContinuity bool `yaml:"instruction_authority_continuity"`
 }
 
 type Server struct {

@@ -100,9 +100,11 @@ go run ./examples/demo-runner -ui -ui-addr "${TAILSCALE_BIND_ADDRESS}:9092"
 - Permission-bypass delegation: `deny_permission_bypass` is a fail-closed spawn-flag slot. A mandate to create a worker does not authorize `spawn_agent` with skip-permissions. Explicitly-off values are not a bypass. Delegation graphs are out of model.
 - Unauthorized configuration activation: `allow_activation` is an exact, fail-closed executable-or-host slot. A mandate to register `/usr/bin/node` or `mcp.internal` does not authorize `register_mcp` of `/bin/sh` or `169.254.169.254`. Describing infrastructure is not instantiating it.
 
-## Proof-carrying autonomy islands (not on `tools/call`)
+## Experimental H32 cooperating-client adapter
 
-These packages prove PCA properties in isolation. **`Authorize` is not wired into the proxy `tools/call` path.** A green demo does not mean Visor currently prevents that class in production.
+H32 remains a proof island. `settings.instruction_authority_continuity` (default off) is an **experimental cooperating-client adapter**, not production `tools/call` enforcement. When enabled, a harness that constructs `InstructionObject` plus `EvaluationRoot` outside the model may place them at `params._meta["mcp-visor/instruction-authority/v1"]`. The proxy checks that envelope's internal consistency with `instructionauthority.Authorize`. It does not authenticate the caller, bind the assertion to this request, tool, server, or session, or strip the envelope as an H32 step. If argument redaction rewrites `params`, extra members including the envelope are dropped; otherwise the envelope, including instruction content, is forwarded. An untrusted or prompt-injected client can self-assert `TRUSTED_USER`. Standard MCP clients have no provenance: they are denied only while the setting is on, and they are unprotected while it is off.
+
+H33–H43 remain proof islands not invoked on `tools/call`. A green island demo does not mean Visor currently prevents that class in production.
 
 | Island | Invariant | Demo |
 |--------|-----------|------|
