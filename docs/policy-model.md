@@ -62,7 +62,7 @@ settings:
   instruction_authority_continuity: true
 ```
 
-When enabled, a cooperating harness may supply `params._meta["mcp-visor/instruction-authority/v1"]` as `{instruction_object, evaluation_root}`. The proxy checks envelope consistency only. It does not authenticate the caller, bind the assertion to this request, tool, server, or session, or strip the key before relay. Missing `_meta`, null `_meta`, absent key, or null key deny with `instruction authority envelope missing`. Non-object `_meta`/value, unknown fields, schema mismatch, and failed semantic round-trip deny with `instruction authority envelope malformed`. An adapter allow is only a conjunct; an adapter denial cannot be approved. Do not treat a pass as proof that this trusted instruction authorized this specific action.
+When enabled, a cooperating harness may supply `params._meta["mcp-visor/instruction-authority/v1"]` as `{instruction_object, evaluation_root}`. The proxy checks envelope consistency only. It does not authenticate the caller, bind the assertion to this request, tool, server, or session, or strip the key as an H32 step. If argument redaction rewrites `params`, extra members including this key are dropped; otherwise the key is forwarded. Missing `_meta`, null `_meta`, absent key, or null key deny with `instruction authority envelope missing`. Non-object `_meta`/value, unknown fields, schema mismatch, and failed semantic round-trip deny with `instruction authority envelope malformed`. An adapter allow is only a conjunct; an adapter denial cannot be approved. Do not treat a pass as proof that this trusted instruction authorized this specific action.
 
 ## Servers
 

@@ -156,7 +156,8 @@ intercepted tools/call
         ▼
  ┌──────────────────┐
  │ H32 experimental │──▶ Cooperating-client adapter only. Not production
- │ adapter (opt)    │     enforcement; unauthenticated, unbound, forwarded
+ │ adapter (opt)    │     enforcement; unauthenticated, unbound; envelope
+ │                  │     kept unless redaction rewrites params
  └──────┬───────────┘
         ▼
  ┌──────────────────┐
@@ -390,6 +391,6 @@ HashiCorp Vault Transit secrets engine provides cryptographic signing without ex
 
 ## Proof-carrying autonomy islands
 
-Package `instructionauthority` (H32) stays a proof island. When `settings.instruction_authority_continuity` is true, an experimental cooperating-client adapter reads `InstructionObject` and `EvaluationRoot` from `params._meta["mcp-visor/instruction-authority/v1"]` and calls `instructionauthority.Authorize`. That is not an attacker-resistant action boundary: the client is untrusted, the trust class is caller-asserted, the envelope is not bound to this request/tool/session, and the envelope is forwarded unchanged to the MCP server. The setting defaults off (nil gate, zero behavioral delta). Reloads toggle the bool/function under the same runtime snapshot barrier as other policy-derived surfaces. Standard MCP has no provenance; omitting the envelope is denied only while the setting is on.
+Package `instructionauthority` (H32) stays a proof island. When `settings.instruction_authority_continuity` is true, an experimental cooperating-client adapter reads `InstructionObject` and `EvaluationRoot` from `params._meta["mcp-visor/instruction-authority/v1"]` and calls `instructionauthority.Authorize`. That is not an attacker-resistant action boundary: the client is untrusted, the trust class is caller-asserted, the envelope is not bound to this request/tool/session, and the adapter does not strip the envelope. If argument redaction rewrites `params`, extra members including the envelope are dropped; otherwise it is forwarded unchanged. The setting defaults off (nil gate, zero behavioral delta). Reloads toggle the bool/function under the same runtime snapshot barrier as other policy-derived surfaces. Standard MCP has no provenance; omitting the envelope is denied only while the setting is on.
 
 Packages `causalauthority`, `principalderivation`, `resourceidentity`, `controlplaneintegrity`, `swarmbudget`, `authoritycontext`, `hosttransitivity`, `authstatefidelity`, `compositiongraph`, `toolcorrelation`, and `selfescalation` are **not** stages in the decision pipeline above. They remain stdlib-only evaluators with scripted demos (H33–H43). Treat those as research proofs, not as current `tools/call` enforcement.
