@@ -171,13 +171,12 @@ func ancestryBreach(g map[string]ContextFragment, ceil map[string]string, target
 
 func token(s string) string {
 	b := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 || c == 0x7f {
-			b = append(b, '_')
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			b = append(b, byte(r))
 			continue
 		}
-		b = append(b, c)
+		b = append(b, '_')
 	}
 	return string(b)
 }
