@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/themayursinha/mcp-visor/examples/internal/demokit"
 )
@@ -170,7 +171,7 @@ func runMediated(visorBin, mockBin, policyPath, auditPath, observePath string) e
 	if demokit.ContainsID(ids, mediatedDeny) {
 		return errors.New("mediated server must not observe denied http_post")
 	}
-	denied, err := demokit.FindEvent(auditPath, "tool_call_denied")
+	denied, err := demokit.WaitEvent(auditPath, "tool_call_denied", 2*time.Second)
 	if err != nil {
 		return err
 	}

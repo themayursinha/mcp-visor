@@ -2,17 +2,23 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/dashboard"
+	"github.com/themayursinha/mcp-visor/internal/killswitch"
 	"github.com/themayursinha/mcp-visor/internal/observability"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 	"github.com/themayursinha/mcp-visor/internal/proxy"
@@ -74,14 +80,20 @@ func main() {
 	otelTraceSample := serveCmd.Float64("otel-trace-sample", 1.0, "Trace sampling ratio 0..1 when OTLP is enabled")
 	capabilityEval := serveCmd.Bool("capability-eval", false, "Enable capability accounting evaluator (default: no-op)")
 	trajectoryAdvisor := serveCmd.Bool("trajectory-advisor", false, "Enable advisory session trajectory anomaly telemetry (default: off; never authorizes)")
+	killSwitchDir := serveCmd.String("kill-switch-dir", "", "Opt-in local kinetic stop control directory (default: disabled; cooperative same-UID stdio child, not an independent kill authority)")
+	killSwitchControllers := &stringSlice{}
+	serveCmd.Var(killSwitchControllers, "kill-switch-controller", "CONTROLLER_ID=KEY_FILE (repeatable)")
+	sessionEpoch := serveCmd.Uint64("session-epoch", 0, "Session epoch for kinetic stop (>=1 when enabled)")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mcp-visor <command> [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  serve    Start the MCP proxy\n")
+		fmt.Fprintf(os.Stderr, "  stop     Publish a kinetic stop command\n")
 		fmt.Fprintf(os.Stderr, "  lint     Validate a policy file\n")
 		fmt.Fprintf(os.Stderr, "  version  Print version\n")
 		fmt.Fprintf(os.Stderr, "\nRun 'mcp-visor serve -h' for serve options.\n")
+		fmt.Fprintf(os.Stderr, "Run 'mcp-visor stop -h' for stop options.\n")
 		fmt.Fprintf(os.Stderr, "Run 'mcp-visor lint -h' for lint options.\n")
 		os.Exit(1)
 	}
@@ -89,8 +101,15 @@ func main() {
 	switch os.Args[1] {
 	case "lint":
 		runLint()
+	case "stop":
+		os.Exit(runStop(os.Args[2:], os.Stdout, os.Stderr))
 	case "serve":
 		_ = serveCmd.Parse(os.Args[2:])
+
+		if *demoMode && *killSwitchDir != "" {
+			fmt.Fprintf(os.Stderr, "mcp-visor serve: --demo cannot be combined with --kill-switch-dir\n")
+			os.Exit(1)
+		}
 
 		if *demoMode {
 			*serverCmd, *policyPath = setupDemo()
@@ -114,6 +133,12 @@ func main() {
 
 		if *serverCmd == "" && *serverURL == "" {
 			fmt.Fprintf(os.Stderr, "mcp-visor serve: -server or -server-url is required (or use --demo)\n")
+			os.Exit(1)
+		}
+
+		ksControllers, err := validateServeKillSwitch(*killSwitchDir, *sessionID, *sessionEpoch, *killSwitchControllers, *auditPath, *serverCmd, *serverURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mcp-visor serve: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -221,8 +246,11 @@ func main() {
 				ServiceName:       *otelService,
 				TraceSampleRatio:  *otelTraceSample,
 			},
-			CapabilityEval:    *capabilityEval,
-			TrajectoryAdvisor: *trajectoryAdvisor,
+			CapabilityEval:        *capabilityEval,
+			TrajectoryAdvisor:     *trajectoryAdvisor,
+			KillSwitchDir:         *killSwitchDir,
+			KillSwitchControllers: ksControllers,
+			SessionEpoch:          *sessionEpoch,
 		})
 
 		p.SetLogLevel(logLevelOpt)
@@ -446,4 +474,117 @@ func (s *stringSlice) String() string { return fmt.Sprintf("%v", *s) }
 func (s *stringSlice) Set(v string) error {
 	*s = append(*s, v)
 	return nil
+}
+
+func validateServeKillSwitch(dir, sessionID string, epoch uint64, specs []string, auditPath, server, serverURL string) ([]killswitch.ControllerKey, error) {
+	if dir == "" {
+		if len(specs) > 0 || epoch != 0 {
+			return nil, fmt.Errorf("kill-switch-controller and session-epoch require --kill-switch-dir")
+		}
+		return nil, nil
+	}
+	if serverURL != "" {
+		return nil, fmt.Errorf("kinetic stop is not supported with --server-url")
+	}
+	if server == "" || sessionID == "" || epoch < 1 || auditPath == "" || len(specs) == 0 {
+		return nil, fmt.Errorf("kinetic stop requires --session-id, --session-epoch >= 1, --kill-switch-controller, --audit-log, and local --server")
+	}
+	if err := killswitch.ValidateControlDir(dir); err != nil {
+		return nil, err
+	}
+	return loadKillSwitchControllers(specs)
+}
+
+func loadKillSwitchControllers(specs []string) ([]killswitch.ControllerKey, error) {
+	out := make([]killswitch.ControllerKey, 0, len(specs))
+	ids, paths := map[string]struct{}{}, map[string]struct{}{}
+	for _, spec := range specs {
+		ck, err := killswitch.LoadControllerSpec(spec)
+		if err != nil {
+			return nil, err
+		}
+		_, path, _ := strings.Cut(spec, "=")
+		if _, ok := ids[ck.ID]; ok {
+			return nil, fmt.Errorf("duplicate controller id")
+		}
+		if _, ok := paths[path]; ok {
+			return nil, fmt.Errorf("duplicate controller key path")
+		}
+		ids[ck.ID] = struct{}{}
+		paths[path] = struct{}{}
+		out = append(out, ck)
+	}
+	return out, nil
+}
+
+func runStop(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("control-dir", "", "Control directory")
+	sessionID := fs.String("session-id", "", "Target session id")
+	epoch := fs.Uint64("revoke-through-epoch", 0, "Revoke through epoch (>=1)")
+	controllerID := fs.String("controller-id", "", "Controller id")
+	keyFile := fs.String("controller-key", "", "Controller HMAC key file")
+	reason := fs.String("reason", "", "Stop reason")
+	wait := fs.Duration("wait", 3*time.Second, "How long to wait for revoked_contained (0=publish only)")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	reasonText := strings.TrimSpace(*reason)
+	if *dir == "" || *sessionID == "" || *epoch < 1 || *controllerID == "" || *keyFile == "" || reasonText == "" || *wait < 0 || *wait > 30*time.Second {
+		fmt.Fprintf(stderr, "mcp-visor stop: --control-dir, --session-id, --revoke-through-epoch >= 1, --controller-id, --controller-key, and --reason are required; --wait must be 0..30s\n")
+		return 1
+	}
+	if err := killswitch.ValidateControlDir(*dir); err != nil {
+		fmt.Fprintf(stderr, "mcp-visor stop: %v\n", err)
+		return 1
+	}
+	key, err := killswitch.LoadKeyFile(*keyFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "mcp-visor stop: %v\n", err)
+		return 1
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		fmt.Fprintf(stderr, "mcp-visor stop: %v\n", err)
+		return 1
+	}
+	cmd := killswitch.Command{
+		SchemaVersion:      killswitch.SchemaVersion,
+		CommandID:          hex.EncodeToString(id[:]),
+		SessionID:          *sessionID,
+		RevokeThroughEpoch: *epoch,
+		ControllerID:       *controllerID,
+		Reason:             reasonText,
+	}
+	if err := killswitch.SignCommand(&cmd, key); err != nil {
+		fmt.Fprintf(stderr, "mcp-visor stop: %v\n", err)
+		return 1
+	}
+	if _, err := killswitch.WriteCommand(*dir, cmd); err != nil {
+		fmt.Fprintf(stderr, "mcp-visor stop: %v\n", err)
+		return 1
+	}
+	if *wait == 0 {
+		fmt.Fprintf(stdout, "command_id=%s session_id=%s revoked_through_epoch=%d resulting_state=published\n", cmd.CommandID, cmd.SessionID, cmd.RevokeThroughEpoch)
+		return 0
+	}
+	deadline := time.Now().Add(*wait)
+	ctrls := map[string][]byte{*controllerID: key}
+	for {
+		st, err := killswitch.ReadState(*dir, *sessionID, ctrls)
+		if err == nil && st.CommandID == cmd.CommandID && st.SessionID == *sessionID && st.RevokedThroughEpoch >= *epoch {
+			if st.ResultingState == "revoked_contained" {
+				fmt.Fprintf(stdout, "command_id=%s session_id=%s revoked_through_epoch=%d resulting_state=%s\n", cmd.CommandID, cmd.SessionID, st.RevokedThroughEpoch, st.ResultingState)
+				return 0
+			}
+			fmt.Fprintf(stderr, "mcp-visor stop: resulting_state=%s\n", st.ResultingState)
+			return 1
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(stderr, "kinetic stop command published but enforcement was not observed before timeout\n")
+			return 2
+		}
+		time.Sleep(killswitch.PollInterval)
+	}
 }

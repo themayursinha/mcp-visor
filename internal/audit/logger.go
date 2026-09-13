@@ -54,6 +54,7 @@ const (
 	EventSessionEnded         EventType = "session_ended"
 	EventPolicyLoaded         EventType = "policy_loaded"
 	EventPolicyReloaded       EventType = "policy_reloaded"
+	EventKineticStopEnforced  EventType = "kinetic_stop_enforced"
 )
 
 type Event struct {
@@ -102,9 +103,16 @@ type Event struct {
 	// DelegationDepth is the session delegation count at a ceiling denial;
 	// MaxSpawnDepth is the enforced settings.max_spawn_depth. Populated
 	// only by delegation-ceiling denials (card t_1851c97f).
-	DelegationDepth  int               `json:"delegation_depth,omitempty"`
-	MaxSpawnDepth    int               `json:"max_spawn_depth,omitempty"`
-	TrajectoryAdvice *TrajectoryAdvice `json:"trajectory_advice,omitempty"`
+	DelegationDepth         int               `json:"delegation_depth,omitempty"`
+	MaxSpawnDepth           int               `json:"max_spawn_depth,omitempty"`
+	TrajectoryAdvice        *TrajectoryAdvice `json:"trajectory_advice,omitempty"`
+	ControllerID            string            `json:"controller_id,omitempty"`
+	CommandID               string            `json:"command_id,omitempty"`
+	SessionEpoch            uint64            `json:"session_epoch,omitempty"`
+	RevokedThroughEpoch     uint64            `json:"revoked_through_epoch,omitempty"`
+	ObservedEnforcementTime string            `json:"observed_enforcement_time,omitempty"`
+	ResultingState          string            `json:"resulting_state,omitempty"`
+	ControlRequestSHA256    string            `json:"control_request_sha256,omitempty"`
 }
 
 type TrajectoryAdvice struct {
@@ -365,6 +373,43 @@ func (l *Logger) CommitAuthorization(event Event) error {
 		return fmt.Errorf("commit authorization: only tool_call_allowed allow events are commit-able")
 	}
 
+	prepared, data, err := l.prepareRecord(event)
+	if err != nil {
+		l.poisoned = true
+		return err
+	}
+	if err := l.appendFull(data); err != nil {
+		l.poisoned = true
+		return err
+	}
+	if err := l.syncFn(); err != nil {
+		l.poisoned = true
+		return fmt.Errorf("audit sync: %w", err)
+	}
+	l.prevHash = prepared.Hash
+	l.chainIndex++
+	return nil
+}
+
+func (l *Logger) Durable() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.durable && !l.poisoned
+}
+
+func (l *Logger) CommitKineticStop(event Event) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.poisoned {
+		return ErrAuditSinkUnhealthy
+	}
+	if !l.durable {
+		l.poisoned = true
+		return fmt.Errorf("%w: audit sink is not durable (stderr fallback)", ErrAuditSinkUnhealthy)
+	}
+	if event.EventType != EventKineticStopEnforced || event.Decision != "revoked" || event.ResultingState == "" {
+		return fmt.Errorf("commit kinetic stop: only kinetic_stop_enforced revoked events with resulting_state are commit-able")
+	}
 	prepared, data, err := l.prepareRecord(event)
 	if err != nil {
 		l.poisoned = true
