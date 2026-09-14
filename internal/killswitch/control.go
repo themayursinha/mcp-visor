@@ -416,6 +416,11 @@ func validateSubdir(parent, name string, create bool) error {
 			if err = dirSync(parent); err == nil {
 				st, err = os.Lstat(p)
 			}
+		} else if errors.Is(err, os.ErrExist) {
+			// A concurrent writer created the subdirectory between our Lstat and
+			// Mkdir. Re-stat it and fall through to the same validation, instead
+			// of failing this write on a lost creation race.
+			st, err = os.Lstat(p)
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("missing control subdirectory")
