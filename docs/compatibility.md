@@ -13,7 +13,7 @@ artifacts for other operating systems are not compatibility tests.
 | AIP version | mcp-visor version | MCP protocol tested | Deployment mode tested | OS tested | Evidence |
 |---|---|---|---|---|---|
 | `v1.0.0` | Unversioned launcher stub; no Visor binary exercised | — | Loopback identity-only gateway → `visor-session` argument construction and stub process launch | Ubuntu 24.04 CI (`go test ./...`) | AIP `TestFetchIdentityOnlyMapping`, `TestCommandThenStubVisor`, `TestCommandRejectsIdentityFlags` |
-| — | `v1.4.1` | Not asserted (clients offer `2024-11-05`; `interopInit` does not check the negotiated `result.protocolVersion`) | Real filesystem/fetch servers over stdio; local loopback HTTP+SSE mock | Ubuntu 24.04, `go test -tags interop` (not default CI) | Visor `TestInteropFilesystemStdio`, `TestInteropFilesystemTaintEgress`, `TestInteropFetchStdio`, `TestInteropRemotePostHandshake` |
+| — | `v1.4.1` | Not asserted (clients offer `2024-11-05`; `interopInit` does not check the negotiated `result.protocolVersion`) | Real filesystem/fetch servers over stdio; local loopback HTTP+SSE mock | Ubuntu 24.04; tagged interop suite, not default CI; reproduce recipe in [interoperability.md](interoperability.md) | Visor `TestInteropFilesystemStdio`, `TestInteropFilesystemTaintEgress`, `TestInteropFetchStdio`, `TestInteropRemotePostHandshake` |
 
 Not listed, because they are not automated compatibility evidence:
 
