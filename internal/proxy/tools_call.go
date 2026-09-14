@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/actorcontext"
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/instructionauthority"
@@ -35,6 +36,22 @@ func (p *Proxy) processToolsCall(
 ) (json.RawMessage, string) {
 	started := time.Now()
 	argsMap := extractArgs(callReq.Arguments)
+	if stripped, changed := actorcontext.StripArgumentIdentity(argsMap); changed {
+		rewritten, err := p.rewriteArgs(raw, stripped)
+		if err != nil {
+			respond(req.ID, "invalid tools/call arguments")
+			p.metrics.IncrementProcessed()
+			p.metrics.IncrementDenied()
+			p.logDenied(serverName, callReq.Name, argsMap, "invalid tools/call arguments", policy.RiskUnknown)
+			return raw, "denied"
+		}
+		raw = rewritten
+		originalRaw = rewritten
+		argsMap = stripped
+		if encoded, err := json.Marshal(stripped); err == nil {
+			callReq.Arguments = encoded
+		}
+	}
 	p.metrics.IncrementProcessed()
 
 	// Hold a shared barrier with applyPolicyRuntime so a single call cannot
@@ -407,6 +424,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
+		p.attachVerifiedActor(&deniedEvent)
 		attachCapabilityArtifact(&deniedEvent, capArtifact)
 		attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
 		_ = p.audit.Log(deniedEvent)
@@ -470,6 +488,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
+		p.attachVerifiedActor(&allowEvent)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
 		// Ownership recheck: a grant valid at request time may have expired
@@ -539,6 +558,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
+		p.attachVerifiedActor(&allowEvent)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
 		attachOwnershipReceipt(&allowEvent, ownReceipt)
 		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
@@ -572,6 +592,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
+		p.attachVerifiedActor(&defaultAllowEvent)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		attachOwnershipReceipt(&defaultAllowEvent, ownReceipt)
 		attachTrajectoryAdvice(&defaultAllowEvent, advice, anomalous)

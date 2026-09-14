@@ -94,6 +94,10 @@ type Event struct {
 	ServerClaimedName      string          `json:"server_claimed_name,omitempty"`
 	ServerClaimedVersion   string          `json:"server_claimed_version,omitempty"`
 	Lineage                *LineageInfo    `json:"lineage,omitempty"`
+	IdentitySnapshotHash   string          `json:"identity_snapshot_hash,omitempty"`
+	PrincipalID            string          `json:"principal_id,omitempty"`
+	ActingAgent            string          `json:"acting_agent,omitempty"`
+	TransactionID          string          `json:"transaction_id,omitempty"`
 	ResultPreview          string          `json:"result_preview,omitempty"`
 	IsError                bool            `json:"is_error,omitempty"`
 	Message                string          `json:"message,omitempty"`

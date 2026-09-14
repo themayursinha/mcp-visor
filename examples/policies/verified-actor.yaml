@@ -1,0 +1,24 @@
+# Verified actor context (H50)
+# Use with AIP visor-session, which passes a process-start
+# VerifiedActorContext on fd 3. Standalone --client-id is not enough
+# when require_verified_actor is true.
+version: "1.0"
+description: "Fail closed without process-start VerifiedActorContext; write requires verified write scope"
+
+default_action: deny
+
+settings:
+  require_verified_actor: true
+
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "write_file"
+        allowed: true
+        risk: high
+        required_scopes: ["write"]
+      - name: "read_file"
+        allowed: true
+        risk: low
+        required_scopes: ["read"]

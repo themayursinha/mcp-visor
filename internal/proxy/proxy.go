@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/actorcontext"
 	"github.com/themayursinha/mcp-visor/internal/approval"
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/capability"
@@ -138,6 +139,7 @@ type Config struct {
 	ServerArgs         []string
 	ClientID           string
 	SessionID          string
+	VerifiedActor      *actorcontext.Context
 	Policy             *policy.Policy
 	Engine             *policy.Engine
 	AuditLogPath       string
@@ -260,6 +262,7 @@ func New(cfg Config) *Proxy {
 		eng = policy.NewEngine(p)
 	}
 	eng.SetClientID(cfg.ClientID)
+	eng.SetVerifiedActor(cfg.VerifiedActor)
 	red := redaction.NewEngine(p.Redaction)
 	var appr *approval.Engine
 	if cfg.ApprovalCLI {
@@ -324,6 +327,7 @@ func NewWithTracing(cfg Config) *Proxy {
 		eng = policy.NewEngine(p)
 	}
 	eng.SetClientID(cfg.ClientID)
+	eng.SetVerifiedActor(cfg.VerifiedActor)
 	red := redaction.NewEngine(p.Redaction)
 	var appr *approval.Engine
 	if cfg.ApprovalCLI {
@@ -1207,6 +1211,7 @@ func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[stri
 		Lineage:   lineage,
 	}
 	p.attachServerIdentity(&ev, identity)
+	p.attachVerifiedActor(&ev)
 	attachTrajectoryAdvice(&ev, advice, anomalous)
 	p.logAudit(ev)
 }
@@ -1342,7 +1347,19 @@ func (p *Proxy) attachReceiptEvidence(event *audit.Event, rec *receipt.DecisionR
 	}
 }
 
+func (p *Proxy) attachVerifiedActor(event *audit.Event) {
+	if event == nil || p.cfg.VerifiedActor == nil {
+		return
+	}
+	c := p.cfg.VerifiedActor
+	event.IdentitySnapshotHash = c.IdentitySnapshotHash
+	event.PrincipalID = c.PrincipalID
+	event.ActingAgent = c.ActingAgent
+	event.TransactionID = c.Transaction
+}
+
 func (p *Proxy) logAudit(event audit.Event) {
+	p.attachVerifiedActor(&event)
 	_ = p.audit.Log(event)
 	p.forwardAudit(event)
 }
