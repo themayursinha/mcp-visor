@@ -42,6 +42,7 @@ var (
 		defer d.Close()
 		return d.Sync()
 	}
+	mkdir       = os.Mkdir
 	validID     = func(s string) bool { return s != "" && len(s) <= 256 && !strings.ContainsRune(s, 0) }
 	validReason = func(s string) bool {
 		return s != "" && len(s) <= MaxReasonBytes && utf8.ValidString(s) && !strings.ContainsRune(s, 0)
@@ -412,9 +413,20 @@ func validateSubdir(parent, name string, create bool) error {
 	p := filepath.Join(parent, name)
 	st, err := os.Lstat(p)
 	if errors.Is(err, os.ErrNotExist) && create {
-		if err = os.Mkdir(p, 0o700); err == nil {
+		if err = mkdir(p, 0o700); err == nil {
 			if err = dirSync(parent); err == nil {
 				st, err = os.Lstat(p)
+			}
+		} else if errors.Is(err, os.ErrExist) {
+			// A concurrent writer created the subdirectory between our Lstat and
+			// Mkdir. Re-stat it and fall through to the same validation, instead
+			// of failing this write on a lost creation race. The winner may not
+			// have completed its own dirSync(parent) yet, so sync it here: a
+			// successful write must not depend on another process reaching its
+			// durability work, or the entry could vanish on a crash.
+			st, err = os.Lstat(p)
+			if err == nil {
+				err = dirSync(parent)
 			}
 		}
 	} else if errors.Is(err, os.ErrNotExist) {

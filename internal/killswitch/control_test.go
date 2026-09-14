@@ -192,6 +192,55 @@ func TestKineticWriteCommandIsAtomicDurableAnd0600(t *testing.T) {
 	}
 }
 
+func TestKineticLostMkdirRaceSyncsParentBeforePublish(t *testing.T) {
+	oldMkdir, oldFileSync, oldDirSync := mkdir, fileSync, dirSync
+	defer func() { mkdir, fileSync, dirSync = oldMkdir, oldFileSync, oldDirSync }()
+	_, key := ksKey(t)
+	c := signedCmd(t, key, "s", 1, "c1", "stop", "")
+
+	var mu sync.Mutex
+	var events []string
+	record := func(e string) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	// Stand in for a concurrent writer that won the Mkdir race: the
+	// subdirectory comes into existence, but our Mkdir still reports EEXIST.
+	mkdir = func(p string, perm os.FileMode) error {
+		if err := oldMkdir(p, perm); err != nil {
+			return err
+		}
+		return &os.PathError{Op: "mkdir", Path: p, Err: syscall.EEXIST}
+	}
+	fileSync = func(f *os.File) error { record("file"); return oldFileSync(f) }
+
+	dir := ksDir(t)
+	dirSync = func(d string) error {
+		if d == dir {
+			record("parent")
+		}
+		return oldDirSync(d)
+	}
+	if _, err := WriteCommand(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if len(events) == 0 || events[0] != "parent" {
+		t.Fatalf("parent entry not synced before publish: %v", events)
+	}
+	mu.Unlock()
+	if st, err := os.Stat(CommandPath(dir, "s")); err != nil || !st.Mode().IsRegular() {
+		t.Fatalf("command missing after lost race: %v %v", st, err)
+	}
+
+	dir2 := ksDir(t)
+	dirSync = func(string) error { return errors.New("sync fail") }
+	if _, err := WriteCommand(dir2, c); err == nil {
+		t.Fatal("write survived failed parent sync on lost race")
+	}
+}
+
 func TestKineticStartupRejectsPersistedOrCommandRevocation(t *testing.T) {
 	dir := ksDir(t)
 	_, key := ksKey(t)
