@@ -10,6 +10,12 @@
 # consulted on every attempt, so a genuine checksum mismatch or an unresolvable
 # version still fails after the final retry. Only transport failures recover.
 #
+# The budget is deliberately more than one spare attempt: the same job failed
+# twice in a row on `main` ~20 minutes apart, so a flaky window can outlast a
+# single retry. Each attempt is a fresh process and the module cache survives
+# between attempts, so a retry only re-fetches what is still missing and
+# successive attempts converge instead of starting over.
+#
 # Usage: bash scripts/go-install-retry <module@version> [attempts]
 set -euo pipefail
 
@@ -19,7 +25,7 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 
 module="$1"
-attempts="${2:-3}"
+attempts="${2:-4}"
 
 if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then
   echo "attempts must be a positive integer, got '$attempts'" >&2
