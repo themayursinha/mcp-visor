@@ -418,3 +418,43 @@ func TestVerifiedActorPostApprovalExpiryDeniesLineageIdentity(t *testing.T) {
 		t.Fatal("call did not finish")
 	}
 }
+
+func TestVerifiedActorPostApprovalFallbackLineageEvidenceUsesClientID(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	approvalDir := filepath.Join(dir, "approvals")
+	exp := time.Now().UTC().Add(time.Hour)
+	p := New(Config{
+		ServerName:    testfixture.Server,
+		SessionID:     "sess-actor-lin-fallback",
+		ClientID:      testfixture.Coding,
+		VerifiedActor: phase1ActorAs(t, testfixture.Coding, []string{"write"}, exp),
+		AuditLogPath:  auditPath,
+		ApprovalDir:   approvalDir,
+		Policy:        mustLoadPolicy(t, lineageApprovalYAML()),
+	})
+	t.Cleanup(func() { _ = p.audit.Close() })
+	done := make(chan string, 1)
+	go func() {
+		_, action := p.interceptAndModify(toolCallRaw(1, testfixture.Tool, testfixture.Args()), mcp.NewParser(nil, &bytes.Buffer{}))
+		done <- action
+	}()
+	id := waitLineageApproval(t, approvalDir)
+	p.setNowFunc(func() time.Time { return exp })
+	if err := os.WriteFile(filepath.Join(approvalDir, id+".ok"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case action := <-done:
+		if action != "forward" {
+			t.Fatalf("lineage-authorized client-id must still allow after optional actor expiry, got %s", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call did not finish")
+	}
+	_ = p.audit.Close()
+	ev := findAuditEvent(t, auditPath, audit.EventToolAllowed, testfixture.Tool)
+	if ev.Lineage == nil || ev.Lineage.ActorAgentID != testfixture.Coding || ev.Lineage.GrantID != testfixture.GrantCoding {
+		t.Fatalf("terminal allow must record the recheck lineage identity, got %+v", ev.Lineage)
+	}
+}

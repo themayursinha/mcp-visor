@@ -519,12 +519,18 @@ func (p *Proxy) processToolsCall(
 		// operator waited. Fresh clock, same immutable snapshot policy; a
 		// stale pre-wait lineage allow never authorizes.
 		if lineageInfo != nil {
-			if d := p.engine.EvaluateLineageAt(serverName, callReq.Name, extractArgs(callReq.Arguments), snapshot.policy, p.now()); d.Action == policy.ActionDeny {
+			d := p.engine.EvaluateLineageAt(serverName, callReq.Name, extractArgs(callReq.Arguments), snapshot.policy, p.now())
+			if d.Action == policy.ActionDeny {
 				if delegationReserved {
 					p.session.ReleaseDelegation()
 				}
 				return p.denyPostApprovalLineage(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, d.Reason, lineageInfo, advice, anomalous)
 			}
+			// Terminal allow evidence must be the identity that passed this
+			// check, not the pre-approval snapshot (an expired optional
+			// context may have fallen back to --client-id).
+			lineageInfo = sanitizeLineageSnapshot(snapshot.redactor, auditLineageInfo(d.Lineage))
+			allowEvent.Lineage = lineageInfo
 		}
 		if err := p.recheckVerifiedActor(snapshot.policy, serverName, callReq.Name); err != nil {
 			if delegationReserved {
@@ -805,6 +811,36 @@ func auditLineageInfo(ev *lineage.Evidence) *audit.LineageInfo {
 		PriorStateHash:   ev.PriorStateHash,
 		Rule:             ev.Rule,
 	}
+}
+
+func sanitizeLineageSnapshot(redactor *redaction.Engine, info *audit.LineageInfo) *audit.LineageInfo {
+	if info == nil {
+		return nil
+	}
+	out := *info
+	redact := func(s string) string {
+		if redactor == nil {
+			return s
+		}
+		return redactor.RedactOutput(s)
+	}
+	out.ActorAgentID = redact(info.ActorAgentID)
+	out.ParentAgentID = redact(info.ParentAgentID)
+	out.HumanPrincipalID = redact(info.HumanPrincipalID)
+	out.GrantID = redact(info.GrantID)
+	out.Capability = redact(info.Capability)
+	out.Resource = redact(info.Resource)
+	out.Effect = redact(info.Effect)
+	out.TrajectoryID = redact(info.TrajectoryID)
+	out.PriorStateHash = redact(info.PriorStateHash)
+	out.Rule = redact(info.Rule)
+	if info.GrantChain != nil {
+		out.GrantChain = make([]string, len(info.GrantChain))
+		for i, s := range info.GrantChain {
+			out.GrantChain[i] = redact(s)
+		}
+	}
+	return &out
 }
 
 // identityEvidence derives the immutable attestation evidence for the
