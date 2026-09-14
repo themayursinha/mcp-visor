@@ -1,0 +1,48 @@
+version: "1.0"
+description: >
+  H49 audit-boundary fixture over existing allow_destination and
+  allow_path_slot. These four out-of-allowlist argument values deny at
+  intercept: url=https://sandbox.daytona.example/source.tar,
+  url=https://harness-control.example/set-access, path=/eval/scoring.py,
+  path=/eval/config.yaml. These four mandate values forward:
+  url=https://workload.example/v1/sandbox-mirror,
+  url=https://workload.example/v1/status, path=/workload/results.json,
+  path=/workload/env.txt. Omitting the slot rules is the negative control.
+  The rules match those strings; they do not identify sandbox services,
+  harness control planes, or evaluator artifacts as such. Redirects, DNS,
+  and inodes are out of model.
+default_action: deny
+servers:
+  - name: "workload"
+    allowed: true
+    tools:
+      - name: "fetch_sandbox"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_destination
+            patterns:
+              - "workload.example"
+      - name: "fetch_control"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_destination
+            patterns:
+              - "workload.example"
+      - name: "read_artifact"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_path_slot
+            patterns:
+              - "/workload"
+              - "/workload/**"
+      - name: "read_config"
+        allowed: true
+        risk: high
+        rules:
+          - type: allow_path_slot
+            patterns:
+              - "/workload"
+              - "/workload/**"
