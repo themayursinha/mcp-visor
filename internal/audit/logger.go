@@ -455,6 +455,10 @@ func (l *Logger) prepareRecord(event Event) (Event, []byte, error) {
 		event.Lineage = l.redactLineage(event.Lineage)
 	}
 
+	event.PrincipalID = l.redactString(event.PrincipalID)
+	event.ActingAgent = l.redactString(event.ActingAgent)
+	event.TransactionID = l.redactString(event.TransactionID)
+
 	event.PrevHash = l.prevHash
 	event.ChainIndex = l.chainIndex
 

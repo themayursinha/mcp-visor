@@ -1353,9 +1353,15 @@ func (p *Proxy) attachVerifiedActor(event *audit.Event) {
 	}
 	c := p.cfg.VerifiedActor
 	event.IdentitySnapshotHash = c.IdentitySnapshotHash
-	event.PrincipalID = c.PrincipalID
-	event.ActingAgent = c.ActingAgent
-	event.TransactionID = c.Transaction
+	redact := func(s string) string {
+		if p.redactor == nil {
+			return s
+		}
+		return p.redactor.RedactOutput(s)
+	}
+	event.PrincipalID = redact(c.PrincipalID)
+	event.ActingAgent = redact(c.ActingAgent)
+	event.TransactionID = redact(c.Transaction)
 }
 
 func (p *Proxy) logAudit(event audit.Event) {

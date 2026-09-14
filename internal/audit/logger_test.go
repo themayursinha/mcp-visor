@@ -172,6 +172,48 @@ func TestRedactionInAuditLog(t *testing.T) {
 	}
 }
 
+func TestRedactionInVerifiedActorIdentifiers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	l, err := audit.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	l.SetRedactionPatterns(policy.DefaultRedactionPatterns())
+
+	secret := "sk-proj-deadbeef1234567890abcdef123456"
+	_ = l.Log(audit.Event{
+		EventType:     audit.EventToolAllowed,
+		SessionID:     "sess-1",
+		Server:        "filesystem",
+		Tool:          "write_file",
+		Decision:      "allow",
+		PrincipalID:   secret,
+		ActingAgent:   "agent-" + secret,
+		TransactionID: "txn-" + secret,
+	})
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, secret) {
+		t.Fatalf("verified actor identifiers must be redacted before JSONL write: %s", content)
+	}
+
+	var decoded audit.Event
+	if err := json.Unmarshal(data[:len(data)-1], &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.PrincipalID == secret || decoded.ActingAgent == "agent-"+secret || decoded.TransactionID == "txn-"+secret {
+		t.Fatalf("identifiers still raw: %+v", decoded)
+	}
+}
+
 func TestRedactionInResultPreview(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
