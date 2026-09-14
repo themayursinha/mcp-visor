@@ -1,0 +1,44 @@
+#!/bin/bash
+# Install a pinned Go tool with bounded retries.
+#
+# The Go module proxy and checksum database occasionally return transient
+# transport errors ("stream error: stream ID N; INTERNAL_ERROR; received from
+# peer") from the shared CDN. Those are network flakes, not build failures, and
+# a single one used to fail an entire job and block `main`.
+#
+# Retrying does not weaken supply-chain verification: the checksum database is
+# consulted on every attempt, so a genuine checksum mismatch or an unresolvable
+# version still fails after the final retry. Only transport failures recover.
+#
+# Usage: bash scripts/go-install-retry <module@version> [attempts]
+set -euo pipefail
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "usage: $0 <module@version> [attempts]" >&2
+  exit 2
+fi
+
+module="$1"
+attempts="${2:-3}"
+
+if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then
+  echo "attempts must be a positive integer, got '$attempts'" >&2
+  exit 2
+fi
+
+for (( attempt = 1; attempt <= attempts; attempt++ )); do
+  if go install "$module"; then
+    echo "installed $module (attempt ${attempt}/${attempts})"
+    exit 0
+  fi
+
+  echo "go install ${module} failed (attempt ${attempt}/${attempts})" >&2
+  if (( attempt < attempts )); then
+    backoff=$(( attempt * 10 ))
+    echo "retrying in ${backoff}s" >&2
+    sleep "$backoff"
+  fi
+done
+
+echo "go install ${module} failed after ${attempts} attempts" >&2
+exit 1
