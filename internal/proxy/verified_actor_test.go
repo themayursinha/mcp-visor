@@ -3,6 +3,9 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -456,5 +459,147 @@ func TestVerifiedActorPostApprovalFallbackLineageEvidenceUsesClientID(t *testing
 	ev := findAuditEvent(t, auditPath, audit.EventToolAllowed, testfixture.Tool)
 	if ev.Lineage == nil || ev.Lineage.ActorAgentID != testfixture.Coding || ev.Lineage.GrantID != testfixture.GrantCoding {
 		t.Fatalf("terminal allow must record the recheck lineage identity, got %+v", ev.Lineage)
+	}
+}
+
+const verifiedActorRawMarker = "VARAW_t3ec7b275_SECRET"
+
+func verifiedActorApprovalYAML(redact bool) string {
+	y := `
+version: "1.0"
+default_action: deny
+settings:
+  require_verified_actor: true
+  approval_timeout_seconds: 5
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "write_file"
+        allowed: true
+        risk: high
+        approval_required: true
+        required_scopes: ["write"]
+`
+	if redact {
+		y += "redaction:\n  patterns:\n    - {name: varaw, regex: \"" + verifiedActorRawMarker + "\", replacement: \"[REDACTED]\"}\n"
+	}
+	return y
+}
+
+func TestVerifiedActorApprovalAllowUsesSnapshotRedaction(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	approvalDir := filepath.Join(dir, "approvals")
+	siemPath := filepath.Join(dir, "siem.jsonl")
+	var webhookBuf bytes.Buffer
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		webhookBuf.Write(b)
+		w.WriteHeader(204)
+	}))
+	t.Cleanup(srv.Close)
+
+	if err := os.WriteFile(policyPath, []byte(verifiedActorApprovalYAML(true)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := policy.NewWatcher(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+
+	ctx := &actorcontext.Context{
+		Version:            actorcontext.VersionV1,
+		PrincipalID:        "user-" + verifiedActorRawMarker,
+		ActingAgent:        "coding-agent",
+		Transaction:        "txn-" + verifiedActorRawMarker,
+		ActorChain:         []actorcontext.ActorRef{{ID: "user-" + verifiedActorRawMarker}, {ID: "planner"}, {ID: "coding-agent"}},
+		Scopes:             []string{"write"},
+		Issuer:             "https://sts.example.test",
+		Audience:           "https://visor-gateway.example.test",
+		TokenID:            "jti-phase1",
+		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+		ProofKeyThumbprint: "thumb",
+		VerificationMethod: actorcontext.VerificationSTSDpop,
+	}
+	if err := ctx.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	p := New(Config{
+		ServerName:    "filesystem",
+		SessionID:     "sess-va-snap",
+		ClientID:      "coding-agent",
+		VerifiedActor: ctx,
+		AuditLogPath:  auditPath,
+		Policy:        w.Policy(),
+		Engine:        policy.NewEngineWithWatcher(w),
+		ApprovalDir:   approvalDir,
+		WebhookURLs:   []string{srv.URL},
+		SIEMTargets:   []string{siemPath},
+	})
+	t.Cleanup(func() { _ = p.audit.Close() })
+
+	blocked := make(chan struct{})
+	go func() {
+		for {
+			matches, _ := filepath.Glob(filepath.Join(approvalDir, "req-*.json"))
+			if len(matches) > 0 {
+				close(blocked)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	done := make(chan string, 1)
+	go func() {
+		out := &bytes.Buffer{}
+		client := mcp.NewParser(nil, out)
+		_, action := p.interceptAndModify(toolCallRaw(1, "write_file", map[string]any{"path": "/tmp/out.txt", "content": "ok"}), client)
+		done <- action
+	}()
+	select {
+	case <-blocked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("approval was not blocked")
+	}
+	if err := os.WriteFile(policyPath, []byte(verifiedActorApprovalYAML(false)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.Reload()
+	id := waitLineageApproval(t, approvalDir)
+	if err := os.WriteFile(filepath.Join(approvalDir, id+".ok"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case action := <-done:
+		if action != "forward" {
+			t.Fatalf("want forward, got %s", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call did not finish")
+	}
+	time.Sleep(50 * time.Millisecond)
+	jsonl, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(jsonl, []byte(verifiedActorRawMarker)) {
+		t.Fatal("raw marker leaked into JSONL")
+	}
+	siem, _ := os.ReadFile(siemPath)
+	if bytes.Contains(siem, []byte(verifiedActorRawMarker)) {
+		t.Fatal("raw marker leaked into SIEM")
+	}
+	if bytes.Contains(webhookBuf.Bytes(), []byte(verifiedActorRawMarker)) {
+		t.Fatal("raw marker leaked into webhook")
+	}
+	ev := findAuditEvent(t, auditPath, audit.EventToolAllowed, "write_file")
+	if ev.PrincipalID == "" || ev.ActingAgent == "" || ev.TransactionID == "" {
+		t.Fatalf("terminal event must keep verified actor fields, got %+v", ev)
+	}
+	if !strings.Contains(ev.PrincipalID, "[REDACTED]") || !strings.Contains(ev.TransactionID, "[REDACTED]") {
+		t.Fatalf("JSONL verified actor fields must keep [REDACTED] evidence, principal=%q txn=%q", ev.PrincipalID, ev.TransactionID)
 	}
 }

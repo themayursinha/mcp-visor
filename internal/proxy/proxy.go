@@ -41,10 +41,13 @@ type Proxy struct {
 	session        *Session
 	logger         *slog.Logger
 	engine         *policy.Engine
-	audit          *audit.Logger
-	runtimeMu      sync.RWMutex
-	redactor       *redaction.Engine
-	approval       *approval.Engine
+	audit     *audit.Logger
+	runtimeMu sync.RWMutex
+	// redactor is published atomically so logAudit can read it without
+	// runtimeMu (tools/call may already hold that lock). tools/call
+	// terminal events must still use the captured snapshot redactor.
+	redactor atomic.Pointer[redaction.Engine]
+	approval *approval.Engine
 	tracer         trace.TraceLogger
 	tracing        TracingConfig
 	metrics        ProxyMetrics
@@ -282,7 +285,6 @@ func New(cfg Config) *Proxy {
 		})),
 		engine:            eng,
 		audit:             al,
-		redactor:          red,
 		approval:          appr,
 		tracing:           cfg.Tracing,
 		webhook:           wh,
@@ -291,6 +293,7 @@ func New(cfg Config) *Proxy {
 		capEval:           newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
 		trajectoryAdvisor: maybeTrajectoryAdvisor(cfg.TrajectoryAdvisor),
 	}
+	proxy.redactor.Store(red)
 	proxy.kineticSessionEmpty = kineticSessionEmpty
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
@@ -347,7 +350,6 @@ func NewWithTracing(cfg Config) *Proxy {
 		})),
 		engine:            eng,
 		audit:             al,
-		redactor:          red,
 		approval:          appr,
 		tracing:           cfg.Tracing,
 		webhook:           wh,
@@ -356,6 +358,7 @@ func NewWithTracing(cfg Config) *Proxy {
 		capEval:           newCapabilityEvaluator(cfg.SessionID, capEvalEnabled(cfg)),
 		trajectoryAdvisor: maybeTrajectoryAdvisor(cfg.TrajectoryAdvisor),
 	}
+	proxy.redactor.Store(red)
 	proxy.kineticSessionEmpty = kineticSessionEmpty
 	if proxy.capEval != nil {
 		proxy.capLastHash = capability.GenesisPrevHash
@@ -548,7 +551,7 @@ func (p *Proxy) refreshPolicyRuntime(pol *policy.Policy) {
 	newRedactor := redaction.NewEngine(pol.Redaction)
 	timeout := time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second
 	p.runtimeMu.Lock()
-	p.redactor = newRedactor
+	p.redactor.Store(newRedactor)
 	if p.approval != nil {
 		p.approval.SetTimeout(timeout)
 	}
@@ -593,7 +596,7 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 
 	p.runtimeMu.Lock()
 	publish()
-	p.redactor = newRedactor
+	p.redactor.Store(newRedactor)
 	if p.approval != nil {
 		p.approval.SetTimeout(timeout)
 	}
@@ -615,9 +618,7 @@ func (p *Proxy) commitPolicyRuntime(pol *policy.Policy, publish func()) {
 }
 
 func (p *Proxy) currentRedactor() *redaction.Engine {
-	p.runtimeMu.RLock()
-	defer p.runtimeMu.RUnlock()
-	return p.redactor
+	return p.redactor.Load()
 }
 
 func (p *Proxy) currentApproval() *approval.Engine {
@@ -641,7 +642,7 @@ func (p *Proxy) runtimeSnapshotLocked(serverName string) runtimeSnapshot {
 	pol := p.engine.Policy()
 	return runtimeSnapshot{
 		policy:                   pol,
-		redactor:                 p.redactor,
+		redactor:                 p.redactor.Load(),
 		approval:                 p.approval,
 		approvalTimeout:          time.Duration(pol.Settings.ApprovalTimeoutSecs) * time.Second,
 		identity:                 p.identityEvidence(pol, serverName),
@@ -1187,7 +1188,7 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 	p.runtimeMu.RLock()
 	snapshot := p.runtimeSnapshotLocked(serverName)
 	p.runtimeMu.RUnlock()
-	p.logDeniedWithEvidence(serverName, toolName, args, reason, risk, snapshot.identity, trajectory.Advice{}, false, nil)
+	p.logDeniedWithEvidence(serverName, toolName, args, reason, risk, snapshot.identity, snapshot.redactor, trajectory.Advice{}, false, nil)
 }
 
 // logDeniedWithEvidence builds the terminal deny event and attaches identity
@@ -1197,7 +1198,7 @@ func (p *Proxy) logDenied(serverName, toolName string, args map[string]any, reas
 // record with a different policy generation than the one that authorized the
 // call, and so the terminal record cannot read mutable live identity state
 // after release.
-func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel, identity serverIdentityEvidence, advice trajectory.Advice, anomalous bool, lineage *audit.LineageInfo) {
+func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[string]any, reason string, risk policy.RiskLevel, identity serverIdentityEvidence, redactor *redaction.Engine, advice trajectory.Advice, anomalous bool, lineage *audit.LineageInfo) {
 	ev := audit.Event{
 		EventType: audit.EventToolDenied,
 		SessionID: p.session.ID,
@@ -1211,9 +1212,10 @@ func (p *Proxy) logDeniedWithEvidence(serverName, toolName string, args map[stri
 		Lineage:   lineage,
 	}
 	p.attachServerIdentity(&ev, identity)
-	p.attachVerifiedActor(&ev)
+	p.attachVerifiedActor(&ev, redactor)
 	attachTrajectoryAdvice(&ev, advice, anomalous)
-	p.logAudit(ev)
+	_ = p.audit.Log(ev)
+	p.forwardAudit(ev)
 }
 
 func approvalRequiredEvent(p *Proxy, serverName string, callReq mcp.ToolsCallRequest, redactedArgs map[string]any, reason string, risk policy.RiskLevel, chainContext []string, evidence approvalEvidence) audit.Event {
@@ -1247,7 +1249,7 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 
 	if snapshot.approval == nil {
 		denyReason := withRedactionNote("approval denied: approval backend is not configured", redactionResult)
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, denyReason, risk, snapshot.identity, advice, anomalous, lineage)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, denyReason, risk, snapshot.identity, snapshot.redactor, advice, anomalous, lineage)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
 	approved, err := snapshot.approval.RequestApprovalWithTimeout(approvalReq, snapshot.approvalTimeout)
@@ -1271,8 +1273,10 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 			Lineage:              lineage,
 		}
 		p.attachServerIdentity(&deniedEv, snapshot.identity)
+		p.attachVerifiedActor(&deniedEv, snapshot.redactor)
 		attachTrajectoryAdvice(&deniedEv, advice, anomalous)
-		p.logAudit(deniedEv)
+		_ = p.audit.Log(deniedEv)
+		p.forwardAudit(deniedEv)
 		p.logger.Warn("approval denied", "tool", callReq.Name, "session", p.session.ID)
 		return approvalOutcome{Approved: false, Reason: denyReason}
 	}
@@ -1296,17 +1300,17 @@ func (p *Proxy) requestApproval(serverName string, callReq mcp.ToolsCallRequest,
 	)
 	if err != nil {
 		errReason := fmt.Sprintf("approval receipt creation failed: %v", err)
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, advice, anomalous, lineage)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, snapshot.redactor, advice, anomalous, lineage)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if p.approvalSigner == nil {
 		errReason := "approval receipt signing failed: signer is not configured"
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, advice, anomalous, lineage)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, snapshot.redactor, advice, anomalous, lineage)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 	if err := rec.SignWith(p.approvalSigner); err != nil {
 		errReason := fmt.Sprintf("approval receipt signing failed: %v", err)
-		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, advice, anomalous, lineage)
+		p.logDeniedWithEvidence(serverName, callReq.Name, redactedArgs, errReason, risk, snapshot.identity, snapshot.redactor, advice, anomalous, lineage)
 		return approvalOutcome{Approved: false, Reason: errReason}
 	}
 
@@ -1347,17 +1351,17 @@ func (p *Proxy) attachReceiptEvidence(event *audit.Event, rec *receipt.DecisionR
 	}
 }
 
-func (p *Proxy) attachVerifiedActor(event *audit.Event) {
+func (p *Proxy) attachVerifiedActor(event *audit.Event, redactor *redaction.Engine) {
 	if event == nil || p.cfg.VerifiedActor == nil {
 		return
 	}
 	c := p.cfg.VerifiedActor
 	event.IdentitySnapshotHash = c.IdentitySnapshotHash
 	redact := func(s string) string {
-		if p.redactor == nil {
+		if redactor == nil {
 			return s
 		}
-		return p.redactor.RedactOutput(s)
+		return redactor.RedactOutput(s)
 	}
 	event.PrincipalID = redact(c.PrincipalID)
 	event.ActingAgent = redact(c.ActingAgent)
@@ -1365,7 +1369,7 @@ func (p *Proxy) attachVerifiedActor(event *audit.Event) {
 }
 
 func (p *Proxy) logAudit(event audit.Event) {
-	p.attachVerifiedActor(&event)
+	p.attachVerifiedActor(&event, p.redactor.Load())
 	_ = p.audit.Log(event)
 	p.forwardAudit(event)
 }

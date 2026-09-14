@@ -424,7 +424,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
-		p.attachVerifiedActor(&deniedEvent)
+		p.attachVerifiedActor(&deniedEvent, snapshot.redactor)
 		attachCapabilityArtifact(&deniedEvent, capArtifact)
 		attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
 		_ = p.audit.Log(deniedEvent)
@@ -488,7 +488,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
-		p.attachVerifiedActor(&allowEvent)
+		p.attachVerifiedActor(&allowEvent, snapshot.redactor)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
 		// Ownership recheck: a grant valid at request time may have expired
@@ -570,7 +570,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
-		p.attachVerifiedActor(&allowEvent)
+		p.attachVerifiedActor(&allowEvent, snapshot.redactor)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
 		attachOwnershipReceipt(&allowEvent, ownReceipt)
 		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
@@ -604,7 +604,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
-		p.attachVerifiedActor(&defaultAllowEvent)
+		p.attachVerifiedActor(&defaultAllowEvent, snapshot.redactor)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		attachOwnershipReceipt(&defaultAllowEvent, ownReceipt)
 		attachTrajectoryAdvice(&defaultAllowEvent, advice, anomalous)
@@ -765,7 +765,7 @@ func (p *Proxy) denyPostApprovalVerifiedActor(
 		Lineage:   lineage,
 	}
 	p.attachServerIdentity(&deniedEvent, snapshot.identity)
-	p.attachVerifiedActor(&deniedEvent)
+	p.attachVerifiedActor(&deniedEvent, snapshot.redactor)
 	attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
 	_ = p.audit.Log(deniedEvent)
 	release()
