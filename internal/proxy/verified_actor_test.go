@@ -290,3 +290,57 @@ servers:
 		t.Fatal("call did not finish")
 	}
 }
+
+func TestVerifiedActorOptionalExpiredContextDoesNotDenyAfterApproval(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	approvalDir := filepath.Join(dir, "approvals")
+	yaml := `
+version: "1.0"
+default_action: deny
+settings:
+  approval_timeout_seconds: 5
+servers:
+  - name: "filesystem"
+    allowed: true
+    tools:
+      - name: "write_file"
+        allowed: true
+        risk: high
+        approval_required: true
+`
+	exp := time.Now().UTC().Add(time.Hour)
+	ctx := phase1Actor(t, []string{"write"})
+	ctx.ExpiresAt = exp
+	if err := ctx.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	p := New(Config{
+		ServerName:    "filesystem",
+		SessionID:     "sess-actor-optional",
+		ClientID:      "coding-agent",
+		VerifiedActor: ctx,
+		AuditLogPath:  auditPath,
+		ApprovalDir:   approvalDir,
+		Policy:        mustLoadPolicy(t, yaml),
+	})
+	t.Cleanup(func() { _ = p.audit.Close() })
+	done := make(chan string, 1)
+	go func() {
+		_, action := p.interceptAndModify(toolCallRaw(1, "write_file", map[string]any{"path": "/tmp/out.txt"}), mcp.NewParser(nil, &bytes.Buffer{}))
+		done <- action
+	}()
+	id := waitLineageApproval(t, approvalDir)
+	p.setNowFunc(func() time.Time { return exp })
+	if err := os.WriteFile(filepath.Join(approvalDir, id+".ok"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case action := <-done:
+		if action != "forward" {
+			t.Fatalf("optional expired context must not deny after approval, got %s", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call did not finish")
+	}
+}

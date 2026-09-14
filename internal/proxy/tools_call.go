@@ -526,7 +526,7 @@ func (p *Proxy) processToolsCall(
 				return p.denyPostApprovalLineage(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, d.Reason, lineageInfo, advice, anomalous)
 			}
 		}
-		if err := p.recheckVerifiedActor(); err != nil {
+		if err := p.recheckVerifiedActor(snapshot.policy, serverName, callReq.Name); err != nil {
 			if delegationReserved {
 				p.session.ReleaseDelegation()
 			}
@@ -700,11 +700,30 @@ func (p *Proxy) denyPostApprovalLineage(
 	return raw, "denied"
 }
 
-func (p *Proxy) recheckVerifiedActor() error {
-	if p.cfg.VerifiedActor == nil {
+func (p *Proxy) recheckVerifiedActor(pol *policy.Policy, serverName, toolName string) error {
+	if p.cfg.VerifiedActor == nil || !verifiedActorRequired(pol, serverName, toolName) {
 		return nil
 	}
 	return p.cfg.VerifiedActor.Check(p.now())
+}
+
+func verifiedActorRequired(pol *policy.Policy, serverName, toolName string) bool {
+	if pol == nil {
+		return false
+	}
+	if pol.Settings.RequireVerifiedActor {
+		return true
+	}
+	srv := findServerByName(pol, serverName)
+	if srv == nil {
+		return false
+	}
+	for i := range srv.Tools {
+		if srv.Tools[i].Name == toolName && len(srv.Tools[i].RequiredScopes) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Proxy) denyPostApprovalVerifiedActor(
