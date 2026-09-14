@@ -1,13 +1,14 @@
 version: "1.0"
 description: >
-  H49 audit-boundary fixture. A policy-selected MCP tool may reach only the
-  operator-declared workload substitute. Attaching allow_destination or
-  allow_path_slot is the effect bound: sandbox-service hosts, harness-control
-  hosts, evaluator artifact paths, and evaluator env/config paths are outside
-  the mandate and deny before relay. This does not attest a third-party
-  sandbox, classify shared channels as inter-principal communication, or
-  prove host/container isolation. Route absence means these four tools/call
-  fixtures are denied; omitting the slot rules is the negative control.
+  H49 audit-boundary fixture. Attaching allow_destination or allow_path_slot
+  filters URL/HOST arguments by exact host and PATH/TARGET arguments by
+  lexical glob. These rules do not follow redirects, resolve DNS, or bind
+  inodes, so a mandate host or path string is not a reachability proof.
+  Sandbox-service hosts, harness-control hosts, evaluator artifact paths, and
+  evaluator env/config paths fail the attached slot filters. Named workload
+  substitutes pass them. Omitting the slot rules is the negative control.
+  This does not attest a third-party sandbox, classify shared channels as
+  inter-principal communication, or prove host/container isolation.
 default_action: deny
 servers:
   - name: "workload"
