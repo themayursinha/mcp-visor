@@ -2,6 +2,7 @@ package actorcontext
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -138,5 +139,30 @@ func TestHasScope(t *testing.T) {
 	c := fixtureContext()
 	if !c.HasScope("write") || c.HasScope("admin") {
 		t.Fatal(c.Scopes)
+	}
+}
+
+func TestValidateRejectsUnsupportedVerificationMethod(t *testing.T) {
+	c := fixtureContext()
+	c.VerificationMethod = "none"
+	if err := c.Seal(); err == nil || !strings.Contains(err.Error(), "unsupported verification_method") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDecodeRejectsUnsupportedVerificationMethod(t *testing.T) {
+	c := fixtureContext()
+	c.VerificationMethod = "none"
+	h, err := SnapshotHash(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.IdentitySnapshotHash = h
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(bytes.NewReader(raw)); err == nil || !strings.Contains(err.Error(), "unsupported verification_method") {
+		t.Fatalf("got %v", err)
 	}
 }

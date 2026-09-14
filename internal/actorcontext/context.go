@@ -120,6 +120,9 @@ func (c Context) ValidateStructure() error {
 	if strings.TrimSpace(c.VerificationMethod) == "" {
 		return fmt.Errorf("actorcontext: missing verification_method")
 	}
+	if c.VerificationMethod != VerificationSTSDpop {
+		return fmt.Errorf("actorcontext: unsupported verification_method %q", c.VerificationMethod)
+	}
 	if len(c.ActorChain) == 0 {
 		return fmt.Errorf("actorcontext: empty actor_chain")
 	}
