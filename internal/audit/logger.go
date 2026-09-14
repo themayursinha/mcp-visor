@@ -94,6 +94,10 @@ type Event struct {
 	ServerClaimedName      string          `json:"server_claimed_name,omitempty"`
 	ServerClaimedVersion   string          `json:"server_claimed_version,omitempty"`
 	Lineage                *LineageInfo    `json:"lineage,omitempty"`
+	IdentitySnapshotHash   string          `json:"identity_snapshot_hash,omitempty"`
+	PrincipalID            string          `json:"principal_id,omitempty"`
+	ActingAgent            string          `json:"acting_agent,omitempty"`
+	TransactionID          string          `json:"transaction_id,omitempty"`
 	ResultPreview          string          `json:"result_preview,omitempty"`
 	IsError                bool            `json:"is_error,omitempty"`
 	Message                string          `json:"message,omitempty"`
@@ -450,6 +454,10 @@ func (l *Logger) prepareRecord(event Event) (Event, []byte, error) {
 	if event.Lineage != nil {
 		event.Lineage = l.redactLineage(event.Lineage)
 	}
+
+	event.PrincipalID = l.redactString(event.PrincipalID)
+	event.ActingAgent = l.redactString(event.ActingAgent)
+	event.TransactionID = l.redactString(event.TransactionID)
 
 	event.PrevHash = l.prevHash
 	event.ChainIndex = l.chainIndex

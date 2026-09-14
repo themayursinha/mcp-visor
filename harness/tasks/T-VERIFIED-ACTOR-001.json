@@ -1,0 +1,50 @@
+{
+  "task_id": "T-VERIFIED-ACTOR-001",
+  "invariant_ids": ["H50"],
+  "security_sensitive": false,
+  "security_problem": "AIP visor-session used to collapse a verified actor chain to spoofable --client-id / --session-id strings. tools/call arguments must never become VerifiedActorContext. Missing or expired process-start context, and a read-only delegated scope, must not authorize write.",
+  "required_behavior": "With settings.require_verified_actor (or tool required_scopes), interceptAndModify forwards user1→planner→coding-agent write when a sealed process-start VerifiedActorContext has write scope; orphan write and read-only-scope write return denied and a named mock observer records no tools/call; argument _verified_actor cannot authorize; omitting the setting forwards the same write without context.",
+  "failure_behavior": "Missing, expired, or structurally invalid process-start context denies before relay. Scope is exact-match. MCP tools/call identity fields are stripped and ignored. This is not host isolation or complete mediation.",
+  "spec_revision": 0,
+  "non_goals": [
+    "Phase 2 compose/networks",
+    "In-proxy JWT on every tools/call",
+    "Environment or agent-writable file transport",
+    "Merging mcp-visor with agent-identity-plane",
+    "Host filesystem or network isolation",
+    "Shared-channel mediation",
+    "LLM scoring or judging",
+    "A third capability-token format"
+  ],
+  "attack_classes": [],
+  "allowed_paths": [
+    "docs/adr-verified-actor-context.md",
+    "harness/invariants.md",
+    "harness/tasks/T-VERIFIED-ACTOR-001.json",
+    "examples/policies/verified-actor.yaml",
+    "internal/actorcontext/context.go",
+    "internal/actorcontext/context_test.go",
+    "internal/policy/types.go",
+    "internal/policy/engine.go",
+    "internal/policy/verified_actor_test.go",
+    "internal/proxy/proxy.go",
+    "internal/proxy/tools_call.go",
+    "internal/proxy/verified_actor_test.go",
+    "internal/audit/logger.go",
+    "cmd/mcp-visor/main.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/actorcontext", "./internal/policy", "./internal/proxy", "-run", "VerifiedActor|OrphanWrite|ReadOnlyScope|EvaluateRequiresVerified|EvaluateVerifiedActor|EvaluateReadScope|EvaluateExpired|EvaluateVerifiedActorOff|SealAndDecode|CheckExpired|ValidateActing|Decode|StripArgument|HasScope", "-count", "1"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}

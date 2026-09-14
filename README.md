@@ -29,7 +29,7 @@ MCP Visor is the hardened open-source MCP `tools/call` enforcement component of 
 | [**authority-graph-simulator**](https://github.com/themayursinha/authority-graph-simulator) | What authority can an agent *reach*? (counterfactual delegation analysis) | Prototype |
 | [**capability-delta-receipts**](https://github.com/themayursinha/capability-delta-receipts) | What capability can an agent *acquire*? (trajectory-level capability accounting) | Prototype |
 
-This binary is the `tools/call` action boundary. Agent Identity Plane authenticates callers and carries actor-chain provenance via a visor-gateway; it is not yet an in-proxy token gate. The two prototypes are standalone proofs. Capability-delta semantics also exist here as an opt-in evaluator (`-capability-eval` or `settings.capability_accounting`); the authority-graph is not in the proxy.
+This binary is the `tools/call` action boundary. Agent Identity Plane authenticates callers and delivers a process-start `VerifiedActorContext` on `-verified-actor-fd` (typically fd 3 via `visor-session`). It is not an in-proxy JWT on every `tools/call`. The two prototypes are standalone proofs. Capability-delta semantics also exist here as an opt-in evaluator (`-capability-eval` or `settings.capability_accounting`); the authority-graph is not in the proxy.
 
 The Trust Plane governs not just what authority an agent is *given*, but what new authority its *discoveries make possible* — authorization must be re-evaluated when an agent materially increases its effective capabilities, even when nominal permissions are unchanged.
 

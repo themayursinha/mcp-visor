@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/actorcontext"
 	"github.com/themayursinha/mcp-visor/internal/lineage"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 )
@@ -25,6 +26,7 @@ type Engine struct {
 
 	watcher  *Watcher
 	clientID string
+	verified *actorcontext.Context
 }
 
 func NewEngine(p *Policy) *Engine {
@@ -54,6 +56,51 @@ func NewEngineWithWatcher(w *Watcher) *Engine {
 
 func (e *Engine) SetClientID(id string) {
 	e.clientID = id
+}
+
+// SetVerifiedActor installs the process-start VerifiedActorContext.
+// MCP tools/call arguments are never a source for this value.
+func (e *Engine) SetVerifiedActor(c *actorcontext.Context) {
+	e.verified = c
+}
+
+// sessionIdentityAt is the H44 actor. A process-start context supplies
+// ActingAgent only while it still passes Check; an expired or invalid
+// optional context must not authorize lineage. Legacy --client-id remains
+// when the context is absent or cannot be used.
+func (e *Engine) sessionIdentityAt(now time.Time) string {
+	if e.verified != nil && strings.TrimSpace(e.verified.ActingAgent) != "" {
+		if err := e.verified.Check(now); err == nil {
+			return e.verified.ActingAgent
+		}
+	}
+	return e.clientID
+}
+
+func (e *Engine) evaluateVerifiedActor(known bool, tool *ToolRule, pol *Policy) Decision {
+	require := pol != nil && pol.Settings.RequireVerifiedActor
+	var scopes []string
+	if known && tool != nil {
+		scopes = tool.RequiredScopes
+		if len(scopes) > 0 {
+			require = true
+		}
+	}
+	if !require {
+		return Decision{Action: ActionAllow, Reason: "verified actor not required"}
+	}
+	if e.verified == nil {
+		return Decision{Action: ActionDeny, Reason: "verified actor context required"}
+	}
+	if err := e.verified.Check(time.Now().UTC()); err != nil {
+		return Decision{Action: ActionDeny, Reason: err.Error()}
+	}
+	for _, scope := range scopes {
+		if !e.verified.HasScope(scope) {
+			return Decision{Action: ActionDeny, Reason: "verified actor scope missing: " + scope}
+		}
+	}
+	return Decision{Action: ActionAllow, Reason: "verified actor context"}
 }
 
 // OnReload registers a hook for successful policy reloads.
@@ -179,6 +226,9 @@ func (e *Engine) Evaluate(serverName string, req mcp.ToolsCallRequest) Decision 
 	// or turn an unsupported action into a proxy default-allow.
 	var pendingApproval Decision
 	var lineageEv *lineage.Evidence
+	if d, stop := mergeEvalDecision(&pendingApproval, e.evaluateVerifiedActor(known, tool, pol)); stop {
+		return d
+	}
 	if known && hasLineageRequire(tool.Rules) {
 		args := extractArgs(req.Arguments)
 		lineageDecision := e.evaluateLineage(serverName, req.Name, args, pol)
@@ -237,8 +287,9 @@ func (e *Engine) evaluateLineage(serverName, toolName string, args map[string]an
 // not observe a later reload pass the authorizing snapshot policy; this
 // method never reads the engine's live policy.
 func (e *Engine) EvaluateLineageAt(serverName, toolName string, args map[string]any, pol *Policy, now time.Time) Decision {
+	actor := e.sessionIdentityAt(now)
 	if pol == nil {
-		ev := &lineage.Evidence{ActorAgentID: e.clientID, Rule: lineage.ReasonDelegationCeiling}
+		ev := &lineage.Evidence{ActorAgentID: actor, Rule: lineage.ReasonDelegationCeiling}
 		return Decision{Action: ActionDeny, Reason: lineage.ReasonDelegationCeiling, Lineage: ev}
 	}
 	if pol.Identity == nil || pol.Identity.Version != 1 {
@@ -246,10 +297,10 @@ func (e *Engine) EvaluateLineageAt(serverName, toolName string, args map[string]
 	}
 	reg, err := lineage.NewRegistry(pol.Identity.Agents, pol.Identity.Grants, pol.Trajectories)
 	if err != nil {
-		ev := &lineage.Evidence{ActorAgentID: e.clientID, Rule: lineage.ReasonDelegationCeiling}
+		ev := &lineage.Evidence{ActorAgentID: actor, Rule: lineage.ReasonDelegationCeiling}
 		return Decision{Action: ActionDeny, Reason: lineage.ReasonDelegationCeiling, Lineage: ev}
 	}
-	env := lineage.EnvelopeFromArgs(e.clientID, serverName, toolName, args)
+	env := lineage.EnvelopeFromArgs(actor, serverName, toolName, args)
 	d, ev := lineage.ValidateAt(env, reg, now)
 	out := ev
 	if d.Allow {

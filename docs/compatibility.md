@@ -25,5 +25,7 @@ Not listed, because they are not automated compatibility evidence:
 
 AIP `v1.0.0` is operator-ready, not a Production claim. mcp-visor `--client-id`
 is operator-supplied and is not authenticated. `visor-session` is the supported
-launcher path; typing those flags by hand remains spoofable. Complete mediation
+launcher path; typing those flags by hand remains spoofable. Visor H50 proves
+process-start `VerifiedActorContext` ingest and deny-before-relay inside this
+binary; it is not an AIP×Visor end-to-end cell. Complete mediation
 (`agent → MCP server` impossible) is a later phase and is not claimed here.

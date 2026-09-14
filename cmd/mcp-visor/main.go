@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/actorcontext"
 	"github.com/themayursinha/mcp-visor/internal/dashboard"
 	"github.com/themayursinha/mcp-visor/internal/killswitch"
 	"github.com/themayursinha/mcp-visor/internal/observability"
@@ -47,6 +48,7 @@ func main() {
 	serveCmd.Var(siemTargets, "siem-target", "SIEM export target: file path, tcp:host:port, or udp:host:port (repeatable)")
 	sessionID := serveCmd.String("session-id", "", "Session identifier")
 	clientID := serveCmd.String("client-id", "", "Client identifier")
+	verifiedActorFD := serveCmd.Int("verified-actor-fd", 0, "Process-start fd carrying one VerifiedActorContext JSON object (typically 3; 0 disables)")
 	policyPath := serveCmd.String("policy", "", "Path to policy YAML file")
 	auditPath := serveCmd.String("audit-log", "", "Path to JSONL audit log file (default: stderr)")
 	approvalDir := serveCmd.String("approval-dir", "", "Directory for file-based approval workflow")
@@ -160,6 +162,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Using default-deny policy\n")
 		}
 
+		verifiedActor, err := actorcontext.DecodeFD(*verifiedActorFD)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mcp-visor serve: verified actor context: %v\n", err)
+			os.Exit(1)
+		}
+		if pol.Settings.RequireVerifiedActor && verifiedActor == nil {
+			fmt.Fprintf(os.Stderr, "mcp-visor serve: settings.require_verified_actor requires -verified-actor-fd\n")
+			os.Exit(1)
+		}
+
 		var eng *policy.Engine
 		if *policyPath != "" {
 			watcher, err := policy.NewWatcher(*policyPath)
@@ -213,6 +225,7 @@ func main() {
 			ServerArgs:         *serverArgs,
 			ClientID:           *clientID,
 			SessionID:          *sessionID,
+			VerifiedActor:      verifiedActor,
 			Policy:             pol,
 			Engine:             eng,
 			AuditLogPath:       *auditPath,

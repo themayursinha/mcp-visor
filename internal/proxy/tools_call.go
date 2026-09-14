@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/themayursinha/mcp-visor/internal/actorcontext"
 	"github.com/themayursinha/mcp-visor/internal/audit"
 	"github.com/themayursinha/mcp-visor/internal/capability"
 	"github.com/themayursinha/mcp-visor/internal/instructionauthority"
@@ -35,6 +36,22 @@ func (p *Proxy) processToolsCall(
 ) (json.RawMessage, string) {
 	started := time.Now()
 	argsMap := extractArgs(callReq.Arguments)
+	if stripped, changed := actorcontext.StripArgumentIdentity(argsMap); changed {
+		rewritten, err := p.rewriteArgs(raw, stripped)
+		if err != nil {
+			respond(req.ID, "invalid tools/call arguments")
+			p.metrics.IncrementProcessed()
+			p.metrics.IncrementDenied()
+			p.logDenied(serverName, callReq.Name, argsMap, "invalid tools/call arguments", policy.RiskUnknown)
+			return raw, "denied"
+		}
+		raw = rewritten
+		originalRaw = rewritten
+		argsMap = stripped
+		if encoded, err := json.Marshal(stripped); err == nil {
+			callReq.Arguments = encoded
+		}
+	}
 	p.metrics.IncrementProcessed()
 
 	// Hold a shared barrier with applyPolicyRuntime so a single call cannot
@@ -407,6 +424,7 @@ func (p *Proxy) processToolsCall(
 			deniedEvent.PolicyRule = egressContext.control.Name
 		}
 		p.attachServerIdentity(&deniedEvent, snapshot.identity)
+		p.attachVerifiedActor(&deniedEvent, snapshot.redactor)
 		attachCapabilityArtifact(&deniedEvent, capArtifact)
 		attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
 		_ = p.audit.Log(deniedEvent)
@@ -470,6 +488,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
+		p.attachVerifiedActor(&allowEvent, snapshot.redactor)
 		p.attachReceiptEvidence(&allowEvent, outcome.Receipt)
 		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
 		// Ownership recheck: a grant valid at request time may have expired
@@ -500,12 +519,24 @@ func (p *Proxy) processToolsCall(
 		// operator waited. Fresh clock, same immutable snapshot policy; a
 		// stale pre-wait lineage allow never authorizes.
 		if lineageInfo != nil {
-			if d := p.engine.EvaluateLineageAt(serverName, callReq.Name, extractArgs(callReq.Arguments), snapshot.policy, p.now()); d.Action == policy.ActionDeny {
+			d := p.engine.EvaluateLineageAt(serverName, callReq.Name, extractArgs(callReq.Arguments), snapshot.policy, p.now())
+			if d.Action == policy.ActionDeny {
 				if delegationReserved {
 					p.session.ReleaseDelegation()
 				}
 				return p.denyPostApprovalLineage(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, d.Reason, lineageInfo, advice, anomalous)
 			}
+			// Terminal allow evidence must be the identity that passed this
+			// check, not the pre-approval snapshot (an expired optional
+			// context may have fallen back to --client-id).
+			lineageInfo = sanitizeLineageSnapshot(snapshot.redactor, auditLineageInfo(d.Lineage))
+			allowEvent.Lineage = lineageInfo
+		}
+		if err := p.recheckVerifiedActor(snapshot.policy, serverName, callReq.Name); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
+			return p.denyPostApprovalVerifiedActor(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, err.Error(), lineageInfo, advice, anomalous)
 		}
 		// Durable commit before any relay: the runtime barrier is already
 		// released (approval wait happened above), so a failure here only
@@ -539,6 +570,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&allowEvent, snapshot.identity)
+		p.attachVerifiedActor(&allowEvent, snapshot.redactor)
 		attachCapabilityArtifact(&allowEvent, capArtifact)
 		attachOwnershipReceipt(&allowEvent, ownReceipt)
 		attachTrajectoryAdvice(&allowEvent, advice, anomalous)
@@ -572,6 +604,7 @@ func (p *Proxy) processToolsCall(
 			Lineage:   lineageInfo,
 		}
 		p.attachServerIdentity(&defaultAllowEvent, snapshot.identity)
+		p.attachVerifiedActor(&defaultAllowEvent, snapshot.redactor)
 		attachCapabilityArtifact(&defaultAllowEvent, capArtifact)
 		attachOwnershipReceipt(&defaultAllowEvent, ownReceipt)
 		attachTrajectoryAdvice(&defaultAllowEvent, advice, anomalous)
@@ -673,6 +706,79 @@ func (p *Proxy) denyPostApprovalLineage(
 	return raw, "denied"
 }
 
+func (p *Proxy) recheckVerifiedActor(pol *policy.Policy, serverName, toolName string) error {
+	if p.cfg.VerifiedActor == nil || !verifiedActorRequired(pol, serverName, toolName) {
+		return nil
+	}
+	return p.cfg.VerifiedActor.Check(p.now())
+}
+
+func verifiedActorRequired(pol *policy.Policy, serverName, toolName string) bool {
+	if pol == nil {
+		return false
+	}
+	if pol.Settings.RequireVerifiedActor {
+		return true
+	}
+	srv := findServerByName(pol, serverName)
+	if srv == nil {
+		return false
+	}
+	for i := range srv.Tools {
+		if srv.Tools[i].Name == toolName && len(srv.Tools[i].RequiredScopes) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Proxy) denyPostApprovalVerifiedActor(
+	req mcp.Request,
+	raw json.RawMessage,
+	respond toolsCallResponder,
+	release func(),
+	serverName string,
+	callReq mcp.ToolsCallRequest,
+	redactedArgs map[string]any,
+	redactionResult redaction.Result,
+	risk policy.RiskLevel,
+	snapshot runtimeSnapshot,
+	chainTriggered bool,
+	started time.Time,
+	reason string,
+	lineage *audit.LineageInfo,
+	advice trajectory.Advice,
+	anomalous bool,
+) (json.RawMessage, string) {
+	p.metrics.IncrementDenied()
+	respond(req.ID, reason)
+	deniedEvent := audit.Event{
+		EventType: audit.EventToolDenied,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    serverName,
+		Tool:      callReq.Name,
+		Arguments: redactedArgs,
+		Decision:  string(policy.ActionDeny),
+		Reason:    withRedactionNote(reason, redactionResult),
+		RiskLevel: string(risk),
+		Lineage:   lineage,
+	}
+	p.attachServerIdentity(&deniedEvent, snapshot.identity)
+	p.attachVerifiedActor(&deniedEvent, snapshot.redactor)
+	attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
+	_ = p.audit.Log(deniedEvent)
+	release()
+	p.forwardAudit(deniedEvent)
+	p.logger.Warn("verified actor denied after approval",
+		"tool", callReq.Name,
+		"reason", reason,
+		"session", p.session.ID,
+	)
+	p.observeToolCall("denied", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+	return raw, "denied"
+}
+
 func withRedactionNote(reason string, result redaction.Result) string {
 	if !result.Redacted || len(result.RedactedFields) == 0 {
 		return reason
@@ -705,6 +811,36 @@ func auditLineageInfo(ev *lineage.Evidence) *audit.LineageInfo {
 		PriorStateHash:   ev.PriorStateHash,
 		Rule:             ev.Rule,
 	}
+}
+
+func sanitizeLineageSnapshot(redactor *redaction.Engine, info *audit.LineageInfo) *audit.LineageInfo {
+	if info == nil {
+		return nil
+	}
+	out := *info
+	redact := func(s string) string {
+		if redactor == nil {
+			return s
+		}
+		return redactor.RedactOutput(s)
+	}
+	out.ActorAgentID = redact(info.ActorAgentID)
+	out.ParentAgentID = redact(info.ParentAgentID)
+	out.HumanPrincipalID = redact(info.HumanPrincipalID)
+	out.GrantID = redact(info.GrantID)
+	out.Capability = redact(info.Capability)
+	out.Resource = redact(info.Resource)
+	out.Effect = redact(info.Effect)
+	out.TrajectoryID = redact(info.TrajectoryID)
+	out.PriorStateHash = redact(info.PriorStateHash)
+	out.Rule = redact(info.Rule)
+	if info.GrantChain != nil {
+		out.GrantChain = make([]string, len(info.GrantChain))
+		for i, s := range info.GrantChain {
+			out.GrantChain[i] = redact(s)
+		}
+	}
+	return &out
 }
 
 // identityEvidence derives the immutable attestation evidence for the

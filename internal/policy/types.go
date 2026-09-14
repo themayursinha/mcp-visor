@@ -67,6 +67,11 @@ type Settings struct {
 	// InstructionAuthorityEd25519PublicKeys maps assertion key IDs to
 	// unpadded base64url Ed25519 public keys. Private keys never enter Visor.
 	InstructionAuthorityEd25519PublicKeys map[string]string `yaml:"instruction_authority_ed25519_public_keys,omitempty"`
+	// RequireVerifiedActor fails closed when process-start VerifiedActorContext
+	// is missing, expired, or structurally invalid. Default false keeps
+	// standalone --client-id deployments unchanged. omitempty so identity-less
+	// policy JSON bytes stay exact.
+	RequireVerifiedActor bool `yaml:"require_verified_actor" json:"RequireVerifiedActor,omitempty"`
 }
 
 type Server struct {
@@ -110,6 +115,11 @@ type ToolRule struct {
 	// by settings.max_spawn_depth. Default false: unknown tools never count.
 	Delegates bool      `yaml:"delegates"`
 	Rules     []ArgRule `yaml:"rules"`
+	// RequiredScopes are exact VerifiedActorContext scope strings that must
+	// all be present. Non-empty implies the verified-actor gate even when
+	// settings.require_verified_actor is false. omitempty preserves legacy
+	// identity-less JSON.
+	RequiredScopes []string `yaml:"required_scopes,omitempty" json:"RequiredScopes,omitempty"`
 }
 
 type ArgRule struct {

@@ -57,6 +57,7 @@ time_restrictions: # Time-of-day access controls (optional)
 | `log_level` | string | `"info"` | Log level: `debug`, `info`, `warn`, `error`. |
 | `instruction_authority_continuity` | bool | false | Optional authenticated, request-bound H32 assertion gate. Default false leaves a nil gate. |
 | `instruction_authority_ed25519_public_keys` | map | omitted | Assertion key IDs to unpadded base64url Ed25519 public keys. Required when the continuity setting is true. Private keys never enter Visor. |
+| `require_verified_actor` | bool | false | Fail closed when process-start `VerifiedActorContext` is missing, expired, or structurally invalid. Default false keeps standalone `--client-id` deployments unchanged. MCP `tools/call` arguments are never a source for this context. |
 
 ```yaml
 settings:
@@ -91,6 +92,7 @@ Each tool in a server's `tools` list:
 | `risk` | string | No | Risk classification: `"critical"`, `"high"`, `"medium"`, `"low"`. If omitted, inferred from tool name. |
 | `approval_required` | bool | No | Require human approval before every execution. |
 | `delegates` | bool | No | Marks a delegation (spawn) tool. Authorized relays consume the session delegation budget enforced by `max_spawn_depth`. Default false: unmarked tools never count. |
+| `required_scopes` | array | No | Exact `VerifiedActorContext` scope strings that must all be present. Non-empty implies the verified-actor gate even when `settings.require_verified_actor` is false. |
 | `rules` | array | No | Argument validation rules. |
 
 ## Argument Rule Types
@@ -817,7 +819,7 @@ The proxy applies checks in this order:
 3. Optional authenticated H32 assertion — when `settings.instruction_authority_continuity` is true, verify a policy-pinned Ed25519 assertion that binds the exact canonical pre-redaction request, object/root, session, client, logical server, tool, expiry, and one-use nonce, call `instructionauthority.Authorize`, then strip only the Visor metadata key. An unsigned self-asserted `TRUSTED_USER` envelope is denied. Missing envelope: `instruction authority envelope missing`. Malformed envelope: `instruction authority envelope malformed`. An `Authorize` denial is terminal and cannot be approved. An adapter allow is only a conjunct.
 4. Argument redaction — secrets are removed from the payload prepared for relay
 5. Built-in sensitive-path block
-6. Policy evaluation — server/tool allow rules and argument validation. This currently evaluates the originally parsed arguments, not the rewritten relay payload. `Evaluate` folds argument rules, identity, time restrictions, and `approval_required` the same way: deny stops; require_approval is remembered; allow continues; any other action is a fail-closed deny. Approval is returned only if no stage denied.
+6. Policy evaluation — server/tool allow rules, optional verified-actor gate (`settings.require_verified_actor` or tool `required_scopes`), argument validation, then identity/time/`approval_required`. This currently evaluates the originally parsed arguments, not the rewritten relay payload. Spoofable identity keys (`_verified_actor` and aliases) are stripped before evaluation and relay. `Evaluate` folds verified-actor, argument rules, identity, time restrictions, and `approval_required` the same way: deny stops; require_approval is remembered; allow continues; any other action is a fail-closed deny. Approval is returned only if no stage denied.
 7. Existing session taints checked against egress controls
 8. Chain detection against recent calls authorized for relay
 9. Approval check

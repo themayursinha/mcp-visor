@@ -2,7 +2,7 @@
 
 H44 is the opt-in agent-identity lineage gate. A tool is lineage-gated only when its policy rules contain `type: lineage_require`. A gated `tools/call` denies before downstream relay unless R1 registered principal, R2 exact delegation ceiling, and R3 mandatory trajectory binding all pass.
 
-H44 proves authorization against an operator-bound session identity (`--client-id`). It does not authenticate the underlying agent process.
+H44 proves authorization against an operator-bound session identity (`--client-id`). When a process-start `VerifiedActorContext` is present, the lineage actor is that context's `acting_agent` instead. H44 does not authenticate the underlying agent process and is not a third capability-token format.
 
 The actor is the proxy/session client ID, never a claim inside `_lineage`. Capability and resource comparisons are byte-for-byte exact membership. `github.repo.read` cannot authorize the trusted `write_file`/`write` trajectory.
 
