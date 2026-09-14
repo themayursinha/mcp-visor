@@ -20,11 +20,11 @@ Model guardrails try to shape what the model says or thinks inside the context w
 
 ## The Visor Trust Plane research program
 
-MCP Visor is the production enforcement layer of a broader research program on **governing autonomous agents at the boundary**.
+MCP Visor is the hardened open-source MCP `tools/call` enforcement component of a broader research program on governing autonomous agents at the action boundary.
 
 | Repo | Question it answers | Status |
 |---|---|---|
-| [**mcp-visor**](https://github.com/themayursinha/mcp-visor) | What may an agent *do*? (runtime policy at the MCP `tools/call` boundary) | **Production** |
+| [**mcp-visor**](https://github.com/themayursinha/mcp-visor) | What may an agent *do*? (runtime policy at the MCP `tools/call` boundary) | **Hardened OSS** |
 | [**agent-identity-plane**](https://github.com/themayursinha/agent-identity-plane) | *Who* is acting, for whom, through which chain? (identity + provenance) | v1.0.0 |
 | [**authority-graph-simulator**](https://github.com/themayursinha/authority-graph-simulator) | What authority can an agent *reach*? (counterfactual delegation analysis) | Prototype |
 | [**capability-delta-receipts**](https://github.com/themayursinha/capability-delta-receipts) | What capability can an agent *acquire*? (trajectory-level capability accounting) | Prototype |
@@ -242,7 +242,7 @@ Full reference: `mcp-visor serve -h`
 
 ## Documentation
 
-[Architecture](docs/architecture.md) · [Policy model](docs/policy-model.md) · [Threat model](docs/threat-model.md) · [Complexity budget](docs/complexity-budget.md) · [Interoperability](docs/interoperability.md) · [Qwen-MM-Plugins demo](examples/qwen-mm-plugins-demo/README.md) · [Harness](harness/README.md)
+[Architecture](docs/architecture.md) · [Policy model](docs/policy-model.md) · [Threat model](docs/threat-model.md) · [Complexity budget](docs/complexity-budget.md) · [Interoperability](docs/interoperability.md) · [Compatibility](docs/compatibility.md) · [Qwen-MM-Plugins demo](examples/qwen-mm-plugins-demo/README.md) · [Harness](harness/README.md)
 
 ## Development
 
