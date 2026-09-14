@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/themayursinha/mcp-visor/internal/actorcontext"
+	"github.com/themayursinha/mcp-visor/internal/lineage/testfixture"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 )
@@ -29,13 +30,17 @@ servers:
 }
 
 func sealedActor(t *testing.T, scopes []string, exp time.Time) *actorcontext.Context {
+	return sealedActorAs(t, "coding-agent", scopes, exp)
+}
+
+func sealedActorAs(t *testing.T, acting string, scopes []string, exp time.Time) *actorcontext.Context {
 	t.Helper()
 	c := &actorcontext.Context{
 		Version:            actorcontext.VersionV1,
 		PrincipalID:        "user1",
-		ActingAgent:        "coding-agent",
+		ActingAgent:        acting,
 		Transaction:        "txn-phase1",
-		ActorChain:         []actorcontext.ActorRef{{ID: "user1"}, {ID: "planner"}, {ID: "coding-agent"}},
+		ActorChain:         []actorcontext.ActorRef{{ID: "user1"}, {ID: "planner"}, {ID: acting}},
 		Scopes:             scopes,
 		Issuer:             "https://sts.example.test",
 		Audience:           "https://visor-gateway.example.test",
@@ -125,5 +130,33 @@ servers:
 	d := eng.Evaluate("filesystem", req)
 	if d.Action != policy.ActionAllow {
 		t.Fatalf("negative control: %+v", d)
+	}
+}
+
+func TestValidOptionalContextSuppliesLineageIdentity(t *testing.T) {
+	p, err := policy.Load([]byte(testfixture.PolicyYAML()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := policy.NewEngine(p)
+	eng.SetClientID("orphan-1")
+	eng.SetVerifiedActor(sealedActorAs(t, testfixture.Coding, []string{"write"}, time.Now().UTC().Add(time.Hour)))
+	d := eng.Evaluate(testfixture.Server, mcp.ToolsCallRequest{Name: testfixture.Tool, Arguments: mustJSON(testfixture.Args())})
+	if d.Action != policy.ActionAllow {
+		t.Fatalf("unexpired optional context must supply lineage actor, got %+v", d)
+	}
+}
+
+func TestExpiredOptionalContextDoesNotSupplyLineageIdentity(t *testing.T) {
+	p, err := policy.Load([]byte(testfixture.PolicyYAML()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := policy.NewEngine(p)
+	eng.SetClientID("orphan-1")
+	eng.SetVerifiedActor(sealedActorAs(t, testfixture.Coding, []string{"write"}, time.Now().UTC().Add(-time.Minute)))
+	d := eng.Evaluate(testfixture.Server, mcp.ToolsCallRequest{Name: testfixture.Tool, Arguments: mustJSON(testfixture.Args())})
+	if d.Action != policy.ActionDeny || d.Reason != "lineage:unregistered-principal" {
+		t.Fatalf("expired optional context must not authorize lineage, got %+v", d)
 	}
 }

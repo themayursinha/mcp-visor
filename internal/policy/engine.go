@@ -64,9 +64,15 @@ func (e *Engine) SetVerifiedActor(c *actorcontext.Context) {
 	e.verified = c
 }
 
-func (e *Engine) sessionIdentity() string {
+// sessionIdentityAt is the H44 actor. A process-start context supplies
+// ActingAgent only while it still passes Check; an expired or invalid
+// optional context must not authorize lineage. Legacy --client-id remains
+// when the context is absent or cannot be used.
+func (e *Engine) sessionIdentityAt(now time.Time) string {
 	if e.verified != nil && strings.TrimSpace(e.verified.ActingAgent) != "" {
-		return e.verified.ActingAgent
+		if err := e.verified.Check(now); err == nil {
+			return e.verified.ActingAgent
+		}
 	}
 	return e.clientID
 }
@@ -281,8 +287,9 @@ func (e *Engine) evaluateLineage(serverName, toolName string, args map[string]an
 // not observe a later reload pass the authorizing snapshot policy; this
 // method never reads the engine's live policy.
 func (e *Engine) EvaluateLineageAt(serverName, toolName string, args map[string]any, pol *Policy, now time.Time) Decision {
+	actor := e.sessionIdentityAt(now)
 	if pol == nil {
-		ev := &lineage.Evidence{ActorAgentID: e.sessionIdentity(), Rule: lineage.ReasonDelegationCeiling}
+		ev := &lineage.Evidence{ActorAgentID: actor, Rule: lineage.ReasonDelegationCeiling}
 		return Decision{Action: ActionDeny, Reason: lineage.ReasonDelegationCeiling, Lineage: ev}
 	}
 	if pol.Identity == nil || pol.Identity.Version != 1 {
@@ -290,10 +297,10 @@ func (e *Engine) EvaluateLineageAt(serverName, toolName string, args map[string]
 	}
 	reg, err := lineage.NewRegistry(pol.Identity.Agents, pol.Identity.Grants, pol.Trajectories)
 	if err != nil {
-		ev := &lineage.Evidence{ActorAgentID: e.sessionIdentity(), Rule: lineage.ReasonDelegationCeiling}
+		ev := &lineage.Evidence{ActorAgentID: actor, Rule: lineage.ReasonDelegationCeiling}
 		return Decision{Action: ActionDeny, Reason: lineage.ReasonDelegationCeiling, Lineage: ev}
 	}
-	env := lineage.EnvelopeFromArgs(e.sessionIdentity(), serverName, toolName, args)
+	env := lineage.EnvelopeFromArgs(actor, serverName, toolName, args)
 	d, ev := lineage.ValidateAt(env, reg, now)
 	out := ev
 	if d.Allow {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/themayursinha/mcp-visor/internal/actorcontext"
 	"github.com/themayursinha/mcp-visor/internal/audit"
+	"github.com/themayursinha/mcp-visor/internal/lineage/testfixture"
 	"github.com/themayursinha/mcp-visor/internal/mcp"
 	"github.com/themayursinha/mcp-visor/internal/policy"
 )
@@ -40,18 +41,22 @@ servers:
 }
 
 func phase1Actor(t *testing.T, scopes []string) *actorcontext.Context {
+	return phase1ActorAs(t, "coding-agent", scopes, time.Now().UTC().Add(time.Hour))
+}
+
+func phase1ActorAs(t *testing.T, acting string, scopes []string, exp time.Time) *actorcontext.Context {
 	t.Helper()
 	c := &actorcontext.Context{
 		Version:            actorcontext.VersionV1,
 		PrincipalID:        "user1",
-		ActingAgent:        "coding-agent",
+		ActingAgent:        acting,
 		Transaction:        "txn-phase1",
-		ActorChain:         []actorcontext.ActorRef{{ID: "user1"}, {ID: "planner"}, {ID: "coding-agent"}},
+		ActorChain:         []actorcontext.ActorRef{{ID: "user1"}, {ID: "planner"}, {ID: acting}},
 		Scopes:             scopes,
 		Issuer:             "https://sts.example.test",
 		Audience:           "https://visor-gateway.example.test",
 		TokenID:            "jti-phase1",
-		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+		ExpiresAt:          exp,
 		ProofKeyThumbprint: "thumb",
 		VerificationMethod: actorcontext.VerificationSTSDpop,
 	}
@@ -339,6 +344,75 @@ servers:
 	case action := <-done:
 		if action != "forward" {
 			t.Fatalf("optional expired context must not deny after approval, got %s", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call did not finish")
+	}
+}
+
+func TestVerifiedActorExpiredContextDoesNotAuthorizeLineage(t *testing.T) {
+	p := New(Config{
+		ServerName:    testfixture.Server,
+		SessionID:     "sess-actor-lin-exp",
+		ClientID:      "orphan-1",
+		VerifiedActor: phase1ActorAs(t, testfixture.Coding, []string{"write"}, time.Now().UTC().Add(-time.Minute)),
+		AuditLogPath:  filepath.Join(t.TempDir(), "audit.jsonl"),
+		Policy:        mustLoadPolicy(t, testfixture.PolicyYAML()),
+	})
+	t.Cleanup(func() { _ = p.audit.Close() })
+	out := &bytes.Buffer{}
+	_, action := p.interceptAndModify(toolCallRaw(1, testfixture.Tool, testfixture.Args()), mcp.NewParser(nil, out))
+	if action != "denied" {
+		t.Fatalf("expired optional context must not authorize lineage, got %s; response=%s", action, out.String())
+	}
+}
+
+func TestVerifiedActorValidContextAuthorizesLineageForOrphanClient(t *testing.T) {
+	p := New(Config{
+		ServerName:    testfixture.Server,
+		SessionID:     "sess-actor-lin-ok",
+		ClientID:      "orphan-1",
+		VerifiedActor: phase1ActorAs(t, testfixture.Coding, []string{"write"}, time.Now().UTC().Add(time.Hour)),
+		AuditLogPath:  filepath.Join(t.TempDir(), "audit.jsonl"),
+		Policy:        mustLoadPolicy(t, testfixture.PolicyYAML()),
+	})
+	t.Cleanup(func() { _ = p.audit.Close() })
+	out := &bytes.Buffer{}
+	_, action := p.interceptAndModify(toolCallRaw(1, testfixture.Tool, testfixture.Args()), mcp.NewParser(nil, out))
+	if action != "forward" {
+		t.Fatalf("unexpired optional context must supply lineage actor, got %s; response=%s", action, out.String())
+	}
+}
+
+func TestVerifiedActorPostApprovalExpiryDeniesLineageIdentity(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	approvalDir := filepath.Join(dir, "approvals")
+	exp := time.Now().UTC().Add(time.Hour)
+	p := New(Config{
+		ServerName:    testfixture.Server,
+		SessionID:     "sess-actor-lin-post",
+		ClientID:      "orphan-1",
+		VerifiedActor: phase1ActorAs(t, testfixture.Coding, []string{"write"}, exp),
+		AuditLogPath:  auditPath,
+		ApprovalDir:   approvalDir,
+		Policy:        mustLoadPolicy(t, lineageApprovalYAML()),
+	})
+	t.Cleanup(func() { _ = p.audit.Close() })
+	done := make(chan string, 1)
+	go func() {
+		_, action := p.interceptAndModify(toolCallRaw(1, testfixture.Tool, testfixture.Args()), mcp.NewParser(nil, &bytes.Buffer{}))
+		done <- action
+	}()
+	id := waitLineageApproval(t, approvalDir)
+	p.setNowFunc(func() time.Time { return exp })
+	if err := os.WriteFile(filepath.Join(approvalDir, id+".ok"), []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case action := <-done:
+		if action != "denied" {
+			t.Fatalf("expired optional context must not keep lineage identity after approval, got %s", action)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("call did not finish")
