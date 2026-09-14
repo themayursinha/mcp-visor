@@ -19,7 +19,9 @@ import (
 const (
 	VersionV1           = "1"
 	VerificationSTSDpop = "sts+dpop"
-	maxBytes            = 1 << 20
+	// maxBytes matches AIP visor-session's pipe-safe cap so a process-start
+	// write cannot exceed typical Unix pipe capacity.
+	maxBytes = 32 << 10
 )
 
 // ActorRef is one hop in the verified actor chain (principal first, acting agent last).
@@ -165,7 +167,7 @@ func Decode(r io.Reader) (*Context, error) {
 		return nil, err
 	}
 	if len(raw) > maxBytes {
-		return nil, fmt.Errorf("actorcontext: context exceeds 1MiB")
+		return nil, fmt.Errorf("actorcontext: context exceeds %d bytes", maxBytes)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()

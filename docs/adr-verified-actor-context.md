@@ -6,7 +6,7 @@ Card: `t_aebbba96` (AIP+Visor Phase 1)
 
 ## Decision
 
-The trusted AIP → Visor seam is a **process-start file descriptor** (`mcp-visor serve -verified-actor-fd 3`). `visor-session` writes one JSON `VerifiedActorContext` object to a pipe, `dup2`s the read end onto fd 3 with `FD_CLOEXEC` cleared, then `exec`s visor. Visor reads and closes that fd during `serve` startup. The MCP JSON-RPC stream on stdin is unchanged.
+The trusted AIP → Visor seam is a **process-start file descriptor** (`mcp-visor serve -verified-actor-fd 3`). `visor-session` writes one JSON `VerifiedActorContext` object (capped at 32KiB, below typical pipe capacity) to a pipe, `dup2`s the read end onto fd 3 with `FD_CLOEXEC` cleared, then `exec`s visor. Visor reads and closes that fd during `serve` startup. The MCP JSON-RPC stream on stdin is unchanged.
 
 ## Rejected transports
 

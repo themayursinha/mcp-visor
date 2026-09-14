@@ -73,6 +73,12 @@ func TestDecodeRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsOversized(t *testing.T) {
+	if _, err := Decode(bytes.NewReader(bytes.Repeat([]byte("a"), maxBytes+1))); err == nil {
+		t.Fatal("expected oversized rejection")
+	}
+}
+
 func TestDecodeFDPipe(t *testing.T) {
 	c := fixtureContext()
 	raw, err := Encode(c)
