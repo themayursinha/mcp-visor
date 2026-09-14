@@ -5,14 +5,15 @@ not a support matrix and it does not claim an integrated Agent Identity Plane
 × MCP Visor deployment.
 
 No released AIP and mcp-visor pair has yet been exercised together end to end.
-The first row proves the AIP launcher contract; the second proves Visor's MCP
-interoperability independently. Cross-compilation artifacts for other operating
-systems are not compatibility tests.
+The first row proves the AIP launcher contract in default CI. The second proves
+Visor's MCP interoperability independently via the `interop` build tag; that
+tag is **not** part of the default `go test ./...` CI job. Cross-compilation
+artifacts for other operating systems are not compatibility tests.
 
 | AIP version | mcp-visor version | MCP protocol tested | Deployment mode tested | OS tested | Evidence |
 |---|---|---|---|---|---|
-| `v1.0.0` | Unversioned launcher stub; no Visor binary exercised | — | Loopback identity-only gateway → `visor-session` argument construction and stub process launch | Ubuntu 24.04 CI | AIP `TestFetchIdentityOnlyMapping`, `TestCommandThenStubVisor`, `TestCommandRejectsIdentityFlags` |
-| — | `v1.4.1` | `2024-11-05` | Real filesystem/fetch servers over stdio; local loopback HTTP+SSE mock | Ubuntu 24.04 CI | Visor `TestInteropFilesystemStdio`, `TestInteropFilesystemTaintEgress`, `TestInteropFetchStdio`, `TestInteropRemotePostHandshake` |
+| `v1.0.0` | Unversioned launcher stub; no Visor binary exercised | — | Loopback identity-only gateway → `visor-session` argument construction and stub process launch | Ubuntu 24.04 CI (`go test ./...`) | AIP `TestFetchIdentityOnlyMapping`, `TestCommandThenStubVisor`, `TestCommandRejectsIdentityFlags` |
+| — | `v1.4.1` | `2024-11-05` | Real filesystem/fetch servers over stdio; local loopback HTTP+SSE mock | Ubuntu 24.04, `go test -tags interop` (not default CI) | Visor `TestInteropFilesystemStdio`, `TestInteropFilesystemTaintEgress`, `TestInteropFetchStdio`, `TestInteropRemotePostHandshake` |
 
 Not listed, because they are not automated compatibility evidence:
 
