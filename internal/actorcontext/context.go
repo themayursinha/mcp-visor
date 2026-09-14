@@ -175,6 +175,14 @@ func Decode(r io.Reader) (*Context, error) {
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("actorcontext: %w", err)
 	}
+	var extra json.RawMessage
+	switch err := dec.Decode(&extra); err {
+	case io.EOF:
+	case nil:
+		return nil, fmt.Errorf("actorcontext: trailing data after context")
+	default:
+		return nil, fmt.Errorf("actorcontext: trailing data after context: %w", err)
+	}
 	if err := c.ValidateStructure(); err != nil {
 		return nil, err
 	}

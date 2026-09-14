@@ -526,6 +526,12 @@ func (p *Proxy) processToolsCall(
 				return p.denyPostApprovalLineage(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, d.Reason, lineageInfo, advice, anomalous)
 			}
 		}
+		if err := p.recheckVerifiedActor(); err != nil {
+			if delegationReserved {
+				p.session.ReleaseDelegation()
+			}
+			return p.denyPostApprovalVerifiedActor(req, raw, respond, release, serverName, callReq, redactedArgs, redactionResult, risk, snapshot, chainTriggered, started, err.Error(), lineageInfo, advice, anomalous)
+		}
 		// Durable commit before any relay: the runtime barrier is already
 		// released (approval wait happened above), so a failure here only
 		// denies; it does not touch chain/taint/metric state.
@@ -686,6 +692,60 @@ func (p *Proxy) denyPostApprovalLineage(
 	release()
 	p.forwardAudit(deniedEvent)
 	p.logger.Warn("lineage denied after approval",
+		"tool", callReq.Name,
+		"reason", reason,
+		"session", p.session.ID,
+	)
+	p.observeToolCall("denied", reason, serverName, callReq.Name, string(risk), chainTriggered, started)
+	return raw, "denied"
+}
+
+func (p *Proxy) recheckVerifiedActor() error {
+	if p.cfg.VerifiedActor == nil {
+		return nil
+	}
+	return p.cfg.VerifiedActor.Check(p.now())
+}
+
+func (p *Proxy) denyPostApprovalVerifiedActor(
+	req mcp.Request,
+	raw json.RawMessage,
+	respond toolsCallResponder,
+	release func(),
+	serverName string,
+	callReq mcp.ToolsCallRequest,
+	redactedArgs map[string]any,
+	redactionResult redaction.Result,
+	risk policy.RiskLevel,
+	snapshot runtimeSnapshot,
+	chainTriggered bool,
+	started time.Time,
+	reason string,
+	lineage *audit.LineageInfo,
+	advice trajectory.Advice,
+	anomalous bool,
+) (json.RawMessage, string) {
+	p.metrics.IncrementDenied()
+	respond(req.ID, reason)
+	deniedEvent := audit.Event{
+		EventType: audit.EventToolDenied,
+		SessionID: p.session.ID,
+		AgentID:   p.cfg.ClientID,
+		Server:    serverName,
+		Tool:      callReq.Name,
+		Arguments: redactedArgs,
+		Decision:  string(policy.ActionDeny),
+		Reason:    withRedactionNote(reason, redactionResult),
+		RiskLevel: string(risk),
+		Lineage:   lineage,
+	}
+	p.attachServerIdentity(&deniedEvent, snapshot.identity)
+	p.attachVerifiedActor(&deniedEvent)
+	attachTrajectoryAdvice(&deniedEvent, advice, anomalous)
+	_ = p.audit.Log(deniedEvent)
+	release()
+	p.forwardAudit(deniedEvent)
+	p.logger.Warn("verified actor denied after approval",
 		"tool", callReq.Name,
 		"reason", reason,
 		"session", p.session.ID,

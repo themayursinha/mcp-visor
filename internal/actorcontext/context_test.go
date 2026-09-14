@@ -79,6 +79,20 @@ func TestDecodeRejectsOversized(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsTrailingData(t *testing.T) {
+	c := fixtureContext()
+	raw, err := Encode(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(bytes.NewReader(append(append([]byte{}, raw...), []byte(`{"x":1}`)...))); err == nil {
+		t.Fatal("expected trailing JSON rejection")
+	}
+	if _, err := Decode(bytes.NewReader(append(append([]byte{}, raw...), '\n'))); err != nil {
+		t.Fatalf("trailing newline must be allowed: %v", err)
+	}
+}
+
 func TestDecodeFDPipe(t *testing.T) {
 	c := fixtureContext()
 	raw, err := Encode(c)
