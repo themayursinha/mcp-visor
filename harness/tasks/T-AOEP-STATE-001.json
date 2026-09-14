@@ -1,0 +1,52 @@
+{
+  "task_id": "T-AOEP-STATE-001",
+  "invariant_ids": ["H48"],
+  "security_sensitive": true,
+  "security_problem": "Persistent-state governance fails when a completed side-effect idempotency key is retried as a second executor invocation, when a sensitive-read taint does not block later egress, when a stale permission epoch authorizes a privileged action, or when an untrusted tool-output fragment satisfies a USER authority sink. Trusted: the caller-held EvaluationRoot (schema, enforcement flag, taint set, current permission epoch, completed idempotency records, fragment-authority registry). Untrusted: ProposedAction claim fields, including claimed authorization, claimed authority, claimed current epoch, claimed replay, and claimed result digest.",
+  "required_behavior": "Authorize is a pure stdlib-only action-boundary oracle. Enabled SIDE_EFFECT with a matching caller-held completed key returns ALLOW/VALID/REPLAY and copies only the caller-held ResultDigest; a different operation or request digest denies as a collision; an empty key on first attempt denies. SENSITIVE_READ observes a taint that the caller appends; a later EGRESS_SEND with that taint denies. PRIVILEGED_ACTION allows only when the action epoch equals the current epoch. AUTHORITY_SINK allows only when every referenced fragment is registered and the minimum authority is USER. Claims cannot change verdict, proof, disposition, or trusted result digest. Evidence is a fixed [8]string on every path. Disabled enforcement is a negative control that reaches four unsafe EXECUTE dispositions.",
+  "failure_behavior": "Enabled exact retry after one EXECUTE returns REPLAY with executor count remaining 1. Collision and empty-key first attempts deny. Tainted egress, stale epoch, and data-only sink deny. Duplicate completed keys invalidate the root. Disabled enforcement returns Proof DISABLED and ALLOW+EXECUTE for the four canonical bad actions, never REPLAY for a completed-key retry.",
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-AOEP-STATE-001.json",
+    "internal/aoepstate/model.go",
+    "internal/aoepstate/evaluator.go",
+    "internal/aoepstate/evaluator_test.go",
+    "internal/aoepstate/fixtures_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {"name": "target_test", "expect": "pass", "argv": ["go", "test", "./internal/aoepstate", "-count", "1"]},
+    {"name": "vet", "expect": "pass", "argv": ["go", "vet", "./internal/aoepstate"]},
+    {"name": "full_test", "expect": "pass", "argv": ["go", "test", "./...", "-count", "1", "-timeout", "120s"]}
+  ],
+  "spec_revision": 1,
+  "non_goals": [
+    "Crash-safe or cross-process persistence",
+    "Atomic coordination between authorization, executor invocation, and completion recording",
+    "Exactly-once delivery in a distributed system",
+    "Durable storage, locking, leases, transaction recovery, or concurrent-worker exclusion",
+    "Upstream tool honor of an idempotency key",
+    "Payload-level taint propagation or data-flow tracking",
+    "Cryptographic authentication of permission epochs, fragments, or completion records",
+    "Real MCP transport enforcement",
+    "Production AOEP compliance",
+    "Answer quality, prompt-injection detection, or model robustness",
+    "Proxy, policy, audit, receipt, or CLI integration",
+    "tests/integration",
+    "Sibling proof-package imports",
+    "New dependencies",
+    "README, release, architecture, or threat-model claims",
+    "H47"
+  ],
+  "attack_classes": [
+    {"id": "completed-key-reexecution", "failure_class": "completed-key-reexecution", "expected": "exact retry replays the caller-held result without a second EXECUTE"},
+    {"id": "idempotency-key-collision", "failure_class": "idempotency-key-collision", "expected": "same key with a different operation or request digest denies"},
+    {"id": "missing-idempotency-key", "failure_class": "missing-idempotency-key", "expected": "first side effect without a non-empty key denies"},
+    {"id": "sensitive-taint-egress", "failure_class": "sensitive-taint-egress", "expected": "tainted egress is blocked after a sensitive read"},
+    {"id": "stale-permission-epoch", "failure_class": "stale-permission-epoch", "expected": "privileged action at a stale epoch denies"},
+    {"id": "untrusted-fragment-authority", "failure_class": "untrusted-fragment-authority", "expected": "DATA_ONLY tool output cannot authorize a USER sink"},
+    {"id": "claimed-result-digest-replay", "failure_class": "claimed-result-digest-replay", "expected": "claimed result digest cannot become the replay result or turn a collision into replay"},
+    {"id": "disabled-negative-control", "failure_class": "disabled-negative-control", "expected": "disabled enforcement reaches four unsafe EXECUTE dispositions"}
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "task_id": "T-AUDIT-BOUNDARY-001",
+  "invariant_ids": ["H49"],
+  "security_sensitive": false,
+  "security_problem": "Named H24/H25 fixtures: inspected URL/HOST and PATH/TARGET slot values outside the declared allowlist deny at interceptAndModify. This is not a new enforcement hole and has no failing baseline.",
+  "required_behavior": "Four apparatus-named tools/call fixtures return denied from interceptAndModify under attached existing slot rules; named workload substitutes return forward; omitting the rules causes the same apparatus fixtures to return forward.",
+  "failure_behavior": "Malformed or out-of-allowlist typed slots deny at the intercept gate. Exact-host and lexical-path filtering only; no redirect, DNS, inode, backend, or host-isolation claim.",
+  "spec_revision": 0,
+  "non_goals": [
+    "General capability or route graphs",
+    "Shared-channel mediation",
+    "Sandbox hardening or attestation",
+    "CVE exploitation or patching",
+    "Daytona or DeepSeek clients",
+    "LLM scoring or judging",
+    "Host filesystem or network isolation",
+    "Third-party sandbox attestation",
+    "Out-of-domain evaluators",
+    "New production rule types",
+    "New dependencies",
+    "A visor-workflow RED fail for already-enforced H24/H25 slots"
+  ],
+  "attack_classes": [],
+  "allowed_paths": [
+    "harness/invariants.md",
+    "harness/tasks/T-AUDIT-BOUNDARY-001.json",
+    "examples/policies/audit-boundary.yaml",
+    "internal/proxy/audit_boundary_test.go"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["go", "test", "./internal/proxy", "-run", "Test(Red)?AuditBoundary", "-count", "1"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}

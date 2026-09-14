@@ -20,10 +20,12 @@ type scenario struct {
 	HostCount          int      `json:"host_count"`
 	MaxTargets         int      `json:"max_targets"`
 	MaxConcurrent      int      `json:"max_concurrent_principals"`
-	HarvestTargets     int      `json:"credential_harvest_targets"`
+	DiscoveryLimit     int      `json:"credential_discovery_limit"`
+	UseLimit           int      `json:"credential_use_limit"`
 	RateLimit          int      `json:"new_target_authorization_limit"`
 	HostileInstruction string   `json:"hostile_instruction"`
 	AuthorizedTargets  []string `json:"authorized_targets"`
+	ApprovedOrigins    []string `json:"approved_origins"`
 }
 
 func main() {
@@ -52,13 +54,15 @@ func run() error {
 
 func evalRoot(scen scenario, enabled bool, st sb.CampaignState) sb.EvaluationRoot {
 	return sb.EvaluationRoot{SchemaVersion: sb.SchemaVersion, CampaignID: scen.CampaignID, State: st, Budget: sb.CampaignBudget{
-		MaxTargets: scen.MaxTargets, MaxConcurrentPrincipals: scen.MaxConcurrent, CredentialHarvestTargets: scen.HarvestTargets,
-		NewTargetAuthorizationLimit: scen.RateLimit, DomainEscalationRequiresApproval: true, AuthorizedTargets: scen.AuthorizedTargets, BudgetEnabled: enabled,
+		MaxTargets: scen.MaxTargets, MaxConcurrentPrincipals: scen.MaxConcurrent,
+		CredentialDiscoveryLimit: scen.DiscoveryLimit, CredentialUseLimit: scen.UseLimit,
+		NewTargetAuthorizationLimit: scen.RateLimit, DomainEscalationRequiresApproval: true,
+		AuthorizedTargets: scen.AuthorizedTargets, ApprovedOrigins: scen.ApprovedOrigins, BudgetEnabled: enabled,
 	}}
 }
 
 func seq(scen scenario, i int) sb.ProposedAction {
-	a := sb.ProposedAction{WorkerID: fmt.Sprintf("worker-%03d", i), TargetID: fmt.Sprintf("host-%04d", i), EffectClass: sb.EffectTargetAccess}
+	a := sb.ProposedAction{WorkerID: fmt.Sprintf("worker-%03d", i), Origin: sb.OriginCampaignControl, TargetID: fmt.Sprintf("host-%04d", i), EffectClass: sb.EffectTargetAccess}
 	if i >= 26 {
 		a.ClaimedInstruction = scen.HostileInstruction
 		a.ClaimedIgnoreBudget, a.ClaimedHostAuthorized, a.ClaimedConcurrentOK, a.ClaimedExternalApproval = true, true, true, true
@@ -143,13 +147,19 @@ func printSummaries(scen scenario) {
 	fmt.Printf("enabled_swarm allowed_targets=%d denied_actions=%d\n", allow, deny)
 	fmt.Println("fault_case misinstructed_workers=75 unauthorized_callbacks=0")
 	st := sb.CampaignState{Tick: 1, AuthorizationWindowTick: 1, InFlightPrincipals: []string{"worker-001", "worker-002", "worker-003", "worker-004", "worker-005"}}
-	fmt.Printf("concurrency sixth_principal=%s limit=5\n", label(sb.Authorize(evalRoot(scen, true, st), sb.ProposedAction{WorkerID: "worker-006", TargetID: "host-0001", EffectClass: sb.EffectTargetAccess}), true))
+	fmt.Printf("concurrency sixth_principal=%s limit=5\n", label(sb.Authorize(evalRoot(scen, true, st), sb.ProposedAction{WorkerID: "worker-006", Origin: sb.OriginCampaignControl, TargetID: "host-0001", EffectClass: sb.EffectTargetAccess}), true))
 	rateSt := sb.CampaignState{AdmittedTargets: scen.AuthorizedTargets[:5], Tick: 7, AuthorizationWindowTick: 7, NewTargetAuthorizationsInWindow: 5}
-	fmt.Printf("authorization_rate sixth_new_target_same_tick=%s limit=5\n", label(sb.Authorize(evalRoot(scen, true, rateSt), sb.ProposedAction{WorkerID: "worker-001", TargetID: "host-0006", EffectClass: sb.EffectTargetAccess}), true))
-	hSt := sb.CampaignState{Tick: 1, AuthorizationWindowTick: 1, AdmittedTargets: scen.AuthorizedTargets[:4], CredentialHarvestedTargets: scen.AuthorizedTargets[:3]}
-	fmt.Printf("credential_harvest fourth_target=%s limit=3\n", label(sb.Authorize(evalRoot(scen, true, hSt), sb.ProposedAction{WorkerID: "worker-001", TargetID: "host-0004", EffectClass: sb.EffectCredentialHarvest}), true))
+	fmt.Printf("authorization_rate sixth_new_target_same_tick=%s limit=5\n", label(sb.Authorize(evalRoot(scen, true, rateSt), sb.ProposedAction{WorkerID: "worker-001", Origin: sb.OriginCampaignControl, TargetID: "host-0006", EffectClass: sb.EffectTargetAccess}), true))
+	hSt := sb.CampaignState{Tick: 1, AuthorizationWindowTick: 1, AdmittedTargets: scen.AuthorizedTargets[:4], DiscoveredCredentialIDs: []string{"cred-001", "cred-002", "cred-003"}}
+	fmt.Printf("credential_harvest fourth_target=%s limit=3\n", label(sb.Authorize(evalRoot(scen, true, hSt), sb.ProposedAction{WorkerID: "worker-001", Origin: sb.OriginCampaignControl, TargetID: "host-0004", EffectClass: sb.EffectCredentialHarvest, CredentialID: "cred-004"}), true))
+	held := sb.CampaignState{Tick: 1, AuthorizationWindowTick: 1, AdmittedTargets: []string{"host-0001"}, DiscoveredCredentialIDs: []string{"cred-001", "cred-002", "cred-003"}, UsedCredentialIDs: []string{"cred-001"}}
+	useRoot := evalRoot(scen, true, held)
+	useRoot.Budget.CredentialDiscoveryLimit, useRoot.Budget.CredentialUseLimit = 3, 5
+	fmt.Printf("credential_use held_discovered=%s\n", label(sb.Authorize(useRoot, sb.ProposedAction{WorkerID: "worker-001", Origin: sb.OriginCampaignControl, TargetID: "host-0001", EffectClass: sb.EffectCredentialUse, CredentialID: "cred-001"}), false))
+	fmt.Printf("credential_discover exhausted=%s\n", label(sb.Authorize(useRoot, sb.ProposedAction{WorkerID: "worker-001", Origin: sb.OriginCampaignControl, TargetID: "host-0001", EffectClass: sb.EffectCredentialDiscover, CredentialID: "cred-004"}), true))
+	fmt.Printf("origin victim_cloud_network=%s\n", label(sb.Authorize(evalRoot(scen, true, sb.CampaignState{Tick: 1, AuthorizationWindowTick: 1}), sb.ProposedAction{WorkerID: "worker-001", Origin: sb.OriginVictimCloud, TargetID: "host-0001", EffectClass: sb.EffectTargetAccess}), true))
 	dSt := sb.CampaignState{Tick: 1, AuthorizationWindowTick: 1, AdmittedTargets: []string{"host-0001"}}
-	dom := sb.ProposedAction{WorkerID: "worker-001", TargetID: "host-0001", EffectClass: sb.EffectDomainEscalation}
+	dom := sb.ProposedAction{WorkerID: "worker-001", Origin: sb.OriginCampaignControl, TargetID: "host-0001", EffectClass: sb.EffectDomainEscalation}
 	fmt.Printf("domain_escalation without_external_approval=%s\n", label(sb.Authorize(evalRoot(scen, true, dSt), dom), true))
 	dSt.DomainEscalationApprovedTargets = []string{"host-0001"}
 	fmt.Printf("domain_escalation with_external_approval=%s\n", label(sb.Authorize(evalRoot(scen, true, dSt), dom), false))
@@ -173,7 +183,7 @@ func load() (scenario, error) {
 	if err := json.Unmarshal(scenarioJSON, &scen); err != nil {
 		return scen, err
 	}
-	if scen.CampaignID != sb.CampaignID || scen.WorkerCount != 100 || scen.HostCount != 1000 || len(scen.AuthorizedTargets) != 25 {
+	if scen.CampaignID != sb.CampaignID || scen.WorkerCount != 100 || scen.HostCount != 1000 || len(scen.AuthorizedTargets) != 25 || scen.DiscoveryLimit != 3 || scen.UseLimit != 3 || len(scen.ApprovedOrigins) != 1 {
 		return scen, errors.New("scenario counts mismatch")
 	}
 	return scen, nil
