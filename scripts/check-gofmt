@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Check that every Go file in the working tree is gofmt-clean.
+#
+# Check-only by design: this script never rewrites a file. Verification must not
+# mutate the tree it verifies, because cmd/visor-workflow binds task evidence to
+# a workspace snapshot digest and rejects a later mismatch. `make fmt` stays the
+# developer command for fixing drift.
+#
+# Called by the CI Lint job, by harness/check.sh and by scripts/pre-commit, so one
+# rule applies on every verification path. gofmt is taken from PATH: this script
+# does not pick a toolchain, so whatever Go the caller selected is what runs.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if ! command -v gofmt >/dev/null 2>&1; then
+  echo "error: gofmt not found on PATH" >&2
+  exit 1
+fi
+
+LIST="$(mktemp)"
+trap 'rm -f "$LIST"' EXIT
+
+# The listing comes from git so ignored trees such as .worktrees/ stay out of
+# scope, and it is NUL-delimited so spaces, newlines and non-ASCII names survive.
+# `-t` prepends each entry's tag, which is how sparse-checkout entries are
+# recognised. A failed or truncated listing is refused rather than read as empty:
+# reporting a tree clean from a listing that never arrived would be a false pass.
+if ! git ls-files -t -co --exclude-standard -z -- '*.go' >"$LIST"; then
+  echo "error: git ls-files failed; the Go file list cannot be proven complete" >&2
+  exit 1
+fi
+
+LIST_BYTES="$(wc -c <"$LIST")"
+if [ "$LIST_BYTES" -gt 0 ]; then
+  LAST_BYTE="$(tail -c 1 "$LIST" | od -An -tu1 | tr -d '[:space:]')"
+  if [ "$LAST_BYTE" != "0" ]; then
+    echo "error: git ls-files output is not NUL-terminated; treating the listing as truncated" >&2
+    exit 1
+  fi
+fi
+
+# A sparse checkout intentionally leaves some tracked files out of the working
+# tree. Those entries carry the skip-worktree bit (tag S) and passing them to
+# gofmt fails with "no such file or directory" even when every materialized file
+# is clean, which would block every run in a legitimate sparse workflow. Their
+# content is verified by CI, which checks out the full tree, so they are excluded
+# here and counted in the summary. A tracked file that is missing from disk
+# WITHOUT the skip-worktree bit keeps tag H and still reaches gofmt, so a real
+# deletion is not silently skipped.
+files=()
+sparse_skipped=0
+while IFS= read -r -d '' entry; do
+  tag="${entry%% *}"
+  path="${entry#* }"
+  [ -n "$path" ] || continue
+  if [ "$tag" = "S" ]; then
+    sparse_skipped=$((sparse_skipped + 1))
+    continue
+  fi
+  files+=("$path")
+done <"$LIST"
+
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "error: git listed no materialized Go files; run this from a repository checkout" >&2
+  exit 1
+fi
+
+# gofmt runs in bounded batches: one argv for the whole tree can exceed ARG_MAX on
+# a very large repository. `--` stops option parsing so a filename beginning with
+# a dash stays data.
+BATCH_SIZE=500
+unformatted=""
+batch=()
+
+check_batch() {
+  local out
+  if ! out="$(gofmt -l -- "${batch[@]}")"; then
+    echo "error: gofmt failed on a batch (unparsable Go file or invocation error)" >&2
+    return 1
+  fi
+  if [ -n "$out" ]; then
+    unformatted="${unformatted}${out}"$'\n'
+  fi
+  batch=()
+  return 0
+}
+
+for f in "${files[@]}"; do
+  batch+=("$f")
+  if [ "${#batch[@]}" -ge "$BATCH_SIZE" ]; then
+    check_batch || exit 1
+  fi
+done
+# Guard against an empty final batch: when the file count is an exact multiple of
+# BATCH_SIZE, an unguarded call would hand gofmt no paths and let it read stdin.
+if [ "${#batch[@]}" -gt 0 ]; then
+  check_batch || exit 1
+fi
+
+if [ -n "$unformatted" ]; then
+  echo "FAIL: these files are not gofmt-clean:" >&2
+  printf '%s' "$unformatted" >&2
+  echo >&2
+  echo "Run 'make fmt' and commit the result." >&2
+  exit 1
+fi
+
+if [ "$sparse_skipped" -gt 0 ]; then
+  echo "gofmt: clean (${#files[@]} files; ${sparse_skipped} skip-worktree entries not materialized, verified by CI's full checkout)"
+else
+  echo "gofmt: clean (${#files[@]} files)"
+fi

@@ -249,7 +249,7 @@ Full reference: `mcp-visor serve -h`
 ```bash
 go build ./cmd/mcp-visor/      # build
 go test ./...                  # test
-harness/check.sh               # fmt + vet + test + evidence manifest
+harness/check.sh               # gofmt check + vet + test + evidence manifest
 make bench                     # benchmarks
 ```
 

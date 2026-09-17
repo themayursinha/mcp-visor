@@ -30,8 +30,11 @@ echo "time: $TS"
 echo "go:   $(go version)"
 echo
 
-echo "--- make fmt ---"
-make fmt
+echo "--- gofmt check (check-only, never rewrites) ---"
+bash scripts/check-gofmt
+
+echo "--- staged-blob matrix (regression control for the hook arm) ---"
+bash scripts/tests/check-staged-gofmt_test.sh
 
 echo "--- make vet ---"
 make vet
@@ -47,7 +50,7 @@ cat >"$EVID_DIR/manifest.md" <<EOF
 
 - **Repository:** mcp-visor
 - **Git:** \`$GIT_BRANCH\` @ \`$GIT_SHA\`
-- **Commands:** \`make fmt\`, \`make vet\`, \`make test\`
+- **Commands:** \`scripts/check-gofmt\` (check-only, never rewrites), \`scripts/tests/check-staged-gofmt_test.sh\` (staged-blob matrix), \`make vet\`, \`make test\`
 - **Log:** \`check.log\` (same directory)
 
 ## Invariants (see \`harness/invariants.md\`)
