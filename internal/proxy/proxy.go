@@ -37,17 +37,17 @@ import (
 )
 
 type Proxy struct {
-	cfg            Config
-	session        *Session
-	logger         *slog.Logger
-	engine         *policy.Engine
+	cfg       Config
+	session   *Session
+	logger    *slog.Logger
+	engine    *policy.Engine
 	audit     *audit.Logger
 	runtimeMu sync.RWMutex
 	// redactor is published atomically so logAudit can read it without
 	// runtimeMu (tools/call may already hold that lock). tools/call
 	// terminal events must still use the captured snapshot redactor.
-	redactor atomic.Pointer[redaction.Engine]
-	approval *approval.Engine
+	redactor       atomic.Pointer[redaction.Engine]
+	approval       *approval.Engine
 	tracer         trace.TraceLogger
 	tracing        TracingConfig
 	metrics        ProxyMetrics
