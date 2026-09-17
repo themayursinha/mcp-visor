@@ -99,6 +99,48 @@ git -C "$d" add broken.go
 printf 'package probe\n\nfunc Bad( {\n' >"$d/broken.go"
 expect "staged parse error" 1 "$d" "$(run_check "$d")"
 
+d="$(new_repo)"
+printf '%s' "$FORMATTED" >"$d/linktarget.go"
+ln -s linktarget.go "$d/link.go"
+git -C "$d" add link.go
+rm -f "$d/link.go"
+ln -s othertarget.go "$d/link.go"
+expect "staged symlink retargeted after staging" 1 "$d" "$(run_check "$d")"
+
+echo "== the hook's module guard (staged go.mod vs working tree) =="
+
+unset HERMES_DELEGATED_CHILD_CONTEXT
+export PATH="/usr/local/go/bin:${PATH}"
+
+new_go_repo() {
+  local dir
+  dir="$(mktemp -d)"
+  mkdir -p "$dir/scripts"
+  cp "$HERE/../pre-commit" "$dir/scripts/pre-commit"
+  cp "$HERE/../check-gofmt" "$dir/scripts/check-gofmt"
+  cp "$HERE/../check-staged-gofmt" "$dir/scripts/check-staged-gofmt"
+  cp "$HERE/../check-sensitive-content" "$dir/scripts/check-sensitive-content"
+  printf 'module probe\n\ngo 1.26.8\n' >"$dir/go.mod"
+  printf 'package main\n\nfunc main() {}\n' >"$dir/main.go"
+  git -C "$dir" init -q
+  printf '%s' "$dir"
+}
+
+d="$(new_go_repo)"
+git -C "$d" add go.mod main.go
+printf 'module probe\n\ngo 1.26.8\n\nrequire example.com/nope v0.0.0\n' >"$d/go.mod"
+out="$(cd "$d" && bash scripts/pre-commit 2>&1)"
+rc=$?
+if printf '%s' "$out" | grep -q "staged go.mod/go.sum differ"; then
+  echo "OK   hook refuses a staged go.mod that differs from the working tree (exit $rc)"
+  pass=$((pass + 1))
+else
+  echo "FAIL hook let a stale staged go.mod through"
+  printf '%s\n' "$out" | tail -4 | sed 's/^/       /'
+  fail=$((fail + 1))
+fi
+rm -rf "$d"
+
 echo "== states the arm must not block =="
 
 d="$(new_repo)"

@@ -76,6 +76,16 @@ else
     echo "WARNING: govulncheck not installed. Run: go install golang.org/x/vuln/cmd/govulncheck@latest"
 fi
 
+# go mod tidy -diff reads the files on disk, so it cannot see a stale staged
+# module file. The index and the working tree must agree before that check means
+# anything; otherwise an untidy go.mod could sit in the index, pass here and fail
+# CI on a clean checkout.
+echo "==> go.mod/go.sum staged state"
+if ! git diff --quiet -- go.mod go.sum; then
+    echo "FAIL: staged go.mod/go.sum differ from the working tree. Run 'go mod tidy', then 'git add go.mod go.sum'."
+    exit 1
+fi
+
 echo "==> go mod tidy (check-only, never rewrites)"
 if ! go mod tidy -diff; then
     echo "FAIL: go.mod/go.sum are not tidy. Run 'go mod tidy' and stage the result."

@@ -56,8 +56,14 @@ while IFS= read -r -d '' path; do
   case "$mode" in
     100644|100755) ;;
     *)
-      # Symlink, gitlink, submodule or anything else that is not a regular file.
-      continue
+      # Non-regular entry (symlink, gitlink, submodule). It reached this list
+      # because the index and the working tree disagree about it, and its staged
+      # content cannot be format-checked as Go source, so the mismatch fails
+      # closed instead of being skipped: the alternative is a commit whose staged
+      # *.go entry was never validated by anything.
+      echo "FAIL: staged '$path' is a non-regular entry (mode $mode) whose staged content differs from the working tree." >&2
+      echo "It cannot be checked as Go source. Re-stage it or remove it from the index." >&2
+      exit 1
       ;;
   esac
 
