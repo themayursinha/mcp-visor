@@ -30,8 +30,8 @@ echo "time: $TS"
 echo "go:   $(go version)"
 echo
 
-echo "--- make fmt ---"
-make fmt
+echo "--- gofmt check (check-only, never rewrites) ---"
+bash scripts/check-gofmt
 
 echo "--- make vet ---"
 make vet
@@ -47,7 +47,7 @@ cat >"$EVID_DIR/manifest.md" <<EOF
 
 - **Repository:** mcp-visor
 - **Git:** \`$GIT_BRANCH\` @ \`$GIT_SHA\`
-- **Commands:** \`make fmt\`, \`make vet\`, \`make test\`
+- **Commands:** \`scripts/check-gofmt\` (check-only, never rewrites), \`make vet\`, \`make test\`
 - **Log:** \`check.log\` (same directory)
 
 ## Invariants (see \`harness/invariants.md\`)

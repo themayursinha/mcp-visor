@@ -15,8 +15,10 @@ make build     # Build
 make test      # Run all tests (68 tests)
 make vet       # Run go vet
 make demo      # Run the interactive demo
-make fmt       # Format code
+make fmt       # Format code (fixes gofmt drift)
 ```
+
+Unformatted Go fails the harness and CI: `scripts/check-gofmt` is check-only and exits non-zero rather than rewriting files. Run `make fmt` and commit the result.
 
 ## Before Submitting a PR
 

@@ -1,0 +1,40 @@
+{
+  "task_id": "T-GOFMT-GATE-001",
+  "invariant_ids": ["H51"],
+  "security_sensitive": false,
+  "security_problem": "The repository's verification entry point mutated the tree it was verifying. harness/check.sh ran `make fmt` (`go fmt ./...`), which rewrote tracked files. cmd/visor-workflow binds a task's recorded evidence to a workspace snapshot digest and rejects a later mismatch, so a single unformatted tracked file made an otherwise green task unreachable at HARNESS_VERIFIED with target_snapshot_mismatch. CI had no formatting check either, so drift merged green, and the pre-commit hook did not warn locally.",
+  "required_behavior": "One check-only script, scripts/check-gofmt, is the single formatting authority: it reports unformatted Go, names the files, and exits non-zero without rewriting anything; it fails closed on a Go file that does not parse; it checks tracked plus untracked-but-not-ignored Go files via git so ignored trees such as .worktrees/ stay out of scope. harness/check.sh calls that script instead of `make fmt`, writes its output into the harness manifest, and runs vet and test unchanged. CI runs the same script in the Lint job. CONTRIBUTING.md tells a contributor that unformatted Go fails the harness and CI and that `make fmt` is the fix. harness/invariants.md records the rule as H51.",
+  "failure_behavior": "A non-gofmt-clean tree fails the harness, CI and the contract's target command with the offending filenames printed; nothing is reformatted automatically, so evidence keeps binding to the tree it was recorded against. A Go file that cannot be parsed exits non-zero. `make fmt` remains available to developers and is never called from a verification path.",
+  "spec_revision": 0,
+  "non_goals": [
+    "Reformatting any file in this change (internal/proxy/proxy.go drift is fixed separately)",
+    "Replacing golangci-lint or adding new linters",
+    "Changing Makefile targets or the developer `make fmt` workflow",
+    "Adding a Go-version assertion beyond using whichever gofmt is first on PATH",
+    "Touching any proxy, policy, audit or workflow logic",
+    "New dependencies"
+  ],
+  "attack_classes": [],
+  "allowed_paths": [
+    "scripts/check-gofmt",
+    ".github/workflows/ci.yml",
+    "harness/check.sh",
+    "harness/invariants.md",
+    "CONTRIBUTING.md",
+    "harness/tasks/T-GOFMT-GATE-001.json"
+  ],
+  "approval_gated_paths": [],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["bash", "scripts/check-gofmt"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}
