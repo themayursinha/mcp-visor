@@ -18,6 +18,15 @@ package main_test
 // repository: harness/identity-aware.sh points H52_ARTIFACT_DIR at the
 // snapshot-excluded evidence/harness tree, and a bare `go test` keeps it in a
 // temp directory.
+//
+// Three assertion rules keep the deny leg non-vacuous:
+//
+//   - the recorded argument hash covers the raw argument bytes as received, with
+//     no decode/re-marshal round trip;
+//   - the denial reason is read from the JSON-RPC `error.message` only, never from
+//     the whole response, whose echoed request id contains the reason words;
+//   - a deny scenario requires the observer artifact to exist and parse, so an
+//     unreadable artifact fails the test instead of passing it by omission.
 
 import (
 	"bufio"
@@ -64,43 +73,54 @@ func main() {
 		if err != nil {
 			return
 		}
-		var req map[string]any
+		var req struct {
+			ID     json.RawMessage
+			Method string
+			Params json.RawMessage
+		}
 		if err := json.Unmarshal(line, &req); err != nil {
 			continue
 		}
-		method, _ := req["method"].(string)
-		switch method {
+		var params struct {
+			Name      string
+			Arguments json.RawMessage
+		}
+		_ = json.Unmarshal(req.Params, &params)
+		switch req.Method {
 		case "initialize":
-			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"observer-backend\",\"version\":\"1\"}}}\n", rawID(req["id"]))
+			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"observer-backend\",\"version\":\"1\"}}}\n", rawID(req.ID))
 		case "tools/call":
-			params, _ := req["params"].(map[string]any)
-			tool, _ := params["name"].(string)
-			encoded, _ := json.Marshal(params["arguments"])
-			sum := sha256.Sum256(encoded)
+			// Hash the argument bytes exactly as they arrived: params.arguments is
+			// kept raw, so no decode/re-marshal round trip can normalize key order,
+			// escaping or duplicates before it is recorded.
+			sum := sha256.Sum256(params.Arguments)
 			rec, _ := json.Marshal(map[string]any{
 				"received_at": time.Now().UTC().Format(time.RFC3339Nano),
-				"transaction": req["id"],
-				"method":      method,
-				"tool":        tool,
+				"transaction": req.ID,
+				"method":      req.Method,
+				"tool":        params.Name,
 				"args_sha256": hex.EncodeToString(sum[:]),
 			})
 			_, _ = f.Write(append(rec, '\n'))
 			_ = f.Sync()
-			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"observed\"}]}}\n", rawID(req["id"]))
+			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"observed\"}]}}\n", rawID(req.ID))
 		default:
-			if req["id"] != nil {
-				fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\n", rawID(req["id"]))
+			if !nullID(req.ID) {
+				fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\n", rawID(req.ID))
 			}
 		}
 	}
 }
 
-func rawID(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
+func rawID(v json.RawMessage) string {
+	if len(v) == 0 {
 		return "null"
 	}
-	return string(b)
+	return string(v)
+}
+
+func nullID(v json.RawMessage) bool {
+	return len(v) == 0 || string(v) == "null"
 }
 `
 
@@ -156,7 +176,7 @@ description: "H52: approval required, actor expiry rechecked on a fresh clock"
 default_action: deny
 settings:
   require_verified_actor: true
-  approval_timeout_seconds: 10
+  approval_timeout_seconds: 45
 servers:
   - name: "%s"
     allowed: true
@@ -185,6 +205,7 @@ type h52HarnessResult struct {
 	exitCode         int
 	observer         []h52ObserverLine
 	observerArtifact string
+	observerErr      error
 	audit            []map[string]any
 	callSent         bool
 }
@@ -227,6 +248,25 @@ func h52UnsealedActor(t *testing.T, mutate func(*actorcontext.Context)) []byte {
 	raw, err := json.Marshal(h52ActorBase(t, mutate))
 	if err != nil {
 		t.Fatalf("marshal actor context: %v", err)
+	}
+	return raw
+}
+
+// h52MultiAudienceActor returns a structurally plausible process-start payload
+// whose audience is an array. VerifiedActorContext v1 carries exactly one audience
+// string, so a client offering several audiences is refused at process start rather
+// than denied at the call gate: the acceptance row "multiple audiences where exactly
+// one is required" is proven here as a startup refusal, not as a runtime deny.
+func h52MultiAudienceActor(t *testing.T) []byte {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(h52Actor(t, nil), &payload); err != nil {
+		t.Fatalf("decode actor payload: %v", err)
+	}
+	payload["audience"] = []string{"https://visor-gateway.example.test", "https://second.example.test"}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal multi-audience payload: %v", err)
 	}
 	return raw
 }
@@ -329,7 +369,7 @@ func runIdentityHarness(t *testing.T, visor, backend string, opts h52Options) h5
 			_ = cmd.Wait()
 		}
 		res.stderr = stderrBuf.String()
-		res.observer = h52ReadObserver(t, observerLog)
+		res.observer, res.observerErr = h52ReadObserver(t, observerLog)
 		res.audit = h52ReadAudit(t, auditLog)
 		return res
 	}
@@ -370,7 +410,11 @@ func runIdentityHarness(t *testing.T, visor, backend string, opts h52Options) h5
 		if remain := opts.approvalDelay - time.Since(callAt); remain > 0 {
 			time.Sleep(remain)
 		}
-		_ = os.WriteFile(filepath.Join(approvalDir, "req-"+id+".ok"), []byte{}, 0o600)
+		// A discarded grant error turns a slow or unwritable runner into an
+		// opaque approval timeout; fail the scenario instead.
+		if err := os.WriteFile(filepath.Join(approvalDir, "req-"+id+".ok"), []byte{}, 0o600); err != nil {
+			t.Fatalf("%s: grant approval for %s: %v", opts.name, id, err)
+		}
 	}
 
 	if line, ok := h52ReadLine(t, r, 30*time.Second); ok {
@@ -464,11 +508,16 @@ func h52WaitApprovalRequest(t *testing.T, dir string, timeout time.Duration) str
 	return ""
 }
 
-func h52ReadObserver(t *testing.T, path string) []h52ObserverLine {
+// h52ReadObserver reads the observer artifact. A read error is returned, never
+// swallowed: a scenario that sends a call may only pass because the artifact was
+// read and held no record for that transaction, so silence must be evidence
+// rather than absence. Callers that legitimately expect no session at all (a
+// process-start refusal) must say so explicitly instead of relying on this.
+func h52ReadObserver(t *testing.T, path string) ([]h52ObserverLine, error) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("observer artifact %s is unreadable: %w", path, err)
 	}
 	var out []h52ObserverLine
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
@@ -481,7 +530,7 @@ func h52ReadObserver(t *testing.T, path string) []h52ObserverLine {
 		}
 		out = append(out, rec)
 	}
-	return out
+	return out, nil
 }
 
 func h52ReadAudit(t *testing.T, path string) []map[string]any {
@@ -532,15 +581,15 @@ func h52RequireForwarded(t *testing.T, res h52HarnessResult, callID string) {
 	if !strings.Contains(res.response, "observed") {
 		t.Fatalf("%s: expected the call to reach the backend, response was %q", res.name, res.response)
 	}
+	if res.observerErr != nil {
+		t.Fatalf("%s: %v; the forwarded call must appear in the observer artifact", res.name, res.observerErr)
+	}
 	rec := h52ObserverFor(res, callID)
 	if rec == nil {
 		t.Fatalf("%s: the independent observer did not record %s; artifact said %v", res.name, callID, res.observer)
 	}
 	if rec.Method != "tools/call" || rec.Tool != "write_file" {
 		t.Fatalf("%s: observer recorded method=%q tool=%q", res.name, rec.Method, rec.Tool)
-	}
-	if _, err := os.Stat(res.observerArtifact); err != nil {
-		t.Fatalf("%s: observer artifact must exist and be non-empty: %v", res.name, err)
 	}
 	allow := h52AuditEvent(res, "tool_call_allowed")
 	if allow == nil {
@@ -559,15 +608,46 @@ func h52RequireForwarded(t *testing.T, res h52HarnessResult, callID string) {
 	}
 }
 
-// h52RequireDenied asserts the backend never received the call and that the
-// denial names the identity reason, so an unrelated failure cannot pass for the gate.
+// h52DenyMessage returns the JSON-RPC `error.message` of a denial and checks that
+// the response is an error correlated to callID. The reason leg must be read from
+// that field and nothing else: a denial response also echoes the request id, and
+// ids such as "txn-expired" already contain the reason words, so a substring match
+// over the whole response would be satisfied by any denial at all.
+func h52DenyMessage(t *testing.T, res h52HarnessResult, callID string) string {
+	t.Helper()
+	var resp struct {
+		ID    json.RawMessage
+		Error *struct {
+			Code    int
+			Message string
+		}
+	}
+	if err := json.Unmarshal([]byte(res.response), &resp); err != nil {
+		t.Fatalf("%s: denial response is not a JSON-RPC object: %v (%q)", res.name, err, res.response)
+	}
+	if resp.Error == nil {
+		t.Fatalf("%s: expected a JSON-RPC error response, got %q", res.name, res.response)
+	}
+	if got := strings.Trim(string(resp.ID), `"`); got != callID {
+		t.Fatalf("%s: denial response is not correlated to transaction %s: response id %q", res.name, callID, got)
+	}
+	return resp.Error.Message
+}
+
+// h52RequireDenied asserts the backend never received the call, that the observer
+// artifact was actually read, and that the denial names the identity reason, so an
+// unrelated failure cannot pass for the gate.
 func h52RequireDenied(t *testing.T, res h52HarnessResult, callID, reasonContains string) {
 	t.Helper()
 	if res.exited {
 		t.Fatalf("%s: visor exited (code %d) instead of denying the call; stderr: %s", res.name, res.exitCode, res.stderr)
 	}
-	if !strings.Contains(res.response, reasonContains) {
-		t.Fatalf("%s: expected denial containing %q, response was %q", res.name, reasonContains, res.response)
+	if res.observerErr != nil {
+		t.Fatalf("%s: %v; a missing or unreadable observer artifact is a failure, never a pass by omission", res.name, res.observerErr)
+	}
+	message := h52DenyMessage(t, res, callID)
+	if !strings.Contains(message, reasonContains) {
+		t.Fatalf("%s: expected the JSON-RPC error.message to name %q, got %q (an echoed request id must not satisfy this leg)", res.name, reasonContains, message)
 	}
 	if rec := h52ObserverFor(res, callID); rec != nil {
 		t.Fatalf("%s: the backend received a call the gate denied: %+v", res.name, rec)
@@ -575,7 +655,10 @@ func h52RequireDenied(t *testing.T, res h52HarnessResult, callID, reasonContains
 }
 
 // h52RequireStartupRefusal asserts the proxy refused to serve at all, which is the
-// fail-closed outcome for a malformed or absent process-start context.
+// fail-closed outcome for a malformed or absent process-start context. No session
+// starts, so no tools/call is ever sent and the observer artifact is expected to be
+// absent: these scenarios are refusals, not gate denials, and they are never
+// correlated by transaction id.
 func h52RequireStartupRefusal(t *testing.T, res h52HarnessResult, stderrContains string) {
 	t.Helper()
 	if !res.exited {
@@ -654,9 +737,10 @@ func TestVerifiedActorBackendObserver(t *testing.T) {
 		res := runIdentityHarness(t, visor, backend, h52Options{
 			name: "fake-identity", policy: h52PolicyScopeGateOnly,
 			arguments: map[string]any{
-				"path":            "/tmp/out.txt",
-				"_verified_actor": map[string]any{"principal_id": "attacker", "scopes": []string{"read", "write"}},
-				"verified_actor":  "attacker",
+				"path":                   "/tmp/out.txt",
+				"_verified_actor":        map[string]any{"principal_id": "attacker", "scopes": []string{"read", "write"}},
+				"verified_actor":         "attacker",
+				"verified_actor_context": map[string]any{"principal_id": "attacker", "scopes": []string{"read", "write"}},
 			},
 		})
 		h52RequireDenied(t, res, "txn-fake-identity", "verified actor context required")
@@ -667,19 +751,22 @@ func TestVerifiedActorBackendObserver(t *testing.T) {
 			name: "strip-identity", policy: h52PolicyIdentityRequired,
 			actor: h52Actor(t, nil),
 			arguments: map[string]any{
-				"path":            "/tmp/out.txt",
-				"_verified_actor": map[string]any{"principal_id": "attacker"},
+				"path":                   "/tmp/out.txt",
+				"_verified_actor":        map[string]any{"principal_id": "attacker"},
+				"verified_actor":         "attacker",
+				"verified_actor_context": map[string]any{"principal_id": "attacker", "scopes": []string{"read", "write"}},
 			},
 		})
 		h52RequireForwarded(t, res, "txn-strip-identity")
 		rec := h52ObserverFor(res, "txn-strip-identity")
-		stripped, err := json.Marshal(map[string]any{"path": "/tmp/out.txt"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := h52SHA256(stripped)
+		// Every alias is carried in the client request above, so a surviving alias
+		// changes the raw argument bytes the backend received. The expectation is
+		// the literal byte string the proxy relays for the stripped object, so an
+		// extra, missing or renamed key all fail here.
+		const wantRawArgs = `{"path":"/tmp/out.txt"}`
+		want := h52SHA256([]byte(wantRawArgs))
 		if rec.ArgsSHA256 != want {
-			t.Fatalf("backend received arguments that still carry caller-supplied identity: got %s, want the hash of %s", rec.ArgsSHA256, stripped)
+			t.Fatalf("backend received arguments that still carry caller-supplied identity: got %s, want the sha256 of %s", rec.ArgsSHA256, wantRawArgs)
 		}
 	})
 
@@ -716,29 +803,56 @@ func TestVerifiedActorBackendObserver(t *testing.T) {
 	})
 
 	t.Run("actor_expires_while_approval_pending", func(t *testing.T) {
+		// The context lives 8s past process start and the operator grants at
+		// 12s past the call, so the grant is after the expiry by at least 4s on
+		// any runner: the delay is measured from the call while the expiry was
+		// fixed before the process start, and the sleep can only overshoot. The
+		// 8s of headroom also keeps the scenario meaningful (an actor already
+		// expired before the call would never reach the approval gate, which
+		// h52WaitApprovalRequest below turns into a loud failure).
 		res := runIdentityHarness(t, visor, backend, h52Options{
 			name: "approval-expiry", policy: h52PolicyApprovalRequired,
-			actor:         h52Actor(t, func(c *actorcontext.Context) { c.ExpiresAt = time.Now().UTC().Add(3 * time.Second) }),
+			actor:         h52Actor(t, func(c *actorcontext.Context) { c.ExpiresAt = time.Now().UTC().Add(8 * time.Second) }),
 			arguments:     map[string]any{"path": "/tmp/out.txt"},
-			approvalDelay: 5 * time.Second,
+			approvalDelay: 12 * time.Second,
 		})
 		h52RequireDenied(t, res, "txn-approval-expiry", "expired")
 	})
 
+	t.Run("multiple_audiences_where_exactly_one_is_required", func(t *testing.T) {
+		res := runIdentityHarness(t, visor, backend, h52Options{
+			name: "multi-audience", policy: h52PolicyIdentityRequired,
+			actor:     h52MultiAudienceActor(t),
+			arguments: map[string]any{"path": "/tmp/out.txt"},
+		})
+		h52RequireStartupRefusal(t, res, "audience")
+	})
+
 	// H52 gap probe, not an acceptance case: the decision path does not check the
 	// context audience, so a wrong audience is measured as forwarded rather than
-	// denied. This records the measurement; closing it requires an enforcement
-	// change, which is a separate security-classified card.
+	// denied. The measurement must come from the artifact: only a record proves the
+	// call was forwarded, and only a denial response with no record proves the gap
+	// closed. An unreadable artifact or a visor that never served leaves the
+	// question unanswered, so it must never print the closed message.
 	t.Run("gap_probe_wrong_audience_is_not_enforced", func(t *testing.T) {
 		res := runIdentityHarness(t, visor, backend, h52Options{
 			name: "audience-gap", policy: h52PolicyIdentityRequired,
 			actor:     h52Actor(t, func(c *actorcontext.Context) { c.Audience = "https://attacker.example.test" }),
 			arguments: map[string]any{"path": "/tmp/out.txt"},
 		})
-		if h52ObserverFor(res, "txn-audience-gap") == nil {
-			t.Logf("H52 GAP CLOSED: a wrong audience is now denied; update harness/invariants.md H52 and delete the gap note")
+		if res.exited {
+			t.Fatalf("%s: visor exited (code %d) instead of serving; the audience gap is unmeasured; stderr: %s", res.name, res.exitCode, res.stderr)
+		}
+		if res.observerErr != nil {
+			t.Fatalf("%s: %v; the audience gap is unmeasured", res.name, res.observerErr)
+		}
+		rec := h52ObserverFor(res, "txn-audience-gap")
+		if rec == nil {
+			// No record and a denial correlated to this call: the gap is closed.
+			msg := h52DenyMessage(t, res, "txn-audience-gap")
+			t.Logf("H52 GAP CLOSED: the observer recorded no call for txn-audience-gap and the gate denied it (%q); update harness/invariants.md H52 and delete the gap note", msg)
 			return
 		}
-		t.Logf("H52 GAP: audience is not enforced in the decision path; a context with audience %q was forwarded to the backend. Enforcement is a separate security-classified change.", "https://attacker.example.test")
+		t.Logf("H52 GAP: audience is not enforced in the decision path; the observer recorded transaction %s, tool %s, received %s for a context with audience %q. Enforcement is a separate security-classified change.", rec.Transaction, rec.Tool, rec.ReceivedAt, "https://attacker.example.test")
 	})
 }

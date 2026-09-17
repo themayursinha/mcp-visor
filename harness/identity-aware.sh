@@ -30,7 +30,11 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-ART="$ROOT/evidence/harness/$TS/identity-aware"
+# Run-unique artifact directory. Scenario file names are fixed, so two runs in the
+# same second sharing a directory would append to the same .jsonl files and each
+# run's records would decide the other run's assertions.
+RUN_ID="$$-$(date -u +%s%N)"
+ART="$ROOT/evidence/harness/$TS/identity-aware-$RUN_ID"
 mkdir -p "$ART"
 
 echo "=== H52 identity-aware harness ==="
