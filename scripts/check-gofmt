@@ -24,9 +24,10 @@ trap 'rm -f "$LIST"' EXIT
 
 # The listing comes from git so ignored trees such as .worktrees/ stay out of
 # scope, and it is NUL-delimited so spaces, newlines and non-ASCII names survive.
-# A failed or truncated listing is refused rather than read as empty: reporting a
-# tree clean from a listing that never arrived would be a false pass.
-if ! git ls-files -co --exclude-standard -z -- '*.go' >"$LIST"; then
+# `-t` prepends each entry's tag, which is how sparse-checkout entries are
+# recognised. A failed or truncated listing is refused rather than read as empty:
+# reporting a tree clean from a listing that never arrived would be a false pass.
+if ! git ls-files -t -co --exclude-standard -z -- '*.go' >"$LIST"; then
   echo "error: git ls-files failed; the Go file list cannot be proven complete" >&2
   exit 1
 fi
@@ -40,13 +41,29 @@ if [ "$LIST_BYTES" -gt 0 ]; then
   fi
 fi
 
+# A sparse checkout intentionally leaves some tracked files out of the working
+# tree. Those entries carry the skip-worktree bit (tag S) and passing them to
+# gofmt fails with "no such file or directory" even when every materialized file
+# is clean, which would block every run in a legitimate sparse workflow. Their
+# content is verified by CI, which checks out the full tree, so they are excluded
+# here and counted in the summary. A tracked file that is missing from disk
+# WITHOUT the skip-worktree bit keeps tag H and still reaches gofmt, so a real
+# deletion is not silently skipped.
 files=()
-while IFS= read -r -d '' f; do
-  files+=("$f")
+sparse_skipped=0
+while IFS= read -r -d '' entry; do
+  tag="${entry%% *}"
+  path="${entry#* }"
+  [ -n "$path" ] || continue
+  if [ "$tag" = "S" ]; then
+    sparse_skipped=$((sparse_skipped + 1))
+    continue
+  fi
+  files+=("$path")
 done <"$LIST"
 
 if [ "${#files[@]}" -eq 0 ]; then
-  echo "error: git listed no Go files; run this from a repository checkout" >&2
+  echo "error: git listed no materialized Go files; run this from a repository checkout" >&2
   exit 1
 fi
 
@@ -90,4 +107,8 @@ if [ -n "$unformatted" ]; then
   exit 1
 fi
 
-echo "gofmt: clean (${#files[@]} files)"
+if [ "$sparse_skipped" -gt 0 ]; then
+  echo "gofmt: clean (${#files[@]} files; ${sparse_skipped} skip-worktree entries not materialized, verified by CI's full checkout)"
+else
+  echo "gofmt: clean (${#files[@]} files)"
+fi

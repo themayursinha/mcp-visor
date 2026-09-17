@@ -51,11 +51,11 @@ echo "==> gofmt check"
 bash scripts/check-gofmt
 
 # A commit contains the index, not the working tree. scripts/check-staged-gofmt
-# closes the one gap the working-tree check above leaves: a staged blob that
-# differs from the file on disk, which includes a rename whose new path is staged
-# unformatted. It enumerates index/worktree differences rather than a
-# --diff-filter list, so no change type can be dropped from it, and it skips
-# non-regular entries such as a symlink named *.go.
+# validates the staged blob of every Go path whose index content differs from
+# HEAD, read from the index itself, so a staged blob cannot be hidden behind the
+# skip-worktree or assume-unchanged bit (both invisible to git diff) and every
+# change type is covered. It refuses a gitlink at a Go path and a symlink whose
+# staged target differs from the working tree.
 echo "==> gofmt check (staged blobs)"
 bash scripts/check-staged-gofmt
 
@@ -77,14 +77,27 @@ else
 fi
 
 # go mod tidy -diff reads the files on disk, so it cannot see a stale staged
-# module file. The index and the working tree must agree before that check means
-# anything; otherwise an untidy go.mod could sit in the index, pass here and fail
-# CI on a clean checkout.
+# module file. The index blob is compared against the working file directly
+# instead of with `git diff`, because a module file carrying the skip-worktree or
+# assume-unchanged bit is invisible to `git diff` while its staged blob still
+# lands in the commit. Paths are anchored to the repository root, so a nested
+# module elsewhere in the tree cannot trip this guard.
 echo "==> go.mod/go.sum staged state"
-if ! git diff --quiet -- go.mod go.sum; then
-    echo "FAIL: staged go.mod/go.sum differ from the working tree. Run 'go mod tidy', then 'git add go.mod go.sum'."
-    exit 1
-fi
+for name in go.mod go.sum; do
+    idx_blob="$(git ls-files --cached -s -z -- ":(top)$name" | tr '\0' '\n' | head -n 1 | awk '{ print $2 }')"
+    if [ -z "$idx_blob" ]; then
+        continue
+    fi
+    if [ ! -f "$name" ]; then
+        echo "FAIL: $name is staged but missing from the working tree. Restore it or stage its deletion."
+        exit 1
+    fi
+    wt_blob="$(git hash-object -- "$name")"
+    if [ "$idx_blob" != "$wt_blob" ]; then
+        echo "FAIL: staged $name differs from the working tree. Run 'go mod tidy', then 'git add $name', so the commit records the file that was checked."
+        exit 1
+    fi
+done
 
 echo "==> go mod tidy (check-only, never rewrites)"
 if ! go mod tidy -diff; then

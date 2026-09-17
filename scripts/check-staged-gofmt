@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Check gofmt on the staged blobs that differ from the working tree.
+# Validate the Go blobs a commit would record, read from the index itself.
 #
-# A commit records the index, not the working tree. The working-tree pass in
-# scripts/check-gofmt covers every Go file on disk, so the only gap left is a
-# file whose staged blob differs from the file on disk: staged while unformatted
-# and reformatted afterwards, or a rename whose staged new path is unformatted.
+# A commit records the index, not the working tree. Earlier revisions of this
+# check used `git diff` to decide which staged blobs matter, and review found the
+# same shape of hole behind each oracle: a path carrying the skip-worktree (tag
+# S) or assume-unchanged (tag h) bit is invisible to `git diff` and to
+# `git status`, while its staged blob still lands in the commit. So the oracle is
+# now the index itself. `git ls-files --cached -s` lists every index entry with
+# its mode, blob id and stage regardless of those bits, and every entry whose
+# blob differs from HEAD's is materialized and run through gofmt. Nothing is
+# rewritten, and no worktree state is trusted for the commit's content.
 #
-# This pass enumerates `git diff --name-only` between index and working tree
-# rather than a --diff-filter list. Every index/worktree discrepancy appears in
-# that listing by definition, so a rename, a copy or any future change type
-# cannot be dropped from the check; a path whose index content equals the file on
-# disk is already proven by the working-tree pass.
-#
-# Check-only: nothing is rewritten. Non-regular index entries (symlinks, gitlinks)
-# are skipped, because a symlink named *.go is not Go source.
-set -euo pipefail
+# Non-regular entries cannot be format-checked as Go source: a symlink passes
+# only when the staged link is the link in the working tree, and a gitlink is
+# refused because nothing here can verify what it would record.
+set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -24,60 +24,111 @@ if ! command -v gofmt >/dev/null 2>&1; then
   exit 1
 fi
 
-LIST="$(mktemp)"
-trap 'rm -f "$LIST"' EXIT
-
-if ! git diff --name-only -z -- '*.go' >"$LIST"; then
-  echo "error: git diff failed; the staged list cannot be proven complete" >&2
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+fail() {
+  echo "FAIL: $*" >&2
   exit 1
+}
+
+if ! git ls-files --cached -s -z -- '*.go' >"$TMP/index"; then
+  fail "git ls-files failed; the staged Go blobs cannot be enumerated"
 fi
 
-LIST_BYTES="$(wc -c <"$LIST")"
-if [ "$LIST_BYTES" -gt 0 ]; then
-  LAST_BYTE="$(tail -c 1 "$LIST" | od -An -tu1 | tr -d '[:space:]')"
-  if [ "$LAST_BYTE" != "0" ]; then
-    echo "error: the index/worktree listing is not NUL-terminated; treating it as truncated" >&2
-    exit 1
+# HEAD's blobs, so a path this commit does not change is not re-checked.
+declare -A head_blob=()
+if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  if ! git ls-tree -r -z HEAD -- '*.go' >"$TMP/head"; then
+    fail "git ls-tree failed; HEAD's Go blobs cannot be enumerated"
   fi
+  while IFS= read -r -d '' rec; do
+    meta="${rec%%$'\t'*}"
+    path="${rec#*$'\t'}"
+    head_blob["$path"]="${meta##* }"
+  done <"$TMP/head"
 fi
 
-checked=0
+changed_paths=()
+changed_blobs=()
+unchanged=0
 
-while IFS= read -r -d '' path; do
+while IFS= read -r -d '' rec; do
+  meta="${rec%%$'\t'*}"
+  path="${rec#*$'\t'}"
   [ -n "$path" ] || continue
+  # shellcheck disable=SC2086 # meta is "<mode> <blob> <stage>"; splitting is intended
+  set -- $meta
+  mode="${1:-}"
+  blob="${2:-}"
+  stage="${3:-}"
 
-  entry="$(git ls-files --cached -s -z -- "$path" | tr '\0' '\n' | head -n 1)"
-  if [ -z "$entry" ]; then
-    # Not in the index (deleted from the index): nothing will be committed.
-    continue
-  fi
-
-  mode="${entry%% *}"
   case "$mode" in
-    100644|100755) ;;
+    100644 | 100755) ;;
+    120000)
+      # A symlink is not Go source, so it cannot be format-checked. It passes
+      # only when the staged link is the link actually in the working tree, which
+      # is what the working-tree pass has seen. A link retargeted after staging
+      # is refused because the commit would record a link nothing checked.
+      target="$(readlink -- "$path" 2>/dev/null || true)"
+      wt_blob="$(printf '%s' "$target" | git hash-object --stdin)"
+      if [ "$wt_blob" != "$blob" ]; then
+        fail "staged '$path' is a symlink whose staged target differs from the working tree; the commit would record a link nothing checked"
+      fi
+      continue
+      ;;
+    160000)
+      fail "staged '$path' is a gitlink (mode 160000) at a Go path; nothing here can verify what it would record, so it is refused"
+      ;;
     *)
-      # Non-regular entry (symlink, gitlink, submodule). It reached this list
-      # because the index and the working tree disagree about it, and its staged
-      # content cannot be format-checked as Go source, so the mismatch fails
-      # closed instead of being skipped: the alternative is a commit whose staged
-      # *.go entry was never validated by anything.
-      echo "FAIL: staged '$path' is a non-regular entry (mode $mode) whose staged content differs from the working tree." >&2
-      echo "It cannot be checked as Go source. Re-stage it or remove it from the index." >&2
-      exit 1
+      fail "staged '$path' has index mode '$mode', which this check cannot verify"
       ;;
   esac
 
-  if ! out="$(git show ":$path" | gofmt -l 2>&1)"; then
-    echo "FAIL: staged '$path' is not parsable Go:" >&2
-    echo "$out" >&2
-    exit 1
+  if [ "$stage" != "0" ]; then
+    fail "index entry '$path' is unmerged (stage $stage); resolve the conflict before committing"
   fi
-  if [ -n "$out" ]; then
-    echo "FAIL: the staged version of '$path' is not gofmt-clean; the commit would fail CI." >&2
-    echo "Run 'make fmt', then 'git add $path'." >&2
-    exit 1
-  fi
-  checked=$((checked + 1))
-done <"$LIST"
 
-echo "staged gofmt: clean ($checked staged blobs differ from the working tree)"
+  if [ "${head_blob[$path]:-}" = "$blob" ]; then
+    unchanged=$((unchanged + 1))
+    continue
+  fi
+
+  changed_paths+=("$path")
+  changed_blobs+=("$blob")
+done <"$TMP/index"
+
+if [ "${#changed_paths[@]}" -eq 0 ]; then
+  echo "staged gofmt: clean (no staged Go blob differs from HEAD; $unchanged unchanged)"
+  exit 0
+fi
+
+# Materialize each staged blob and check that, never the file on disk.
+unformatted=()
+for i in "${!changed_paths[@]}"; do
+  path="${changed_paths[$i]}"
+  blob="${changed_blobs[$i]}"
+  f="$TMP/b$i.go"
+  git cat-file blob "$blob" >"$f" || fail "cannot read the staged blob of '$path'"
+
+  out="$(gofmt -l -- "$f" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+    continue
+  fi
+  if [ "$rc" -eq 0 ]; then
+    unformatted+=("$path")
+    continue
+  fi
+  echo "FAIL: the staged blob of '$path' is not parsable Go (gofmt exit $rc):" >&2
+  printf '%s\n' "${out//$f/$path}" >&2
+  exit 1
+done
+
+if [ "${#unformatted[@]}" -gt 0 ]; then
+  echo "FAIL: the staged version of these files is not gofmt-clean, so the commit would fail CI:" >&2
+  printf '  %s\n' "${unformatted[@]}" >&2
+  echo "Run 'make fmt', then stage the files again." >&2
+  exit 1
+fi
+
+echo "staged gofmt: clean (${#changed_paths[@]} staged Go blob(s) differ from HEAD, all gofmt-clean; $unchanged unchanged)"
