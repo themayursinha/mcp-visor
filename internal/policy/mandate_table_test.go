@@ -44,7 +44,7 @@ func TestMandateRuleTableRoutesConvertedTypes(t *testing.T) {
 			}
 			alias := entry.aliases[0]
 
-			var orig mandateRule = entry
+			orig := entry
 			patched := orig
 			patched.emptyReason = ruleType + ":empty"
 			patched.missingReason = ruleType + ":missing"
@@ -88,7 +88,7 @@ func TestMandateRuleTableRoutesConvertedTypes(t *testing.T) {
 func TestMandateRuleTableEntriesAreFailClosed(t *testing.T) {
 	for ruleType, entry := range mandateRules {
 		t.Run(ruleType, func(t *testing.T) {
-			var rule mandateRule = entry
+			rule := entry
 			sample, ok := mandateSamples[ruleType]
 			if !ok {
 				t.Fatalf("no sample for mandate rule type %q", ruleType)
