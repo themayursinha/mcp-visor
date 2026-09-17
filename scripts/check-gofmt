@@ -76,7 +76,11 @@ for f in "${files[@]}"; do
     check_batch || exit 1
   fi
 done
-check_batch || exit 1
+# Guard against an empty final batch: when the file count is an exact multiple of
+# BATCH_SIZE, an unguarded call would hand gofmt no paths and let it read stdin.
+if [ "${#batch[@]}" -gt 0 ]; then
+  check_batch || exit 1
+fi
 
 if [ -n "$unformatted" ]; then
   echo "FAIL: these files are not gofmt-clean:" >&2

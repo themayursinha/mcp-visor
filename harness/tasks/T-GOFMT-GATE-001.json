@@ -2,21 +2,23 @@
   "task_id": "T-GOFMT-GATE-001",
   "invariant_ids": ["H51"],
   "security_sensitive": false,
-  "security_problem": "The repository's verification paths mutated the tree they were verifying. harness/check.sh ran `make fmt` (`go fmt ./...`) and scripts/pre-commit ran `go mod tidy`, both of which rewrite tracked files. cmd/visor-workflow records a workspace snapshot digest before each command and rejects a later mismatch, so a single unformatted tracked file made an otherwise green task unreachable at HARNESS_VERIFIED with target_snapshot_mismatch. CI had no formatting check either, so the drift merged green, and no local hook warned the author.",
-  "required_behavior": "One check-only script, scripts/check-gofmt, is the single formatting authority on every verification path. It lists unformatted Go files, names them, and exits non-zero without rewriting anything; it fails closed when a file does not parse, when gofmt is absent, when git lists no files, when the git listing command fails, and when the listing is not NUL-terminated (treated as truncated). Its file list is NUL-delimited and comes from git (`git ls-files -co --exclude-standard -z -- '*.go'`), so spaces, newlines, non-ASCII names and names beginning with a dash are data rather than flags, and ignored trees such as .worktrees/ stay out of scope. gofmt runs in bounded batches so a very large repository cannot hit ARG_MAX, and it is taken from the caller's PATH rather than a toolchain this script selects. harness/check.sh calls the script instead of `make fmt` and records the command in its manifest; the CI Lint job runs it so a non-zero exit fails the job. scripts/pre-commit runs the same script on the working tree and additionally validates each staged Go blob (`git show :<path> | gofmt -l -`), because a commit contains the index rather than the working tree; its module check uses `go mod tidy -diff`, which reports without writing. README.md, harness/README.md and CONTRIBUTING.md describe the harness accurately and name `make setup-hooks` plus the core.hooksPath caveat. harness/invariants.md records the rule as H51.",
-  "failure_behavior": "A non-gofmt-clean tree, an unformatted staged blob, an unparsable Go file, a failed or truncated git listing, an empty listing, and a missing gofmt all fail closed with a message naming the cause; nothing is reformatted or rewritten automatically, so recorded evidence keeps binding to the tree it was recorded against. `make fmt` and `go mod tidy` remain available to developers and are never called from a verification path.",
-  "spec_revision": 0,
+  "security_problem": "The repository's verification paths mutated the tree they were verifying. harness/check.sh ran `make fmt` (`go fmt ./...`) and scripts/pre-commit ran `go mod tidy`, both of which rewrite tracked files. cmd/visor-workflow records a workspace snapshot digest before each command and rejects a later mismatch, so a single unformatted tracked file made an otherwise green task unreachable at HARNESS_VERIFIED with target_snapshot_mismatch. CI had no formatting check either, so the drift merged green, and no local hook warned the author. A commit also records the index rather than the working tree, so a file staged while unformatted and reformatted afterwards would pass a working-tree-only check and still fail CI.",
+  "required_behavior": "Formatting is checked, never applied, on every verification path, and each check's enumeration of what it examines is provably complete. scripts/check-gofmt checks every Go file in the tree: the list comes from git, is NUL-delimited, fails closed when the listing fails or is truncated, and gofmt runs in bounded batches with `--` so odd filenames stay data. scripts/check-staged-gofmt closes the one gap the working-tree pass leaves: it enumerates index/worktree differences (`git diff --name-only -z -- '*.go'`) rather than a --diff-filter list, so a rename, a copy or any other change type cannot be dropped from the check, and it skips non-regular index entries (mode 120000 gitlinks and symlinks) because a symlink named *.go is not Go source; a path whose index content equals the file on disk is already proven by the working-tree pass. scripts/pre-commit calls both arms and uses `go mod tidy -diff`, which reports without writing. The CI Lint job runs check-gofmt and the staged-blob matrix, so a non-zero exit fails the job. scripts/tests/check-staged-gofmt_test.sh is the committed regression matrix for the staged arm: modified, new, renamed, parse error, clean, unstaged-only, symlink, staged deletion and empty index. harness/invariants.md records the rule as H51, adjacent to H50.",
+  "failure_behavior": "A non-gofmt-clean tree, a staged blob that differs from the working tree and is unformatted, an unparsable Go file, a failed or truncated listing, an empty listing, and a missing gofmt all fail closed with a message naming the cause. Nothing is reformatted or rewritten, so recorded evidence keeps binding to the tree it was recorded against. Non-regular index entries and staged deletions do not block a commit. `make fmt` and `go mod tidy` remain available to developers and are never called from a verification path.",
+  "spec_revision": 1,
   "non_goals": [
     "Reformatting any Go file in this change",
     "Replacing golangci-lint or adding new linters",
     "Changing Makefile targets or the developer `make fmt` / `go mod tidy` workflow",
-    "Pinning or asserting a specific Go or gofmt version in the script",
-    "Touching any proxy, policy, audit or workflow logic beyond the Lint job step",
+    "Pinning or asserting a specific Go or gofmt version in the scripts",
+    "Touching any proxy, policy, audit or workflow logic beyond the Lint job steps",
     "New dependencies"
   ],
   "attack_classes": [],
   "allowed_paths": [
     "scripts/check-gofmt",
+    "scripts/check-staged-gofmt",
+    "scripts/tests/check-staged-gofmt_test.sh",
     "scripts/pre-commit",
     ".github/workflows/ci.yml",
     "harness/check.sh",
@@ -32,7 +34,7 @@
     {
       "name": "target_test",
       "expect": "pass",
-      "argv": ["bash", "scripts/check-gofmt"]
+      "argv": ["bash", "scripts/tests/check-staged-gofmt_test.sh"]
     },
     {
       "name": "harness",

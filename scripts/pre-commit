@@ -50,23 +50,14 @@ bash scripts/check-sensitive-content
 echo "==> gofmt check"
 bash scripts/check-gofmt
 
-# A commit contains the index, not the working tree. A file staged while
-# unformatted and formatted afterwards would pass the check above while the commit
-# still fails CI, so the staged blobs are checked as well.
+# A commit contains the index, not the working tree. scripts/check-staged-gofmt
+# closes the one gap the working-tree check above leaves: a staged blob that
+# differs from the file on disk, which includes a rename whose new path is staged
+# unformatted. It enumerates index/worktree differences rather than a
+# --diff-filter list, so no change type can be dropped from it, and it skips
+# non-regular entries such as a symlink named *.go.
 echo "==> gofmt check (staged blobs)"
-while IFS= read -r -d '' f; do
-    [ -n "$f" ] || continue
-    if ! out="$(git show ":$f" | gofmt -l 2>&1)"; then
-        echo "FAIL: staged '$f' is not parsable Go:"
-        echo "$out"
-        exit 1
-    fi
-    if [ -n "$out" ]; then
-        echo "FAIL: the staged version of '$f' is not gofmt-clean; the commit would fail CI."
-        echo "Run 'make fmt', then 'git add $f'."
-        exit 1
-    fi
-done < <(git diff --cached --name-only --diff-filter=ACM -z -- '*.go')
+bash scripts/check-staged-gofmt
 
 # --- go vet ---
 echo "==> go vet ./..."

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Check gofmt on the staged blobs that differ from the working tree.
+#
+# A commit records the index, not the working tree. The working-tree pass in
+# scripts/check-gofmt covers every Go file on disk, so the only gap left is a
+# file whose staged blob differs from the file on disk: staged while unformatted
+# and reformatted afterwards, or a rename whose staged new path is unformatted.
+#
+# This pass enumerates `git diff --name-only` between index and working tree
+# rather than a --diff-filter list. Every index/worktree discrepancy appears in
+# that listing by definition, so a rename, a copy or any future change type
+# cannot be dropped from the check; a path whose index content equals the file on
+# disk is already proven by the working-tree pass.
+#
+# Check-only: nothing is rewritten. Non-regular index entries (symlinks, gitlinks)
+# are skipped, because a symlink named *.go is not Go source.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if ! command -v gofmt >/dev/null 2>&1; then
+  echo "error: gofmt not found on PATH" >&2
+  exit 1
+fi
+
+LIST="$(mktemp)"
+trap 'rm -f "$LIST"' EXIT
+
+if ! git diff --name-only -z -- '*.go' >"$LIST"; then
+  echo "error: git diff failed; the staged list cannot be proven complete" >&2
+  exit 1
+fi
+
+LIST_BYTES="$(wc -c <"$LIST")"
+if [ "$LIST_BYTES" -gt 0 ]; then
+  LAST_BYTE="$(tail -c 1 "$LIST" | od -An -tu1 | tr -d '[:space:]')"
+  if [ "$LAST_BYTE" != "0" ]; then
+    echo "error: the index/worktree listing is not NUL-terminated; treating it as truncated" >&2
+    exit 1
+  fi
+fi
+
+checked=0
+
+while IFS= read -r -d '' path; do
+  [ -n "$path" ] || continue
+
+  entry="$(git ls-files --cached -s -z -- "$path" | tr '\0' '\n' | head -n 1)"
+  if [ -z "$entry" ]; then
+    # Not in the index (deleted from the index): nothing will be committed.
+    continue
+  fi
+
+  mode="${entry%% *}"
+  case "$mode" in
+    100644|100755) ;;
+    *)
+      # Symlink, gitlink, submodule or anything else that is not a regular file.
+      continue
+      ;;
+  esac
+
+  if ! out="$(git show ":$path" | gofmt -l 2>&1)"; then
+    echo "FAIL: staged '$path' is not parsable Go:" >&2
+    echo "$out" >&2
+    exit 1
+  fi
+  if [ -n "$out" ]; then
+    echo "FAIL: the staged version of '$path' is not gofmt-clean; the commit would fail CI." >&2
+    echo "Run 'make fmt', then 'git add $path'." >&2
+    exit 1
+  fi
+  checked=$((checked + 1))
+done <"$LIST"
+
+echo "staged gofmt: clean ($checked staged blobs differ from the working tree)"
