@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Check that every Go file in the working tree is gofmt-clean.
+#
+# Check-only by design: this script never rewrites a file. Verification must not
+# mutate the tree it verifies, because cmd/visor-workflow binds task evidence to
+# a workspace snapshot digest and rejects a later mismatch. `make fmt` stays the
+# developer command for fixing drift.
+#
+# Called by the CI Lint job, by harness/check.sh and by scripts/pre-commit, so one
+# rule applies on every verification path. gofmt is taken from PATH: this script
+# does not pick a toolchain, so whatever Go the caller selected is what runs.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if ! command -v gofmt >/dev/null 2>&1; then
+  echo "error: gofmt not found on PATH" >&2
+  exit 1
+fi
+
+# NUL-delimited (space, newline and non-ASCII safe) and derived from git so
+# ignored trees such as .worktrees/ stay out of scope.
+files=()
+while IFS= read -r -d '' f; do
+  files+=("$f")
+done < <(git ls-files -co --exclude-standard -z -- '*.go')
+
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "error: no Go files found; run this from a repository checkout" >&2
+  exit 1
+fi
+
+# `--` stops option parsing, so a filename beginning with a dash stays data. A
+# gofmt error (for example a file that does not parse) fails this substitution,
+# and `set -e` then exits non-zero: fail closed, never rewrite.
+unformatted="$(gofmt -l -- "${files[@]}")"
+
+if [ -n "$unformatted" ]; then
+  echo "FAIL: these files are not gofmt-clean:" >&2
+  echo "$unformatted" >&2
+  echo >&2
+  echo "Run 'make fmt' and commit the result." >&2
+  exit 1
+fi
+
+echo "gofmt: clean (${#files[@]} files)"

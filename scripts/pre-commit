@@ -46,6 +46,10 @@ echo "==> Sensitive file guard: passed"
 echo "==> Sensitive content scan"
 bash scripts/check-sensitive-content
 
+# --- gofmt (check-only; the harness and CI run the same script) ---
+echo "==> gofmt check"
+bash scripts/check-gofmt
+
 # --- go vet ---
 echo "==> go vet ./..."
 go vet ./... || { echo "FAIL: go vet found issues. Fix them before committing."; exit 1; }
