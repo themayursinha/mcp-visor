@@ -19,26 +19,68 @@ if ! command -v gofmt >/dev/null 2>&1; then
   exit 1
 fi
 
-# NUL-delimited (space, newline and non-ASCII safe) and derived from git so
-# ignored trees such as .worktrees/ stay out of scope.
-files=()
-while IFS= read -r -d '' f; do
-  files+=("$f")
-done < <(git ls-files -co --exclude-standard -z -- '*.go')
+LIST="$(mktemp)"
+trap 'rm -f "$LIST"' EXIT
 
-if [ "${#files[@]}" -eq 0 ]; then
-  echo "error: no Go files found; run this from a repository checkout" >&2
+# The listing comes from git so ignored trees such as .worktrees/ stay out of
+# scope, and it is NUL-delimited so spaces, newlines and non-ASCII names survive.
+# A failed or truncated listing is refused rather than read as empty: reporting a
+# tree clean from a listing that never arrived would be a false pass.
+if ! git ls-files -co --exclude-standard -z -- '*.go' >"$LIST"; then
+  echo "error: git ls-files failed; the Go file list cannot be proven complete" >&2
   exit 1
 fi
 
-# `--` stops option parsing, so a filename beginning with a dash stays data. A
-# gofmt error (for example a file that does not parse) fails this substitution,
-# and `set -e` then exits non-zero: fail closed, never rewrite.
-unformatted="$(gofmt -l -- "${files[@]}")"
+LIST_BYTES="$(wc -c <"$LIST")"
+if [ "$LIST_BYTES" -gt 0 ]; then
+  LAST_BYTE="$(tail -c 1 "$LIST" | od -An -tu1 | tr -d '[:space:]')"
+  if [ "$LAST_BYTE" != "0" ]; then
+    echo "error: git ls-files output is not NUL-terminated; treating the listing as truncated" >&2
+    exit 1
+  fi
+fi
+
+files=()
+while IFS= read -r -d '' f; do
+  files+=("$f")
+done <"$LIST"
+
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "error: git listed no Go files; run this from a repository checkout" >&2
+  exit 1
+fi
+
+# gofmt runs in bounded batches: one argv for the whole tree can exceed ARG_MAX on
+# a very large repository. `--` stops option parsing so a filename beginning with
+# a dash stays data.
+BATCH_SIZE=500
+unformatted=""
+batch=()
+
+check_batch() {
+  local out
+  if ! out="$(gofmt -l -- "${batch[@]}")"; then
+    echo "error: gofmt failed on a batch (unparsable Go file or invocation error)" >&2
+    return 1
+  fi
+  if [ -n "$out" ]; then
+    unformatted="${unformatted}${out}"$'\n'
+  fi
+  batch=()
+  return 0
+}
+
+for f in "${files[@]}"; do
+  batch+=("$f")
+  if [ "${#batch[@]}" -ge "$BATCH_SIZE" ]; then
+    check_batch || exit 1
+  fi
+done
+check_batch || exit 1
 
 if [ -n "$unformatted" ]; then
   echo "FAIL: these files are not gofmt-clean:" >&2
-  echo "$unformatted" >&2
+  printf '%s' "$unformatted" >&2
   echo >&2
   echo "Run 'make fmt' and commit the result." >&2
   exit 1

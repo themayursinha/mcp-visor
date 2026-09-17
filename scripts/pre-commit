@@ -50,6 +50,24 @@ bash scripts/check-sensitive-content
 echo "==> gofmt check"
 bash scripts/check-gofmt
 
+# A commit contains the index, not the working tree. A file staged while
+# unformatted and formatted afterwards would pass the check above while the commit
+# still fails CI, so the staged blobs are checked as well.
+echo "==> gofmt check (staged blobs)"
+while IFS= read -r -d '' f; do
+    [ -n "$f" ] || continue
+    if ! out="$(git show ":$f" | gofmt -l 2>&1)"; then
+        echo "FAIL: staged '$f' is not parsable Go:"
+        echo "$out"
+        exit 1
+    fi
+    if [ -n "$out" ]; then
+        echo "FAIL: the staged version of '$f' is not gofmt-clean; the commit would fail CI."
+        echo "Run 'make fmt', then 'git add $f'."
+        exit 1
+    fi
+done < <(git diff --cached --name-only --diff-filter=ACM -z -- '*.go')
+
 # --- go vet ---
 echo "==> go vet ./..."
 go vet ./... || { echo "FAIL: go vet found issues. Fix them before committing."; exit 1; }
@@ -67,11 +85,9 @@ else
     echo "WARNING: govulncheck not installed. Run: go install golang.org/x/vuln/cmd/govulncheck@latest"
 fi
 
-echo "==> go mod tidy"
-go mod tidy
-if ! git diff --quiet go.mod go.sum; then
-    echo "FAIL: go.mod/go.sum are not tidy. Run 'go mod tidy' before committing."
-    git diff go.mod go.sum
+echo "==> go mod tidy (check-only, never rewrites)"
+if ! go mod tidy -diff; then
+    echo "FAIL: go.mod/go.sum are not tidy. Run 'go mod tidy' and stage the result."
     exit 1
 fi
 

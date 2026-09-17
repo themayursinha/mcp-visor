@@ -2,14 +2,14 @@
   "task_id": "T-GOFMT-GATE-001",
   "invariant_ids": ["H51"],
   "security_sensitive": false,
-  "security_problem": "The repository's verification entry point mutated the tree it was verifying. harness/check.sh ran `make fmt` (`go fmt ./...`), which rewrote tracked files. cmd/visor-workflow records a workspace snapshot digest before each command and rejects a later mismatch, so a single unformatted tracked file made an otherwise green task unreachable at HARNESS_VERIFIED with target_snapshot_mismatch. CI had no formatting check either, so the drift merged green, and no local hook warned the author.",
-  "required_behavior": "One check-only script, scripts/check-gofmt, is the single formatting authority: it lists unformatted Go files, names them, and exits non-zero without rewriting anything; it fails closed on a Go file that does not parse, on a missing gofmt and on an empty file list. Its file list is NUL-delimited and comes from git (`git ls-files -co --exclude-standard -z -- '*.go'`), so spaces, newlines, non-ASCII names and names beginning with a dash are data rather than flags, and ignored trees such as .worktrees/ stay out of scope. It does not select a Go toolchain: gofmt comes from the caller's PATH. harness/check.sh calls it instead of `make fmt` and records the command in its manifest; scripts/pre-commit calls the same script so an author is warned before pushing; the CI Lint job runs it so a non-zero exit fails the job. CONTRIBUTING.md tells a contributor that unformatted Go fails the harness, the hook and CI, and that `make fmt` is the fix. harness/invariants.md records the rule as H51.",
-  "failure_behavior": "A non-gofmt-clean tree fails the harness, the pre-commit hook, CI and the contract's target command with the offending filenames printed; nothing is reformatted automatically, so recorded evidence keeps binding to the tree it was recorded against. A Go file that cannot be parsed exits non-zero. `make fmt` remains available to developers and is never called from a verification path.",
+  "security_problem": "The repository's verification paths mutated the tree they were verifying. harness/check.sh ran `make fmt` (`go fmt ./...`) and scripts/pre-commit ran `go mod tidy`, both of which rewrite tracked files. cmd/visor-workflow records a workspace snapshot digest before each command and rejects a later mismatch, so a single unformatted tracked file made an otherwise green task unreachable at HARNESS_VERIFIED with target_snapshot_mismatch. CI had no formatting check either, so the drift merged green, and no local hook warned the author.",
+  "required_behavior": "One check-only script, scripts/check-gofmt, is the single formatting authority on every verification path. It lists unformatted Go files, names them, and exits non-zero without rewriting anything; it fails closed when a file does not parse, when gofmt is absent, when git lists no files, when the git listing command fails, and when the listing is not NUL-terminated (treated as truncated). Its file list is NUL-delimited and comes from git (`git ls-files -co --exclude-standard -z -- '*.go'`), so spaces, newlines, non-ASCII names and names beginning with a dash are data rather than flags, and ignored trees such as .worktrees/ stay out of scope. gofmt runs in bounded batches so a very large repository cannot hit ARG_MAX, and it is taken from the caller's PATH rather than a toolchain this script selects. harness/check.sh calls the script instead of `make fmt` and records the command in its manifest; the CI Lint job runs it so a non-zero exit fails the job. scripts/pre-commit runs the same script on the working tree and additionally validates each staged Go blob (`git show :<path> | gofmt -l -`), because a commit contains the index rather than the working tree; its module check uses `go mod tidy -diff`, which reports without writing. README.md, harness/README.md and CONTRIBUTING.md describe the harness accurately and name `make setup-hooks` plus the core.hooksPath caveat. harness/invariants.md records the rule as H51.",
+  "failure_behavior": "A non-gofmt-clean tree, an unformatted staged blob, an unparsable Go file, a failed or truncated git listing, an empty listing, and a missing gofmt all fail closed with a message naming the cause; nothing is reformatted or rewritten automatically, so recorded evidence keeps binding to the tree it was recorded against. `make fmt` and `go mod tidy` remain available to developers and are never called from a verification path.",
   "spec_revision": 0,
   "non_goals": [
     "Reformatting any Go file in this change",
     "Replacing golangci-lint or adding new linters",
-    "Changing Makefile targets or the developer `make fmt` workflow",
+    "Changing Makefile targets or the developer `make fmt` / `go mod tidy` workflow",
     "Pinning or asserting a specific Go or gofmt version in the script",
     "Touching any proxy, policy, audit or workflow logic beyond the Lint job step",
     "New dependencies"
@@ -21,7 +21,9 @@
     ".github/workflows/ci.yml",
     "harness/check.sh",
     "harness/invariants.md",
+    "harness/README.md",
     "CONTRIBUTING.md",
+    "README.md",
     "harness/tasks/T-GOFMT-GATE-001.json"
   ],
   "approval_gated_paths": [],

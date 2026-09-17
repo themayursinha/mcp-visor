@@ -22,6 +22,11 @@ Unformatted Go fails the harness, the pre-commit hook and CI: `scripts/check-gof
 is check-only and exits non-zero rather than rewriting files. Run `make fmt` and
 commit the result.
 
+Install the pre-commit hook with `make setup-hooks`. It checks the staged blobs as
+well as the working tree, so a commit cannot carry formatting that CI will reject.
+A machine-wide `core.hooksPath` overrides repo hooks and removes that early
+warning only; the harness and CI still fail on the same input.
+
 ## Before Submitting a PR
 
 ```bash

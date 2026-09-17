@@ -13,7 +13,7 @@ go run ./cmd/visor-workflow validate -task harness/tasks/template.json
 | `project-contract.md` | Non-negotiables |
 | `invariants.md` | Security properties → tests |
 | `loop.md` | Supervised development loop |
-| `check.sh` | fmt + vet + full tests + suite evidence |
+| `check.sh` | gofmt check + vet + full tests + suite evidence |
 | `tasks/*.json` | Task contracts for `visor-workflow` |
 | `../cmd/visor-workflow` | validate / scope / run / verify / report |
 | `../internal/workflow` | Implementation + tests |
