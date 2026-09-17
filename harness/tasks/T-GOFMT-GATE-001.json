@@ -21,7 +21,8 @@
     "harness/check.sh",
     "harness/invariants.md",
     "CONTRIBUTING.md",
-    "harness/tasks/T-GOFMT-GATE-001.json"
+    "harness/tasks/T-GOFMT-GATE-001.json",
+    "internal/proxy/proxy.go"
   ],
   "approval_gated_paths": [],
   "max_attempts": 3,
