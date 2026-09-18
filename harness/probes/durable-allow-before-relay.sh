@@ -48,7 +48,7 @@ h52_refuse_bad_delay() {
   out="$(H52_PROBE_SELF_CHECK=0 H52_PROBE_COMMIT_DELAY_MS="$bad" bash "$SELF" 2>&1)"
   rc=$?
   set -e
-  want="error: H52_PROBE_COMMIT_DELAY_MS must be a positive integer (got \"${bad}\")"
+  want="error: H52_PROBE_COMMIT_DELAY_MS must be a positive decimal integer without leading zeros or a sign (got \"${bad}\")"
   if [ "$rc" -eq 0 ]; then
     echo "ERROR    self-check: H52_PROBE_COMMIT_DELAY_MS=$(printf '%q' "$bad") was not refused (exit 0)" >&2
     return 1
@@ -66,7 +66,7 @@ h52_refuse_bad_delay() {
 
 if [ "${H52_PROBE_SELF_CHECK-1}" != "0" ]; then
   self_ok=1
-  for bad in 0 -1 abc ""; do
+  for bad in 0 -1 abc "" 04000 0000 "+4000"; do
     if ! h52_refuse_bad_delay "$bad"; then
       self_ok=0
     fi
@@ -77,8 +77,12 @@ if [ "${H52_PROBE_SELF_CHECK-1}" != "0" ]; then
 fi
 
 DELAY="${H52_PROBE_COMMIT_DELAY_MS-4000}"
-if ! [[ "$DELAY" =~ ^[0-9]+$ ]] || [ "$DELAY" -lt 1 ]; then
-  echo "error: H52_PROBE_COMMIT_DELAY_MS must be a positive integer (got \"${DELAY}\")" >&2
+# The delay is embedded as a Go integer literal (see h52_inject_commit_delay),
+# so only canonical decimal text is accepted here: a zero-padded literal such as
+# 04000 is octal to the Go compiler (2048 ms) while the shell and Python read it
+# as 4000, which would make the injected delay and the reported delay disagree.
+if ! [[ "$DELAY" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: H52_PROBE_COMMIT_DELAY_MS must be a positive decimal integer without leading zeros or a sign (got \"${DELAY}\")" >&2
   exit 2
 fi
 
@@ -114,6 +118,13 @@ h52_inject_commit_delay() {
 import json, sys
 
 path, marker, delay = sys.argv[1], sys.argv[2], sys.argv[3]
+# Build the Go literal from a parsed int, never from the caller's text: a
+# zero-padded value such as "04000" embedded verbatim would be compiled by Go
+# as an octal literal (2048 ms) while the shell and Python read it as 4000.
+delay_ms = int(delay, 10)
+if delay_ms < 1:
+    sys.stderr.write("error: injected delay must be at least 1 ms\n")
+    sys.exit(1)
 src = open(path).read()
 sig = "func (l *Logger) CommitAuthorization(event Event) error {"
 idx = src.find(sig)
@@ -148,7 +159,7 @@ if body.count(sync) != 1:
     sys.stderr.write("error: CommitAuthorization syncFn block not found exactly once\n")
     sys.exit(1)
 insert = (
-    f"\ttime.Sleep({delay} * time.Millisecond)\n"
+    f"\ttime.Sleep({delay_ms:d} * time.Millisecond)\n"
     + sync
     + f"\t_ = os.WriteFile({json.dumps(marker)}, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o600)\n"
 )
