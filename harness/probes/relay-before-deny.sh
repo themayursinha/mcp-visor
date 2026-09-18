@@ -59,6 +59,10 @@ while IFS= read -r f; do
   if [ -f "$f" ]; then
     mkdir -p "$SCRATCH/tree/$(dirname "$f")"
     cp -f "$f" "$SCRATCH/tree/$f"
+  elif [ -f "$SCRATCH/tree/$f" ]; then
+    # A working-tree deletion is not in HEAD's archive; remove the scratch copy
+    # so the probe measures the working tree rather than a HEAD residue.
+    rm -f "$SCRATCH/tree/$f"
   fi
 done <<EOF
 $(git diff --name-only HEAD)
@@ -105,27 +109,41 @@ echo
 
 STATUS=0
 for leg in "${DENY_LEGS[@]}"; do
-  log="$SCRATCH/$leg.log"
   # Anchored per level: the first element selects the test, the second the scenario.
   pattern="$(printf '^TestVerifiedActorBackendObserver$/^%s$' "$leg")"
-  set +e
-  (cd "$SCRATCH/tree" && go test ./tests/integration/ \
-    -count="$REPS" -timeout 900s \
-    -run "$pattern" ) >"$log" 2>&1
-  rc=$?
-  set -e
-  if grep -q 'no tests to run' "$log"; then
+  caught=0
+  saw_pass=0
+  saw_no_test=0
+  rc=0
+  for ((rep=1; rep<=REPS; rep++)); do
+    log="$SCRATCH/${leg}.${rep}.log"
+    set +e
+    (cd "$SCRATCH/tree" && go test ./tests/integration/ \
+      -count=1 -timeout 900s \
+      -run "$pattern" ) >"$log" 2>&1
+    rc=$?
+    set -e
+    if grep -q 'no tests to run' "$log"; then
+      saw_no_test=1
+    fi
+    if grep -q -- "$LEAK" "$log"; then
+      caught=$((caught + 1))
+    fi
+    if [ "$rc" -eq 0 ]; then
+      saw_pass=1
+    fi
+  done
+  if [ "$saw_no_test" -ne 0 ]; then
     echo "ERROR    $leg: the focused leg did not select any test"
     STATUS=1
     continue
   fi
-  caught="$(grep -c -- "$LEAK" "$log" 2>/dev/null || true)"
-  if [ "$rc" -eq 0 ]; then
+  if [ "$saw_pass" -ne 0 ] && [ "$caught" -eq 0 ]; then
     echo "MISS     $leg: the scenario passed against a relayed call (0 of $REPS caught)"
     STATUS=1
     continue
   fi
-  if [ "${caught:-0}" -lt "$REPS" ]; then
+  if [ "$saw_pass" -ne 0 ] || [ "$caught" -lt "$REPS" ]; then
     echo "PARTIAL  $leg: $caught of $REPS repetitions named the leak (exit $rc)"
     STATUS=1
     continue

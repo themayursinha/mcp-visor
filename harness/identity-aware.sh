@@ -36,7 +36,7 @@ fi
 # incomplete (unmeasured); never treated as a denial.
 h52_artifact_status() {
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "incomplete (unmeasured)"
+    echo "unmeasured (python3 unavailable)"
     return 0
   fi
   python3 - "$1" <<'PY'
@@ -105,6 +105,16 @@ H52_ARTIFACT_DIR="$ART" go test ./tests/integration/ \
   | tee "$ART/test.log"
 STATUS="${PIPESTATUS[0]}"
 set -e
+
+# go test exits 0 when -run selects nothing, so a green exit is not evidence
+# that the named test ran.
+if [ "$STATUS" -eq 0 ]; then
+  if ! grep -q -- '--- PASS: TestVerifiedActorBackendObserver (' "$ART/test.log" \
+      || ! grep -q -- '--- PASS: TestVerifiedActorBackendObserver/' "$ART/test.log"; then
+    echo "error: TestVerifiedActorBackendObserver: the harness measured nothing" >&2
+    STATUS=1
+  fi
+fi
 
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 

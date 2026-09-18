@@ -1245,7 +1245,7 @@ func h52DecideBackendReceipt(res h52HarnessResult, callID string, wantReceived *
 			return found, nil
 		}
 		if found != nil {
-			return found, fmt.Errorf("the backend received a call the gate denied: %+v", found)
+			return found, fmt.Errorf("the backend received a call the gate denied: %s", h52TxnString(found.Transaction))
 		}
 		return nil, nil
 	}
@@ -1513,7 +1513,7 @@ func h52RequireDenied(t *testing.T, res h52HarnessResult, callID, reasonContains
 	}
 	rec := h52BackendReceipt(t, res, callID)
 	if rec != nil {
-		t.Fatalf("%s: the backend received a call the gate denied: %+v", res.name, rec)
+		t.Fatalf("%s: the backend received a call the gate denied: %s", res.name, h52TxnString(rec.Transaction))
 	}
 	h52RequireClientCardinality(t, res, callID, false)
 	message := h52DenyMessage(t, res, callID)
@@ -1545,6 +1545,7 @@ func h52RequireStartupRefusal(t *testing.T, res h52HarnessResult, stderrContains
 	if res.callSent {
 		t.Fatalf("%s: expected visor to refuse to start; exit=%d stderr=%s", res.name, res.exitCode, res.stderr)
 	}
+	// Documented boundary (design contract §4.7): refusal legs exit before the proxy can spawn the observer, so an absent or incomplete session is expected.
 	if n, complete := h52CompleteArtifactCalls(res.observerArtifact); complete && n != 0 {
 		t.Fatalf("%s: expected visor to refuse to start; complete observer session has %d call record(s); exit=%d stderr=%s", res.name, n, res.exitCode, res.stderr)
 	}
