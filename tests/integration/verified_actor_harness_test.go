@@ -1445,7 +1445,6 @@ func h52RequireForwarded(t *testing.T, res h52HarnessResult, callID string) *h52
 	if res.exited {
 		t.Fatalf("%s: visor exited (code %d) instead of serving; stderr: %s", res.name, res.exitCode, res.stderr)
 	}
-	h52RequireClientCardinality(t, res, callID, true)
 	rec := h52BackendReceipt(t, res, callID)
 	if rec == nil {
 		n := 0
@@ -1455,6 +1454,7 @@ func h52RequireForwarded(t *testing.T, res h52HarnessResult, callID string) *h52
 		}
 		t.Fatalf("%s: the expected call never reached the backend (session calls=%d)", res.name, n)
 	}
+	h52RequireClientCardinality(t, res, callID, true)
 	if rec.Method != "tools/call" || rec.Tool != "write_file" {
 		t.Fatalf("%s: observer recorded method=%q tool=%q", res.name, rec.Method, rec.Tool)
 	}
@@ -1511,14 +1511,14 @@ func h52RequireDenied(t *testing.T, res h52HarnessResult, callID, reasonContains
 	if res.exited {
 		t.Fatalf("%s: visor exited (code %d) instead of denying the call; stderr: %s", res.name, res.exitCode, res.stderr)
 	}
+	rec := h52BackendReceipt(t, res, callID)
+	if rec != nil {
+		t.Fatalf("%s: the backend received a call the gate denied: %+v", res.name, rec)
+	}
 	h52RequireClientCardinality(t, res, callID, false)
 	message := h52DenyMessage(t, res, callID)
 	if !strings.Contains(message, reasonContains) {
 		t.Fatalf("%s: expected the JSON-RPC error.message to name %q, got %q (an echoed request id must not satisfy this leg)", res.name, reasonContains, message)
-	}
-	rec := h52BackendReceipt(t, res, callID)
-	if rec != nil {
-		t.Fatalf("%s: the backend received a call the gate denied: %+v", res.name, rec)
 	}
 }
 

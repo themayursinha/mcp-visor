@@ -9,8 +9,10 @@
 # (a separate process that records every tools/call it receives on the wire and
 # imports nothing from this repository), drives the positive, negative and
 # discriminating-control scenarios, and asserts the criterion from the observer's
-# own artifact. A denial returned to the client for a call that had already been
-# relayed fails this harness.
+# own artifact. A denial returned to the client is not enough: if the completed
+# observer session shows the backend received the call, the harness fails. An
+# incomplete session fails the harness as unmeasured; it never counts as a
+# denial.
 #
 # Run from the repository root.
 set -euo pipefail
@@ -28,6 +30,57 @@ if ! command -v go >/dev/null 2>&1; then
   echo "error: go not found on PATH" >&2
   exit 1
 fi
+
+# Complete only when the artifact ends with an `end` record whose prefix byte
+# count and digest match. Count only tools/call records. Anything else is
+# incomplete (unmeasured); never treated as a denial.
+h52_artifact_status() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "incomplete (unmeasured)"
+    return 0
+  fi
+  python3 - "$1" <<'PY'
+import hashlib, json, sys
+
+def unmeasured():
+    print("incomplete (unmeasured)")
+    raise SystemExit(0)
+
+path = sys.argv[1]
+try:
+    raw = open(path, "rb").read()
+except OSError:
+    unmeasured()
+if not raw.strip():
+    unmeasured()
+trimmed = raw[:-1] if raw.endswith(b"\n") else raw
+idx = trimmed.rfind(b"\n")
+if idx < 0:
+    prefix, end_line = b"", trimmed
+else:
+    prefix, end_line = trimmed[: idx + 1], trimmed[idx + 1 :]
+try:
+    term = json.loads(end_line)
+except Exception:
+    unmeasured()
+if not isinstance(term, dict) or term.get("event") != "end":
+    unmeasured()
+digest = hashlib.sha256(prefix).hexdigest()
+if term.get("bytes") != len(prefix) or term.get("sha256") != digest:
+    unmeasured()
+n = 0
+for line in prefix.split(b"\n"):
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+    except Exception:
+        unmeasured()
+    if obj.get("record") == "call":
+        n += 1
+print("complete, %d tools/call record(s)" % n)
+PY
+}
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 # Run-unique artifact directory. Scenario file names are fixed, so two runs in the
@@ -62,19 +115,19 @@ GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "- **Command:** \`H52_ARTIFACT_DIR=$ART go test ./tests/integration/ -count=1 -v -timeout 300s -run ^TestVerifiedActorBackendObserver$\`"
   echo "- **Exit status:** $STATUS"
   echo
-  echo "## Observer artifacts (one JSON line per tools/call the backend received)"
+  echo "## Observer artifacts"
   echo
   if compgen -G "$ART/*.jsonl" >/dev/null; then
     for f in "$ART"/*.jsonl; do
-      echo "- \`$(basename "$f")\`: $(wc -l <"$f" | tr -d ' ') received call(s)"
+      echo "- \`$(basename "$f")\`: $(h52_artifact_status "$f")"
     done
   else
-    echo "- none: the backend received no tools/call in any scenario"
+    echo "- no observer artifacts: incomplete (unmeasured)"
   fi
   echo
-  echo "An absent or empty artifact for a denied scenario is the expected evidence:"
-  echo "the gate denied before relay. The positive and discriminating-control scenarios"
-  echo "must show a received call, which is what proves the artifact path is live."
+  echo "A denied scenario must produce a complete observer session with no \`tools/call\`"
+  echo "record for that id. An absent, empty or incomplete artifact is a harness failure,"
+  echo "not a denial."
 } >"$ART/manifest.md"
 
 if [ "$STATUS" -ne 0 ]; then
