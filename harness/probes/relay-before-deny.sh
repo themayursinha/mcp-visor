@@ -18,7 +18,10 @@
 # Run from anywhere; the script resolves the repository root itself.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Absolute path before cd: the self-check re-invokes this file from any cwd.
+PROBE_DIR="$(cd "$(dirname "$0")" && pwd)"
+SELF="$PROBE_DIR/$(basename "$0")"
+ROOT="$(cd "$PROBE_DIR/../.." && pwd)"
 cd "$ROOT"
 
 export PATH="${PATH:-}"
@@ -32,6 +35,61 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 
+# A value is canonical decimal only if it is ASCII digits with no leading zero and
+# no sign. The match runs under LC_ALL=C because a UTF-8 collation range such as
+# [0-9] also matches non-ASCII digits and fractions. This knob feeds Bash
+# arithmetic, which parses a leading zero as octal (010 is 8, 08 is an error), so
+# a non-canonical spelling silently changes the number of repetitions requested.
+h52_is_canonical_decimal() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+h52_refuse_bad_reps() {
+  local bad="$1" want="$2"
+  local out rc
+  set +e
+  out="$(H52_PROBE_SELF_CHECK=0 H52_PROBE_REPS="$bad" bash "$SELF" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    echo "ERROR    self-check: H52_PROBE_REPS=$(printf '%q' "$bad") was not refused (exit 0)" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$out" | grep -qF -- "$want"; then
+    echo "ERROR    self-check: H52_PROBE_REPS=$(printf '%q' "$bad") did not print the refusal sentence" >&2
+    return 1
+  fi
+  if printf '%s\n' "$out" | grep -q -- 'falsification probe'; then
+    echo "ERROR    self-check: H52_PROBE_REPS=$(printf '%q' "$bad") started the probe" >&2
+    return 1
+  fi
+  return 0
+}
+
+if [ "${H52_PROBE_SELF_CHECK-1}" != "0" ]; then
+  self_ok=1
+  shape='error: H52_PROBE_REPS must be a positive decimal integer without leading zeros or a sign (got '
+  for bad in 0 -1 abc "" 04000 010 08 "+5" １2; do
+    if ! h52_refuse_bad_reps "$bad" "${shape}\"${bad}\")"; then
+      self_ok=0
+    fi
+  done
+  if [ "$self_ok" -ne 1 ]; then
+    exit 1
+  fi
+fi
+
+# Unset -> 5. Set-but-empty, zero, negative, junk and any non-canonical spelling
+# (leading zero, sign, non-ASCII digit) must not become "run nothing or a
+# different count and still report probe OK". Bash arithmetic reads a leading zero
+# as octal, so the spelling is checked here, before any scratch tree is built.
+REPS="${H52_PROBE_REPS-5}"
+if ! h52_is_canonical_decimal "$REPS"; then
+  echo "error: H52_PROBE_REPS must be a positive decimal integer without leading zeros or a sign (got \"${REPS}\")" >&2
+  exit 2
+fi
+
 DENY_LEGS=(
   expired_context
   required_scope_missing
@@ -39,7 +97,6 @@ DENY_LEGS=(
   caller_override_of_principal
   actor_expires_while_approval_pending
 )
-REPS="${H52_PROBE_REPS:-5}"
 LEAK="the backend received a call the gate denied"
 
 SCRATCH="$(mktemp -d)"
@@ -114,6 +171,10 @@ for leg in "${DENY_LEGS[@]}"; do
   caught=0
   saw_pass=0
   saw_no_test=0
+  miss_rep=0
+  miss_rc=0
+  pass_rep=0
+  pass_rep_rc=0
   rc=0
   for ((rep=1; rep<=REPS; rep++)); do
     log="$SCRATCH/${leg}.${rep}.log"
@@ -128,9 +189,16 @@ for leg in "${DENY_LEGS[@]}"; do
     fi
     if grep -q -- "$LEAK" "$log"; then
       caught=$((caught + 1))
+    elif [ "$miss_rep" -eq 0 ]; then
+      miss_rep=$rep
+      miss_rc=$rc
     fi
     if [ "$rc" -eq 0 ]; then
       saw_pass=1
+      if [ "$pass_rep" -eq 0 ]; then
+        pass_rep=$rep
+        pass_rep_rc=$rc
+      fi
     fi
   done
   if [ "$saw_no_test" -ne 0 ]; then
@@ -144,7 +212,11 @@ for leg in "${DENY_LEGS[@]}"; do
     continue
   fi
   if [ "$saw_pass" -ne 0 ] || [ "$caught" -lt "$REPS" ]; then
-    echo "PARTIAL  $leg: $caught of $REPS repetitions named the leak (exit $rc)"
+    if [ "$miss_rep" -ne 0 ]; then
+      echo "PARTIAL  $leg: $caught of $REPS repetitions named the leak; repetition $miss_rep exited $miss_rc without naming it"
+    else
+      echo "PARTIAL  $leg: $caught of $REPS repetitions named the leak; repetition $pass_rep exited 0 against a relayed call"
+    fi
     STATUS=1
     continue
   fi

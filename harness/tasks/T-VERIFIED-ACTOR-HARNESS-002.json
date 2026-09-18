@@ -1,0 +1,55 @@
+{
+  "task_id": "T-VERIFIED-ACTOR-HARNESS-002",
+  "invariant_ids": ["H52"],
+  "security_sensitive": false,
+  "security_problem": "The H52 apparatus as merged (harness/identity-aware.sh, harness/probes/relay-before-deny.sh, tests/integration/verified_actor_harness_test.go) contains carried verification gaps: the falsification probe can be configured into running nothing and still report OK; the entry point's anti-vacuity guard accepts a single subtest as the whole suite; the durable-allow ordering leg is measured from the audit record's creation timestamp, which is not the durable commit completing; a non-blocking salvage can silently skip a load-bearing client-stream leg; and three diagnostics/failure-class identifications report a weaker or wrong reason. None of these is a defect in the shipped deny path; each weakens the apparatus's ability to fail for the right reason.",
+  "required_behavior": "harness/probes/relay-before-deny.sh refuses any H52_PROBE_REPS that is not a positive integer (exit non-zero, named refusal on stderr, before any scratch tree, build or test run) and proves that refusal in-run for 0, a negative value, a non-numeric value and an empty value. harness/identity-aware.sh requires the root PASS line plus the PASS line of every named subtest of the published scenario matrix plus a minimum subtest count, and names the requirement that failed. harness/probes/durable-allow-before-relay.sh injects a delay into CommitAuthorization between the full append and the explicit sync in a scratch copy, records the wall-clock instant at which that commit path returned, and requires the independent observer's receive for the same transaction to be no earlier than that instant minus a small tolerance; it also runs a discriminating control tree in which the envelope is relayed to the backend before the commit completes and requires its own check to detect that. tests/integration/verified_actor_harness_test.go reads a denial's client line only from the recorded client stream and fails loudly if it is absent (the unreachable res.response fallback becomes a contract violation), salvages the pending client line with a bounded blocking receive so the leg cannot be skipped by timing, and makes the StdoutPipe subtest require positive evidence that visor served and decided the call so it cannot pass because nothing ran. harness/invariants.md H52 states the tolerated startup-refusal observation exactly as the harness judges it.",
+  "failure_behavior": "Any command that cannot establish its own precondition exits non-zero and names the missing requirement: an invalid repetition count, a missing root PASS line, a missing or short subtest floor, a client line that was never recorded, a salvage that times out, a StdoutPipe scenario in which visor never served or never decided, and a backend receive that precedes the durable commit path returning. No new leg converts an absent or incomplete artifact into a pass, and no existing assertion is weakened, removed or re-scoped.",
+  "spec_revision": 0,
+  "non_goals": [
+    "No enforcement change: no file under internal/ or cmd/ is modified by this task; the probe injections exist only inside scratch copies",
+    "No change to the gate, its decisions, its reasons or the deny path",
+    "No weakening, deletion or re-scoping of any existing assertion, test or probe leg",
+    "No new dependency, no new CLI flag, no policy schema change",
+    "No evidence-correlation or stable-shared-id work (separate card)",
+    "No strict compiled policy work (separate card)",
+    "No merge, no ready-for-review, no review request; the branch stays draft",
+    "No falsification probes C-G beyond the durable-allow probe added here"
+  ],
+  "attack_classes": [],
+  "allowed_paths": [
+    "harness/tasks/T-VERIFIED-ACTOR-HARNESS-002.json",
+    "harness/identity-aware.sh",
+    "harness/invariants.md",
+    "harness/probes/relay-before-deny.sh",
+    "harness/probes/durable-allow-before-relay.sh",
+    "tests/integration/verified_actor_harness_test.go"
+  ],
+  "approval_gated_paths": [
+    "harness/invariants.md",
+    "tests/integration/verified_actor_harness_test.go"
+  ],
+  "max_attempts": 3,
+  "required_commands": [
+    {
+      "name": "target_test",
+      "expect": "pass",
+      "argv": ["bash", "harness/identity-aware.sh"]
+    },
+    {
+      "name": "probe_relay_before_deny",
+      "expect": "pass",
+      "argv": ["bash", "harness/probes/relay-before-deny.sh"]
+    },
+    {
+      "name": "probe_durable_allow_before_relay",
+      "expect": "pass",
+      "argv": ["bash", "harness/probes/durable-allow-before-relay.sh"]
+    },
+    {
+      "name": "harness",
+      "expect": "pass",
+      "argv": ["harness/check.sh"]
+    }
+  ]
+}

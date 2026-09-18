@@ -107,12 +107,51 @@ STATUS="${PIPESTATUS[0]}"
 set -e
 
 # go test exits 0 when -run selects nothing, so a green exit is not evidence
-# that the named test ran.
+# that the named test ran. A narrowed -run (or a rename/removal) otherwise
+# turns one subtest into a green suite: require the root PASS line, the PASS
+# line of every published scenario, and a minimum subtest count of 20.
 if [ "$STATUS" -eq 0 ]; then
   if ! grep -q -- '--- PASS: TestVerifiedActorBackendObserver (' "$ART/test.log" \
       || ! grep -q -- '--- PASS: TestVerifiedActorBackendObserver/' "$ART/test.log"; then
     echo "error: TestVerifiedActorBackendObserver: the harness measured nothing" >&2
     STATUS=1
+  else
+    H52_REQUIRED_SUBTESTS=(
+      observer_tools_call_then_eof_writes_end
+      observer_stdin_left_open_has_no_terminal_record
+      observer_unparsable_line_writes_observer_error
+      deny_against_complete_session_that_contains_the_id
+      forwarded_against_complete_zero_call_session
+      stdout_pipe_parent_is_unknown_not_a_deny_pass
+      positive_verified_actor
+      discriminating_control_without_identity_requirement
+      missing_context
+      expired_context
+      unsupported_verification_method
+      required_scope_missing
+      fake_identity_metadata_in_arguments
+      caller_supplied_identity_is_stripped_before_relay
+      caller_override_of_principal
+      truncated_actor_payload
+      trailing_json_actor_payload
+      actor_expires_while_approval_pending
+      multiple_audiences_where_exactly_one_is_required
+      gap_probe_wrong_audience_is_not_enforced
+    )
+    for sub in "${H52_REQUIRED_SUBTESTS[@]}"; do
+      if ! grep -q -- "--- PASS: TestVerifiedActorBackendObserver/${sub} (" "$ART/test.log"; then
+        echo "error: TestVerifiedActorBackendObserver: the harness floor was not met: no PASS line for subtest ${sub}" >&2
+        STATUS=1
+      fi
+    done
+    sub_pass="$(grep -c -- '--- PASS: TestVerifiedActorBackendObserver/' "$ART/test.log" || true)"
+    if [ "${sub_pass:-0}" -lt 20 ]; then
+      echo "error: TestVerifiedActorBackendObserver: the harness floor was not met: ${sub_pass:-0} subtest PASS line(s), floor is 20" >&2
+      STATUS=1
+    fi
+    if [ "$STATUS" -eq 0 ]; then
+      echo "subtests passed: $sub_pass"
+    fi
   fi
 fi
 
