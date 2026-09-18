@@ -6,11 +6,13 @@
 # creation timestamp. That timestamp is assigned in prepareRecord before
 # appendFull, sync, and return, so a relay that happens after the timestamp
 # exists but before CommitAuthorization returns still satisfies the comparison.
-# This probe closes that class: it injects a delay after the successful sync
-# and before chain advance, writes a marker at that instant, and requires the
+# This probe closes that class: it injects a delay between the full append and
+# the explicit sync, writes a marker immediately after the sync succeeds (the
+# first instant at which the committed record is durable), and requires the
 # independent observer's receive to be no earlier than the marker (minus a
-# small tolerance). A discriminating control relays the envelope inside the
-# commit window and requires this probe's own check to fail.
+# small tolerance). A discriminating control relays the envelope inside that
+# non-durable window -- i.e. while the injected delay is still running, before
+# the sync -- and requires this probe's own check to fail.
 #
 # The injection lives only in the scratch copy. Nothing under the repository is
 # modified: no commit, no push, no tracked-file change.
@@ -146,8 +148,8 @@ if body.count(sync) != 1:
     sys.stderr.write("error: CommitAuthorization syncFn block not found exactly once\n")
     sys.exit(1)
 insert = (
-    sync
-    + f"\ttime.Sleep({delay} * time.Millisecond)\n"
+    f"\ttime.Sleep({delay} * time.Millisecond)\n"
+    + sync
     + f"\t_ = os.WriteFile({json.dumps(marker)}, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o600)\n"
 )
 new_body = body.replace(sync, insert, 1)
@@ -446,7 +448,7 @@ fi
 
 echo
 if [ "$STATUS" -ne 0 ]; then
-  echo "=== durable-allow-before-relay probe FAILED: the harness does not catch a relay inside the commit window ==="
+  echo "=== durable-allow-before-relay probe FAILED: the harness does not catch a relay inside the non-durable commit window ==="
   exit 1
 fi
 echo "=== durable-allow-before-relay probe OK: backend receive is no earlier than the durable commit return ==="
