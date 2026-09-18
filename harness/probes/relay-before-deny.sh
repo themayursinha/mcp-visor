@@ -35,14 +35,23 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 
+# A value is canonical decimal only if it is ASCII digits with no leading zero and
+# no sign. The match runs under LC_ALL=C because a UTF-8 collation range such as
+# [0-9] also matches non-ASCII digits and fractions. This knob feeds Bash
+# arithmetic, which parses a leading zero as octal (010 is 8, 08 is an error), so
+# a non-canonical spelling silently changes the number of repetitions requested.
+h52_is_canonical_decimal() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
 h52_refuse_bad_reps() {
-  local bad="$1"
-  local out rc want
+  local bad="$1" want="$2"
+  local out rc
   set +e
   out="$(H52_PROBE_SELF_CHECK=0 H52_PROBE_REPS="$bad" bash "$SELF" 2>&1)"
   rc=$?
   set -e
-  want="error: H52_PROBE_REPS must be a positive integer (got \"${bad}\")"
   if [ "$rc" -eq 0 ]; then
     echo "ERROR    self-check: H52_PROBE_REPS=$(printf '%q' "$bad") was not refused (exit 0)" >&2
     return 1
@@ -60,8 +69,9 @@ h52_refuse_bad_reps() {
 
 if [ "${H52_PROBE_SELF_CHECK-1}" != "0" ]; then
   self_ok=1
-  for bad in 0 -1 abc ""; do
-    if ! h52_refuse_bad_reps "$bad"; then
+  shape='error: H52_PROBE_REPS must be a positive decimal integer without leading zeros or a sign (got '
+  for bad in 0 -1 abc "" 04000 010 08 "+5" １2; do
+    if ! h52_refuse_bad_reps "$bad" "${shape}\"${bad}\")"; then
       self_ok=0
     fi
   done
@@ -70,11 +80,13 @@ if [ "${H52_PROBE_SELF_CHECK-1}" != "0" ]; then
   fi
 fi
 
-# Unset -> 5. Set-but-empty, zero, negative and junk must not become "run nothing
-# and still report probe OK".
+# Unset -> 5. Set-but-empty, zero, negative, junk and any non-canonical spelling
+# (leading zero, sign, non-ASCII digit) must not become "run nothing or a
+# different count and still report probe OK". Bash arithmetic reads a leading zero
+# as octal, so the spelling is checked here, before any scratch tree is built.
 REPS="${H52_PROBE_REPS-5}"
-if ! [[ "$REPS" =~ ^[0-9]+$ ]] || [ "$REPS" -lt 1 ]; then
-  echo "error: H52_PROBE_REPS must be a positive integer (got \"${REPS}\")" >&2
+if ! h52_is_canonical_decimal "$REPS"; then
+  echo "error: H52_PROBE_REPS must be a positive decimal integer without leading zeros or a sign (got \"${REPS}\")" >&2
   exit 2
 fi
 

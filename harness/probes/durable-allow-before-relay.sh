@@ -41,14 +41,31 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# A value is canonical decimal only if it is ASCII digits with no leading zero and
+# no sign. The match runs under LC_ALL=C because a UTF-8 collation range such as
+# [0-9] also matches non-ASCII digits and fractions, which the consumer of this
+# value (an int literal in generated Go) cannot parse.
+h52_is_canonical_decimal() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+# The control stage relays at half the delay and its judge recognizes a violation
+# only when the receive is more than TOLERANCE_MS before the marker, so a delay at
+# or below twice that tolerance cannot produce a detectable violation: the control
+# would report MISS while the injected fault worked exactly as designed. The
+# minimum is derived from the judge's own tolerance, which is handed to both judge
+# blocks below instead of being repeated as a literal there.
+TOLERANCE_MS=250
+MIN_DELAY_MS=$((4 * TOLERANCE_MS))
+
 h52_refuse_bad_delay() {
-  local bad="$1"
-  local out rc want
+  local bad="$1" want="$2"
+  local out rc
   set +e
   out="$(H52_PROBE_SELF_CHECK=0 H52_PROBE_COMMIT_DELAY_MS="$bad" bash "$SELF" 2>&1)"
   rc=$?
   set -e
-  want="error: H52_PROBE_COMMIT_DELAY_MS must be a positive decimal integer without leading zeros or a sign (got \"${bad}\")"
   if [ "$rc" -eq 0 ]; then
     echo "ERROR    self-check: H52_PROBE_COMMIT_DELAY_MS=$(printf '%q' "$bad") was not refused (exit 0)" >&2
     return 1
@@ -66,8 +83,17 @@ h52_refuse_bad_delay() {
 
 if [ "${H52_PROBE_SELF_CHECK-1}" != "0" ]; then
   self_ok=1
-  for bad in 0 -1 abc "" 04000 0000 "+4000"; do
-    if ! h52_refuse_bad_delay "$bad"; then
+  # The shape sentence is asserted as a full sentence, so a regression that starts
+  # accepting a spelling fails here; the too-short sentence is asserted by its
+  # prefix, whose remainder names the derived minimum and the tolerance.
+  shape='error: H52_PROBE_COMMIT_DELAY_MS must be a positive decimal integer without leading zeros or a sign (got '
+  for bad in 0 -1 abc "" 04000 0000 "+4000" １2 ½; do
+    if ! h52_refuse_bad_delay "$bad" "${shape}\"${bad}\")"; then
+      self_ok=0
+    fi
+  done
+  for bad in 1 100 500; do
+    if ! h52_refuse_bad_delay "$bad" "error: H52_PROBE_COMMIT_DELAY_MS must be at least ${MIN_DELAY_MS} ms (got \"${bad}\")"; then
       self_ok=0
     fi
   done
@@ -77,12 +103,17 @@ if [ "${H52_PROBE_SELF_CHECK-1}" != "0" ]; then
 fi
 
 DELAY="${H52_PROBE_COMMIT_DELAY_MS-4000}"
-# The delay is embedded as a Go integer literal (see h52_inject_commit_delay),
-# so only canonical decimal text is accepted here: a zero-padded literal such as
+# The delay is embedded as a Go integer literal (see h52_inject_commit_delay), so
+# only canonical ASCII decimal text is accepted: a zero-padded literal such as
 # 04000 is octal to the Go compiler (2048 ms) while the shell and Python read it
-# as 4000, which would make the injected delay and the reported delay disagree.
-if ! [[ "$DELAY" =~ ^[1-9][0-9]*$ ]]; then
+# as 4000, and a non-ASCII digit spelling matches a UTF-8 collation range but has
+# no int() value at all.
+if ! h52_is_canonical_decimal "$DELAY"; then
   echo "error: H52_PROBE_COMMIT_DELAY_MS must be a positive decimal integer without leading zeros or a sign (got \"${DELAY}\")" >&2
+  exit 2
+fi
+if [ "$DELAY" -lt "$MIN_DELAY_MS" ]; then
+  echo "error: H52_PROBE_COMMIT_DELAY_MS must be at least ${MIN_DELAY_MS} ms (got \"${DELAY}\"): the control relays at half the delay and its judge tolerance is ${TOLERANCE_MS} ms" >&2
   exit 2
 fi
 
@@ -240,13 +271,13 @@ run_stage() {
 
 RC_A="$(run_stage "$TREE_A" "$ART_A" "$SCRATCH/stageA.log")"
 set +e
-python3 - "$ART_A" "$MARK_A" "$SCRATCH/stageA.log" "$RC_A" A <<'PY'
+python3 - "$ART_A" "$MARK_A" "$SCRATCH/stageA.log" "$RC_A" A "$TOLERANCE_MS" <<'PY'
 import glob, hashlib, json, os, sys
 from datetime import datetime, timedelta, timezone
 
 art, marker_path, log_path, rc, stage = sys.argv[1:6]
 txn = "txn-positive"
-tolerance_ms = 250
+tolerance_ms = int(sys.argv[6])
 
 def fail(msg):
     print("MISS     stage-%s: %s" % (stage, msg))
@@ -357,13 +388,13 @@ else
   echo "INFO     merged harness timestamp comparison did not name the leak (the backend received the call ... before the durable allow)"
 fi
 set +e
-python3 - "$ART_B" "$MARK_B" "$SCRATCH/stageB.log" "$RC_B" B <<'PY'
+python3 - "$ART_B" "$MARK_B" "$SCRATCH/stageB.log" "$RC_B" B "$TOLERANCE_MS" <<'PY'
 import glob, hashlib, json, os, sys
 from datetime import datetime, timedelta
 
 art, marker_path, log_path, rc, stage = sys.argv[1:6]
 txn = "txn-positive"
-tolerance_ms = 250
+tolerance_ms = int(sys.argv[6])
 
 def fail(msg):
     print("MISS     control: %s" % msg)
@@ -462,4 +493,4 @@ if [ "$STATUS" -ne 0 ]; then
   echo "=== durable-allow-before-relay probe FAILED: the harness does not catch a relay inside the non-durable commit window ==="
   exit 1
 fi
-echo "=== durable-allow-before-relay probe OK: backend receive is no earlier than the durable commit return ==="
+echo "=== durable-allow-before-relay probe OK: backend receive is no earlier than the instant the commit path returned after its explicit sync ==="
