@@ -610,7 +610,7 @@ func runIdentityHarness(t *testing.T, visor, backend string, opts h52Options) h5
 	case waitErr := <-waitCh:
 		res.exited = true
 		res.exitCode = h52ExitCode(waitErr)
-		h52CollectPendingLine(initCh, clientByID)
+		h52CollectPendingLine(t, initCh, clientByID)
 		loadArtifacts()
 		return res
 	case got := <-initCh:
@@ -649,6 +649,26 @@ func runIdentityHarness(t *testing.T, visor, backend string, opts h52Options) h5
 	res.callSent = true
 	res.callSentAt = callAt
 	res.sentCallIDs = []string{callID}
+
+	// Ordering evidence for the durable-commit probe must come from an artifact
+	// published by the client, not from visor's own clock: CommitAuthorization
+	// timestamps the allow record before the commit path returns.
+	sidecar := strings.TrimSuffix(res.observerArtifact, ".jsonl") + ".client.json"
+	payload, err := json.Marshal(struct {
+		Scenario    string `json:"scenario"`
+		Transaction string `json:"transaction"`
+		SentAt      string `json:"sent_at"`
+	}{
+		Scenario:    opts.name,
+		Transaction: callID,
+		SentAt:      callAt.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("marshal client send record: %v", err)
+	}
+	if err := os.WriteFile(sidecar, payload, 0o600); err != nil {
+		t.Fatalf("write client send record: %v", err)
+	}
 
 	if opts.grantAfterExpiry {
 		id, requestAt, early, _ := h52WaitApprovalRequest(t, approvalDir, pr, r, clientByID, callID, 15*time.Second)
@@ -906,7 +926,14 @@ func h52ReadLine(t *testing.T, r *bufio.Reader, timeout time.Duration) (string, 
 	}
 }
 
-func h52CollectPendingLine(ch <-chan h52LineRead, clientByID map[string][]string) {
+// h52CollectPendingLine waits for the reader goroutine to deliver the line that
+// was in flight when the process exit was observed. A non-blocking select used
+// to drop that line when the goroutine had not yet sent, which skipped the
+// startup-refusal "no initialize result on the client stream" leg by timing.
+// A bounded receive is deterministic here: the child's stdout write end closes
+// when the process exits, so ReadString returns the line or EOF.
+func h52CollectPendingLine(t *testing.T, ch <-chan h52LineRead, clientByID map[string][]string) {
+	t.Helper()
 	select {
 	case got := <-ch:
 		if got.line == "" {
@@ -914,7 +941,8 @@ func h52CollectPendingLine(ch <-chan h52LineRead, clientByID map[string][]string
 		}
 		id := h52JSONRPCID(got.line)
 		clientByID[id] = append(clientByID[id], got.line)
-	default:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("H52 UNKNOWN: the client stream delivered no line and no end-of-stream before the process exit was recorded")
 	}
 }
 
@@ -994,6 +1022,41 @@ func h52AuditEvent(res h52HarnessResult, eventType string) map[string]any {
 	return nil
 }
 
+func h52HasWriteFileDecision(events []map[string]any) bool {
+	for _, ev := range events {
+		tool, _ := ev["tool"].(string)
+		if tool != "write_file" {
+			continue
+		}
+		et, _ := ev["event_type"].(string)
+		switch et {
+		case "tool_call_denied", "tool_call_allowed", "tool_call_approval_required":
+			return true
+		}
+	}
+	return false
+}
+
+func h52AuditFileHasWriteFileDecision(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var events []map[string]any
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		events = append(events, ev)
+	}
+	return h52HasWriteFileDecision(events)
+}
+
 func h52TxnString(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -1062,13 +1125,17 @@ func h52ResultTextObserved(line string) bool {
 	return false
 }
 
-func h52ClientLine(res h52HarnessResult, id string) string {
+// h52ClientLine returns the recorded client-stream line for id. Every awaited
+// response is stored in clientByID before it is read, so an empty map entry is
+// a contract violation rather than a chance to fall back to res.response (that
+// fallback was unreachable: the only caller ran after h52RequireClientCardinality
+// had already failed the test when the line was absent).
+func h52ClientLine(t *testing.T, res h52HarnessResult, id string) string {
+	t.Helper()
 	if lines := res.clientByID[id]; len(lines) > 0 {
 		return lines[0]
 	}
-	if id == res.callID {
-		return res.response
-	}
+	t.Fatalf("%s: H52 contract violation: no client line recorded for id %s", res.name, id)
 	return ""
 }
 
@@ -1297,7 +1364,18 @@ func h52ObserverSession(t *testing.T, backend, scenario string, stdinLines []str
 	}
 }
 
-func h52StdoutPipeParentUnknown(t *testing.T, visor, backend string) error {
+// h52StdoutPipeOutcome reports the three facts the StdoutPipe parent measures.
+// Served = visor served at all, Decided = visor evaluated the tools/call (ledger
+// evidence), PipeDecision = the untouched pipe really did hold the decision when
+// the parent finally read it, so the scenario exercised what its name claims.
+type h52StdoutPipeOutcome struct {
+	Served       bool // the initialize leg was answered: visor actually served
+	Decided      bool // visor evaluated the tools/call (a decision exists for it)
+	PipeDecision bool // the parent's post-kill read of its own stdout pipe carried a decision for the transaction
+	Err          error
+}
+
+func h52StdoutPipeParentUnknown(t *testing.T, visor, backend string) h52StdoutPipeOutcome {
 	t.Helper()
 	dir := t.TempDir()
 	observerLog := h52ObserverPath(t, "stdout-pipe")
@@ -1328,7 +1406,8 @@ func h52StdoutPipeParentUnknown(t *testing.T, visor, backend string) error {
 		"H52_COMPLETION_FIFO="+fifoPath,
 	)
 	cmd.ExtraFiles = []*os.File{f}
-	cmd.Stderr = io.Discard
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -1355,7 +1434,12 @@ func h52StdoutPipeParentUnknown(t *testing.T, visor, backend string) error {
 			_ = cmd.Process.Kill()
 		}
 		_ = cmd.Wait()
-		return fmt.Errorf("H52 UNKNOWN: timed out waiting for client response id 1")
+		return h52StdoutPipeOutcome{
+			Served:       false,
+			Decided:      false,
+			PipeDecision: false,
+			Err:          fmt.Errorf("H52 UNKNOWN: timed out waiting for client response id 1"),
+		}
 	}
 	if err := h52Send(w, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
 		t.Fatalf("send initialized: %v", err)
@@ -1366,12 +1450,22 @@ func h52StdoutPipeParentUnknown(t *testing.T, visor, backend string) error {
 	}); err != nil {
 		t.Fatalf("send tools/call: %v", err)
 	}
+	// Wait for visor's own decision evidence before killing: otherwise a
+	// race where nothing ran still looks like "the pipe had no verdict".
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if h52AuditFileHasWriteFileDecision(auditLog) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
 	data, readErr := io.ReadAll(stdout)
 	_ = waitErr
+	sawPipeDecision := false
 	for _, line := range strings.Split(string(bytes.TrimSpace(data)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1380,13 +1474,32 @@ func h52StdoutPipeParentUnknown(t *testing.T, visor, backend string) error {
 		hasResult, hasError, _ := h52JSONRPCOutcome(line)
 		id := h52JSONRPCID(line)
 		if hasError && !hasResult && id == "txn-stdout-pipe" {
-			return nil
+			sawPipeDecision = true
+			break
 		}
 	}
-	if readErr != nil {
-		return fmt.Errorf("H52 UNKNOWN: timed out waiting for client response id txn-stdout-pipe (%v)", readErr)
+	decided := h52AuditFileHasWriteFileDecision(auditLog)
+	if !decided {
+		stderr := stderrBuf.String()
+		if strings.Contains(stderr, "actorcontext: expired") || strings.Contains(stderr, "policy denied") {
+			decided = true
+		}
 	}
-	return fmt.Errorf("H52 UNKNOWN: timed out waiting for client response id txn-stdout-pipe")
+	unknown := fmt.Errorf("H52 UNKNOWN: the parent that owns the stdout pipe saw no decision for txn-stdout-pipe; a decision read only after the process is killed is not a verdict")
+	if sawPipeDecision {
+		// Leftover bytes after Kill are not a verdict. Returning nil here
+		// used to treat them as a deny pass; they still are not one.
+		return h52StdoutPipeOutcome{Served: true, Decided: decided, PipeDecision: true, Err: unknown}
+	}
+	if readErr != nil {
+		return h52StdoutPipeOutcome{
+			Served:       true,
+			Decided:      decided,
+			PipeDecision: false,
+			Err:          fmt.Errorf("H52 UNKNOWN: timed out waiting for client response id txn-stdout-pipe (%v)", readErr),
+		}
+	}
+	return h52StdoutPipeOutcome{Served: true, Decided: decided, PipeDecision: false, Err: unknown}
 }
 
 func h52CompleteArtifactCalls(path string) (calls int, complete bool) {
@@ -1483,7 +1596,7 @@ func h52RequireForwarded(t *testing.T, res h52HarnessResult, callID string) *h52
 // over the whole response would be satisfied by any denial at all.
 func h52DenyMessage(t *testing.T, res h52HarnessResult, callID string) string {
 	t.Helper()
-	line := h52ClientLine(res, callID)
+	line := h52ClientLine(t, res, callID)
 	var resp struct {
 		ID    json.RawMessage
 		Error *struct {
@@ -1667,7 +1780,12 @@ func TestVerifiedActorBackendObserver(t *testing.T) {
 	visor := buildVisor(t)
 
 	t.Run("stdout_pipe_parent_is_unknown_not_a_deny_pass", func(t *testing.T) {
-		err := h52StdoutPipeParentUnknown(t, visor, backend)
+		out := h52StdoutPipeParentUnknown(t, visor, backend)
+		t.Logf("stdout_pipe_parent_is_unknown_not_a_deny_pass: served=%v decided=%v pipeDecision=%v", out.Served, out.Decided, out.PipeDecision)
+		if !out.Served || !out.Decided {
+			t.Fatalf("stdout_pipe_parent_is_unknown_not_a_deny_pass: the scenario did not isolate pipe ownership (served=%v decided=%v pipeDecision=%v err=%v)", out.Served, out.Decided, out.PipeDecision, out.Err)
+		}
+		err := out.Err
 		if err == nil {
 			t.Fatal("parent using StdoutPipe produced a deny pass")
 		}
