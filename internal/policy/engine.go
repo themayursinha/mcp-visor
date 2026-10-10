@@ -376,7 +376,47 @@ func (e *Engine) GetRiskLevel(serverName, toolName string) RiskLevel {
 	return e.inferRisk(toolName)
 }
 
+// mandateRule is one mandated-slot rule: the argument aliases it inspects, the
+// admission test for a collected slot, and the reasons it denies with.
+type mandateRule struct {
+	ruleType        string
+	aliases         []string
+	admit           func(allowlist []string, slot string) bool
+	admitKind       string // "exact" or "glob"
+	emptyReason     string
+	missingReason   string
+	violationReason string
+}
+
+// mandateRules is the single definition of the mandate family: evaluateRule
+// resolves a converted rule type here, so one evaluator applies the
+// empty-allowlist guard, the alias collection, the admission test and the
+// denial reason for every converted rule.
+var mandateRules = map[string]mandateRule{
+	"allow_recipient": {
+		ruleType:        "allow_recipient",
+		aliases:         recipientSlotKeys,
+		admit:           recipientInAllowlist,
+		admitKind:       "exact",
+		emptyReason:     "recipient allowlist is empty",
+		missingReason:   "recipient is required",
+		violationReason: "recipient is not in allowlist",
+	},
+	"allow_working_directory": {
+		ruleType:        "allow_working_directory",
+		aliases:         workingDirectorySlotKeys,
+		admit:           matchesAnyPattern,
+		admitKind:       "glob",
+		emptyReason:     "working directory allowlist is empty",
+		missingReason:   "working directory is required",
+		violationReason: reasonUntrustedExecutionEnvironment,
+	},
+}
+
 func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string) Decision {
+	if entry, ok := mandateRules[rule.Type]; ok {
+		return e.evaluateMandateRule(entry, rule, args)
+	}
 	switch rule.Type {
 	case "deny_path":
 		if path, ok := getStringArg(args, "path", "file", "file_path"); ok {
@@ -439,24 +479,6 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 		for _, slot := range slots {
 			if !recipientInAllowlist(rule.Patterns, slot) {
 				return Decision{Action: ActionDeny, Reason: reasonAuthorityExpandingDestination}
-			}
-		}
-
-	case "allow_working_directory":
-		// Fail-closed mandate cwd: a tool allowed to run a decoder under
-		// /workspace/safe must not execute with cwd in an attacker extract
-		// dir. Declared CWD fields are the execution environment; Visor
-		// does not parse imports or PYTHONPATH. Every present alias is checked.
-		if !recipientAllowlistConfigured(rule.Patterns) {
-			return Decision{Action: ActionDeny, Reason: "working directory allowlist is empty"}
-		}
-		slots, reason := collectWorkingDirectorySlots(args)
-		if reason != "" {
-			return Decision{Action: ActionDeny, Reason: reason}
-		}
-		for _, slot := range slots {
-			if !matchesAnyPattern(rule.Patterns, slot) {
-				return Decision{Action: ActionDeny, Reason: reasonUntrustedExecutionEnvironment}
 			}
 		}
 
@@ -629,24 +651,6 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 			}
 		}
 
-	case "allow_recipient":
-		// Exact mandate slot: observations may fill this value, they may not
-		// enlarge it. Every present destination alias is checked; a mandated
-		// mailbox in one key cannot cover an attacker mailbox in another.
-		// Domain substring matching is intentionally not reused.
-		if !recipientAllowlistConfigured(rule.Patterns) {
-			return Decision{Action: ActionDeny, Reason: "recipient allowlist is empty"}
-		}
-		slots, reason := collectRecipientSlots(args)
-		if reason != "" {
-			return Decision{Action: ActionDeny, Reason: reason}
-		}
-		for _, slot := range slots {
-			if !recipientInAllowlist(rule.Patterns, slot) {
-				return Decision{Action: ActionDeny, Reason: "recipient is not in allowlist"}
-			}
-		}
-
 	case "allow_resource_owner":
 		// Exact mandate principal: a tool that is allowed to act for alice
 		// must not cancel bob. Declared owner fields are the ownership
@@ -689,6 +693,26 @@ func (e *Engine) evaluateRule(rule ArgRule, args map[string]any, toolName string
 		return Decision{Action: ActionAllow, Reason: "lineage_require"}
 	}
 
+	return Decision{Action: ActionAllow, Reason: "rule passed"}
+}
+
+// evaluateMandateRule applies the mandate skeleton once: the allowlist must
+// be configured, every declared alias must be readable, and every collected
+// slot must be admitted. It has no path that allows without a positive
+// admission of every collected slot.
+func (e *Engine) evaluateMandateRule(entry mandateRule, rule ArgRule, args map[string]any) Decision {
+	if !recipientAllowlistConfigured(rule.Patterns) {
+		return Decision{Action: ActionDeny, Reason: entry.emptyReason}
+	}
+	slots, ok := collectMandateSlots(args, entry.aliases)
+	if !ok {
+		return Decision{Action: ActionDeny, Reason: entry.missingReason}
+	}
+	for _, slot := range slots {
+		if !entry.admit(rule.Patterns, slot) {
+			return Decision{Action: ActionDeny, Reason: entry.violationReason}
+		}
+	}
 	return Decision{Action: ActionAllow, Reason: "rule passed"}
 }
 
@@ -1116,34 +1140,38 @@ func collectDestinationSlots(args map[string]any) ([]string, string) {
 	return values, ""
 }
 
-func isWorkingDirectorySlotKey(key string) bool {
-	for _, alias := range workingDirectorySlotKeys {
+// collectMandateSlots returns the value of every present alias. ok is false
+// when an alias is absent, blank or not a string, so a converted rule can
+// never fall through to an allow.
+func collectMandateSlots(args map[string]any, aliases []string) ([]string, bool) {
+	if args == nil {
+		return nil, false
+	}
+	values := make([]string, 0, len(aliases))
+	for key, val := range args {
+		if !isMandateSlotKey(key, aliases) {
+			continue
+		}
+		s, isString := val.(string)
+		if !isString || strings.TrimSpace(s) == "" {
+			return nil, false
+		}
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return nil, false
+	}
+	return values, true
+}
+
+// isMandateSlotKey reports whether key case-insensitively matches a declared alias.
+func isMandateSlotKey(key string, aliases []string) bool {
+	for _, alias := range aliases {
 		if strings.EqualFold(key, alias) {
 			return true
 		}
 	}
 	return false
-}
-
-func collectWorkingDirectorySlots(args map[string]any) ([]string, string) {
-	if args == nil {
-		return nil, "working directory is required"
-	}
-	values := make([]string, 0, len(workingDirectorySlotKeys))
-	for key, val := range args {
-		if !isWorkingDirectorySlotKey(key) {
-			continue
-		}
-		s, isString := val.(string)
-		if !isString || strings.TrimSpace(s) == "" {
-			return nil, "working directory is required"
-		}
-		values = append(values, s)
-	}
-	if len(values) == 0 {
-		return nil, "working directory is required"
-	}
-	return values, ""
 }
 
 func isSecretSlotKey(key string) bool {
@@ -1378,15 +1406,6 @@ func collectOwnerSlots(args map[string]any) ([]string, string) {
 	return values, ""
 }
 
-func isRecipientSlotKey(key string) bool {
-	for _, alias := range recipientSlotKeys {
-		if strings.EqualFold(key, alias) {
-			return true
-		}
-	}
-	return false
-}
-
 func isEffectPathSlotKey(key string) bool {
 	for _, alias := range effectPathSlotKeys {
 		if strings.EqualFold(key, alias) {
@@ -1449,27 +1468,6 @@ func collectPathSlots(args map[string]any) ([]string, string) {
 
 func pathContainsShellGrammar(path string) bool {
 	return strings.ContainsAny(path, pathShellMetacharacters)
-}
-
-func collectRecipientSlots(args map[string]any) ([]string, string) {
-	if args == nil {
-		return nil, "recipient is required"
-	}
-	values := make([]string, 0, len(recipientSlotKeys))
-	for key, val := range args {
-		if !isRecipientSlotKey(key) {
-			continue
-		}
-		s, isString := val.(string)
-		if !isString || strings.TrimSpace(s) == "" {
-			return nil, "recipient is required"
-		}
-		values = append(values, s)
-	}
-	if len(values) == 0 {
-		return nil, "recipient is required"
-	}
-	return values, ""
 }
 
 func recipientAllowlistConfigured(patterns []string) bool {
